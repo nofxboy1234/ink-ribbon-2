@@ -1,0 +1,4 @@
+build/
+decisions.tsv
+*.png
+!docs/screenshots/*.png
