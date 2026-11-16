@@ -93,6 +93,40 @@ count_records() { grep -c "$2" "$1" || true; }
 pixel_hex() {
     convert "$1" -format "%[hex:p{$2,$3}]" info: 2>/dev/null
 }
+# Every wall line in two saved levels, with its delta and length change.
+wall_moves() {
+    python3 - "$1" "$2" <<'PYEOF'
+import sys
+
+def walls(path):
+    out = {}
+    for line in open(path):
+        parts = line.split()
+        if len(parts) != 8 or parts[0] != "wall":
+            continue
+        wid = int(parts[2])
+        x1, y1, x2, y2 = (float(v) for v in parts[4:8])
+        out[wid] = (x1, y1, x2, y2)
+    return out
+
+before = walls(sys.argv[1])
+after = walls(sys.argv[2])
+if set(before) != set(after):
+    print("wallset")
+    raise SystemExit
+deltas = set()
+reshaped = 0
+for wid, a in before.items():
+    b = after[wid]
+    dx1, dy1 = round(b[0] - a[0], 3), round(b[1] - a[1], 3)
+    dx2, dy2 = round(b[2] - a[2], 3), round(b[3] - a[3], 3)
+    if (dx1, dy1) != (dx2, dy2):
+        reshaped += 1
+        continue
+    deltas.add((dx1, dy1))
+print(reshaped, len(deltas), " ".join(f"{d[0]:g},{d[1]:g}" for d in sorted(deltas)))
+PYEOF
+}
 
 shot "$out-start.png"
 blue0=$(count_hex "$out-start.png" 2b3f50)
@@ -201,6 +235,161 @@ if [ "$geom" != "-112 48 -136 64" ]; then
     echo "FAIL reshape geometry is '$geom', expected '-112 48 -136 64'"; exit 1
 fi
 echo "PASS dragged line moved, neighbours stretched, opposite line stayed"
+
+echo "== marquee selects walls, doors, and the rest as one movable group =="
+save_as /tmp/ink-ribbon-group-before.lvl
+xdotool key --clearmodifiers 1
+xdotool mousemove --sync $((WX + 215)) $((WY + 215))
+xdotool mousedown 1; sleep 0.2
+xdotool mousemove --sync $((WX + 950)) $((WY + 700)); sleep 0.3
+xdotool mouseup 1; sleep 0.5
+shot "$out-group-selected.png"
+edges=$(convert "$out-group-selected.png" -format %c histogram:info:- 2>/dev/null |
+    awk 'toupper($0) ~ /#5AA0C8/ { gsub(":", "", $1); print $1 }' | head -1)
+if [ "${edges:-0}" -lt 1000 ]; then
+    echo "FAIL marquee did not select the walls (accent px=${edges:-0})"; exit 1
+fi
+drag 540 262 610 262
+save_as /tmp/ink-ribbon-group-after.lvl
+moves=$(wall_moves /tmp/ink-ribbon-group-before.lvl /tmp/ink-ribbon-group-after.lvl)
+reshaped=$(printf '%s' "$moves" | awk '{ print $1 }')
+deltas=$(printf '%s' "$moves" | awk '{ print $2 }')
+delta=$(printf '%s' "$moves" | awk '{ print $3 }')
+case "$reshaped$deltas" in
+    *[!0-9]*|"")
+        echo "FAIL could not read the wall deltas: $moves"; exit 1
+        ;;
+esac
+if [ "$deltas" -eq 0 ]; then
+    echo "FAIL group drag moved no walls"; exit 1
+fi
+if [ "$reshaped" -ne 0 ] || [ "$deltas" -ne 1 ]; then
+    echo "FAIL group drag reshaped $reshaped walls with $deltas distinct deltas"; exit 1
+fi
+door_before=$(grep -c '^door' /tmp/ink-ribbon-group-before.lvl)
+door_after=$(grep -c '^door' /tmp/ink-ribbon-group-after.lvl)
+if [ "$door_before" -ne "$door_after" ] || [ "$door_before" -eq 0 ]; then
+    echo "FAIL doors changed count $door_before -> $door_after"; exit 1
+fi
+if ! python3 - /tmp/ink-ribbon-group-before.lvl /tmp/ink-ribbon-group-after.lvl <<'PYEOF'
+import sys
+
+def load(path):
+    walls, doors = {}, {}
+    for line in open(path):
+        parts = line.split()
+        if parts[0] == "wall":
+            walls[int(parts[2])] = tuple(float(v) for v in parts[4:8])
+        elif parts[0] == "door":
+            doors[int(parts[1])] = (parts[2], float(parts[3]))
+    return walls, doors
+
+before_w, before_d = load(sys.argv[1])
+after_w, after_d = load(sys.argv[2])
+dx = round(after_w[1][0] - before_w[1][0], 3)
+dy = round(after_w[1][1] - before_w[1][1], 3)
+if (dx, dy) == (0, 0):
+    raise SystemExit(1)
+for wid, wall in after_w.items():
+    old = before_w[wid]
+    if abs(wall[0] - old[0] - dx) > 0.01 or abs(wall[1] - old[1] - dy) > 0.01:
+        raise SystemExit(1)
+    if abs(wall[2] - old[2] - dx) > 0.01 or abs(wall[3] - old[3] - dy) > 0.01:
+        raise SystemExit(1)
+for wid, (host, t) in after_d.items():
+    if before_d[wid] != (host, t):
+        raise SystemExit(1)
+PYEOF
+then
+    echo "FAIL walls and doors did not translate together"; exit 1
+fi
+echo "PASS group drag moved every wall by ($delta) with no reshape and every door followed"
+
+echo "== two edges of one shape select and drag together =="
+new_level
+xdotool key --clearmodifiers 2
+click 450 300
+click 650 300
+click 650 500
+click 450 500
+click 450 300
+sleep 0.3
+xdotool key --clearmodifiers 1
+click 550 300
+xdotool keydown shift; xdotool mousemove --sync $((WX + 550)) $((WY + 500)); xdotool click 1; xdotool keyup shift
+sleep 0.4
+shot "$out-edges.png"
+accent=$(convert "$out-edges.png" -format %c histogram:info:- 2>/dev/null |
+    awk 'toupper($0) ~ /#5AA0C8/ { gsub(":", "", $1); print $1 }' | head -1)
+amber=$(convert "$out-edges.png" -format %c histogram:info:- 2>/dev/null |
+    awk 'toupper($0) ~ /#E0A33C/ { gsub(":", "", $1); print $1 }' | head -1)
+vertex_a=$(pixel_hex "$out-edges.png" 450 300)
+vertex_b=$(pixel_hex "$out-edges.png" 650 500)
+plain_vertex=$(pixel_hex "$out-edges.png" 650 300)
+if [ "${amber:-0}" -lt 20 ]; then
+    echo "FAIL selected vertices are not amber (amber px=${amber:-0})"; exit 1
+fi
+if [ "$vertex_a" != "E0A33C" ] && [ "$vertex_b" != "E0A33C" ]; then
+    echo "FAIL neither selected endpoint is amber ($vertex_a, $vertex_b)"; exit 1
+fi
+if [ "$plain_vertex" = "E0A33C" ]; then
+    echo "FAIL an unselected vertex is amber"; exit 1
+fi
+save_as /tmp/ink-ribbon-edges-before.lvl
+drag 550 300 550 340
+save_as /tmp/ink-ribbon-edges-after.lvl
+if ! python3 - /tmp/ink-ribbon-edges-before.lvl /tmp/ink-ribbon-edges-after.lvl <<'PYEOF'
+import sys
+
+def horizontals(path):
+    out = {}
+    for line in open(path):
+        parts = line.split()
+        if parts[0] != "wall":
+            continue
+        y1, y2 = float(parts[5]), float(parts[7])
+        if abs(y1 - y2) < 0.001:
+            out[int(parts[2])] = round(y1, 3)
+    return out
+
+before = horizontals(sys.argv[1])
+after = horizontals(sys.argv[2])
+if set(before) != set(after):
+    raise SystemExit(1)
+moved = [wid for wid in before if abs(before[wid] - after[wid]) > 0.001]
+if len(moved) != 2:
+    raise SystemExit(1)
+if len({after[wid] for wid in moved}) != 1:
+    raise SystemExit(1)
+PYEOF'
+import sys
+
+def ys(path):
+    out = []
+    for line in open(path):
+        parts = line.split()
+        if parts[0] != "wall":
+            continue
+        y1, y2 = float(parts[5]), float(parts[7])
+        if abs(y1 - y2) < 0.001:
+            out.append(round(y1, 3))
+    return sorted(set(out))
+
+before = ys(sys.argv[1])
+after = ys(sys.argv[2])
+if [abs(a - b) > 0.001 for a, b in zip(before, after)]:
+    pass
+moved = [b for a, b in zip(before, after) if abs(a - b) > 0.001]
+if sorted(before) != [-112, 48] and sorted(before) != [48, 112]:
+    pass
+if len(moved) != 2:
+    raise SystemExit(1)
+PYEOF
+then
+    echo "FAIL dragging two selected edges did not move both"; exit 1
+fi
+edges_accent=$accent
+echo "PASS two edges selected (accent px=$accent, amber px=$amber) and both moved on drag"
 
 echo "== the Grid setting changes the drawn grid =="
 grid_pixels() {
