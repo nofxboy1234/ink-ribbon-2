@@ -144,10 +144,10 @@ Only `main.c` and `editor.c` include sokol or ImGui headers. `make test` links t
 
 ```sh
 make test
-tools/verify.sh
+make verify
 ```
 
-`tools/verify.sh` rebuilds, runs the core tests, drives the real X11 window with xdotool, samples canvas pixels, and checks the saved file. A recorded run at 1280x800:
+`make verify` runs `tools/verify.sh`, which rebuilds, runs the core tests, drives the real X11 window with xdotool, samples canvas pixels, and checks the saved file. A recorded run at 1280x800:
 
 ```text
 PASS build without warnings
