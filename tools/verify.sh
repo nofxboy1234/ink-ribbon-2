@@ -445,5 +445,38 @@ if [ "$wall_snap" != "ok" ]; then
 fi
 echo "PASS dragged wall moved onto grid coordinates"
 
+echo "== the Grid setting changes the drawn grid and the snap lattice =="
+grid_pixels() {
+    convert "$1" -crop 780x50+195+40 +repage -format %c histogram:info:- 2>/dev/null |
+        awk 'toupper($0) !~ /#0B0C0E/ { gsub(":", "", $1); n += $1 } END { print n + 0 }'
+}
+shot "$out-grid8.png"
+g8=$(grid_pixels "$out-grid8.png")
+xdotool mousemove --sync $((WX + 63)) $((WY + 269)); xdotool click 1; sleep 0.5
+xdotool mousemove --sync $((WX + 63)) $((WY + 359)); sleep 0.4
+xdotool click 1; sleep 0.5
+shot "$out-grid32.png"
+g32=$(grid_pixels "$out-grid32.png")
+if [ "$g32" -le 0 ] || [ "$g8" -lt $((g32 * 2)) ]; then
+    echo "FAIL the drawn grid ignores the Grid setting (8-unit grid pixels=$g8, 32-unit grid pixels=$g32)"
+    exit 1
+fi
+echo "PASS grid size 8 draws $g8 grid px and grid size 32 draws $g32"
+xdotool key --clearmodifiers 5
+sleep 0.2
+click 700 560
+sleep 0.4
+xdotool key --clearmodifiers Escape
+sleep 0.3
+save_as /tmp/ink-ribbon-grid32.lvl
+new_label=$(grep '^label' /tmp/ink-ribbon-grid32.lvl | tail -1)
+glx=$(printf '%s\n' "$new_label" | awk '{ print $2 }')
+gly=$(printf '%s\n' "$new_label" | awk '{ print $3 }')
+if ! awk -v x="$glx" -v y="$gly" 'BEGIN { exit !(x % 32 == 0 && y % 32 == 0) }'; then
+    echo "FAIL a label placed on a 32-unit grid is off it: $glx, $gly"
+    exit 1
+fi
+echo "PASS a new object lands on the selected 32-unit lattice"
+
 echo "ALL EDITOR CHECKS PASSED"
 echo "screenshots: $out-*.png"
