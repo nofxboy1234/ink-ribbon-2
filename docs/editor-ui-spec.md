@@ -60,7 +60,7 @@ Door placement follows the prototype switch.
 - `Click` mode: click near a wall; add a door centered at the projected t with width `min(44, wall_length)`, current door color. Select it.
 - `Drag` mode: press near a wall, drag along it, release. Width is the dragged span length clamped to at least `DOOR_MIN_WIDTH` and at most the wall length, centered at the span midpoint. A press-release without movement behaves like click mode.
 - Hover highlights the nearest wall within tolerance and previews the door bar.
-- Door bar drawing follows the Door render prototype. `Cut` draws the wall in segments excluding each door span, then the bar, so the wall visually opens under the door. `Overlay` draws the full wall and the bar on top. Thickness is always `DOOR_THICKNESS`.
+- Door bar drawing follows the Door render prototype. `Cut` draws the wall in segments excluding each door span, then the bar, so the wall visually opens under the door. `Overlay` draws the full wall and the bar on top, then restrokes the wall through the bar so the difference is visible at normal zoom. Thickness is always `DOOR_THICKNESS`.
 - In Select, dragging a door body slides it along its wall. Dragging within 8 screen pixels of either end resizes it around the opposite end. Clamp through `level_set_door_span`.
 
 ### Label
@@ -107,7 +107,7 @@ Below the tool buttons:
 
 - New: `level_init`, `history_reset`, clear selection, fit, path `levels/untitled.lvl`.
 - Open: modal with a path input plus a small clickable list of `levels/*.lvl`. On load success, history_reset, clear selection, fit. On failure, show the error in the status strip and keep the current level.
-- Save and Save As: path input modal; default `levels/re2-library.lvl`. Report success or the error in the status strip.
+- Save writes to the current path. Save As opens a path modal with the current path prefilled and lists `levels/*.lvl`. Report success or the error in the status strip.
 - `Ctrl+S` saves, `Ctrl+Shift+S` opens Save As, `Ctrl+O` opens the Open modal.
 - `Ctrl+Z` undo, `Ctrl+Shift+Z` or `Ctrl+Y` redo, disabled while a drag is active.
 
