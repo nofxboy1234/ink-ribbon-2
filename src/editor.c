@@ -1551,7 +1551,9 @@ static void cancel_transient(Editor* e) {
 }
 
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
-    bool shift = igGetIO()->KeyShift;
+    ImGuiIO* io = igGetIO();
+    bool shift = io->KeyShift;
+    bool ctrl = io->KeyCtrl;
     Hit hit = hit_test(e, world);
     if (hit.kind == SEL_NONE) {
         cancel_gesture(e);
@@ -1567,12 +1569,20 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         return;
     }
 
-    if (shift) {
+    if (ctrl) {
         cancel_gesture(e);
         sel_toggle(e, hit.kind, hit.index);
         int n = sel_count(&e->selection);
         if (n == 0) set_status(e, false, "Selection cleared");
         else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
+        return;
+    }
+
+    if (shift) {
+        cancel_gesture(e);
+        sel_add(e, hit.kind, hit.index);
+        int n = sel_count(&e->selection);
+        set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
         return;
     }
 
@@ -1998,7 +2008,7 @@ static void draw_left_panel(Editor* e) {
 
     igDummy((ImVec2){ 0.0f, 2.0f });
     heading("Selection");
-    small_note("Shift-click adds. Drag empty canvas to marquee.");
+    small_note("Shift-click adds. Ctrl-click toggles. Drag to marquee.");
     small_note("Labels, stairs, and rooms move together; snap follows the grid.");
 
     igEnd();
@@ -2226,7 +2236,7 @@ static void draw_inspector(Editor* e) {
         igPushFontFloat(igGetFont(), 12.0f);
         igTextDisabled("1-6 switch tools");
         igTextDisabled("F fit level, G toggle grid");
-        igTextDisabled("Shift-click toggles the selection");
+        igTextDisabled("Shift-click adds; Ctrl-click toggles");
         igTextDisabled("Drag empty canvas to marquee");
         igTextDisabled("Drag labels, stairs, or rooms together");
         igTextDisabled("Drag a door to slide; drag an end to resize");
@@ -2310,7 +2320,7 @@ static void draw_help_modal(Editor* e) {
     igBullet();
     igText("Delete removes every selected object.");
     igBullet();
-    igText("Shift-click toggles an object in the selection.");
+    igText("Shift-click adds to the selection; Ctrl-click toggles an object.");
     igBullet();
     igText("Drag empty canvas to marquee a group.");
     igBullet();

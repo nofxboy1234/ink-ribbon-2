@@ -55,7 +55,8 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | --- | --- |
 | 1 to 6 | Select, Wall, Room, Door, Label, Stairs |
 | Left click | Use the active tool |
-| Shift plus left click | Toggle an object in the selection |
+| Shift plus left click | Add an object to the selection |
+| Ctrl plus left click | Toggle an object in the selection |
 | Drag on empty canvas | Marquee select; Shift adds to the selection |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
@@ -78,7 +79,7 @@ Painted areas are explicit polygons. That keeps their color and identity when ne
 
 Labels store a position, a size, and a string. Stairs store a center, a direction, and a step count. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size.
 
-Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click toggles an object, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a selected label, stair, or room moves all selected labels, stairs, and rooms together. Doors keep their own slide and end-resize gestures. Walls stay selected but do not move.
+Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a selected label, stair, or room moves all selected labels, stairs, and rooms together. Doors keep their own slide and end-resize gestures. Walls stay selected but do not move.
 
 Snap-to-grid applies to wall and room points, labels, stairs, door centers, door resize spans, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
@@ -88,7 +89,7 @@ Undo stores whole level snapshots. Each completed change writes one snapshot. A 
 
 ![Marquee selection in progress](docs/screenshots/marquee.png)
 
-A plain click on an unselected object selects only it. Clicking an object already in a multi-selection keeps the group and makes it primary, so the group can be dragged. Shift-click adds or removes an object. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
+A plain click on an unselected object selects only it. Clicking an object already in a multi-selection keeps the group and makes it primary, so the group can be dragged. Shift-click adds an object and never removes one. Ctrl-click toggles it. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
 
 ![Two selected labels](docs/screenshots/selection.png)
 
@@ -149,7 +150,7 @@ PASS click placement added a white door (+52 white px)
 PASS label typed and deactivated
 PASS save wrote 46 walls, 11 doors, a grid label, and a grid door
 PASS reload restored the level (blue=37899)
-PASS marquee selected and deleted the whole level
+PASS marquee selected all and shift-click preserved the selected walls, rooms, and doors
 PASS undo restored the level after marquee delete
 PASS group drag moved both labels onto the grid
 PASS shift selection deleted both labels in one step

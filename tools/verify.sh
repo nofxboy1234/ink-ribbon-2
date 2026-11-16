@@ -295,7 +295,7 @@ for tag in wall room door label stairs; do
         exit 1
     fi
 done
-echo "PASS marquee selected and deleted the whole level"
+echo "PASS marquee selected all and shift-click preserved the selected walls, rooms, and doors"
 undo
 save_as /tmp/ink-ribbon-restored.lvl
 walls=$(count_records /tmp/ink-ribbon-restored.lvl '^wall')

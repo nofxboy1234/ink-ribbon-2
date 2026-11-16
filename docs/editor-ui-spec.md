@@ -76,7 +76,7 @@ Click hit-tests in this order: door, label, stairs, wall, room. Tolerance is 7 s
 Selection is a bounded set per object kind plus a primary reference. The set is never serialized.
 
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
-- Shift-click toggles the hit object in or out and does not start a drag.
+- Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out. Neither starts a drag.
 - Plain press on empty canvas clears the selection and starts a marquee. Shift-press starts an additive marquee. Travel under 4 screen pixels is a click.
 - On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap, rooms use polygon intersection.
 - Drag a selected label, stair, or room to move every selected label, stair, and room together. The group snaps from the primary object's anchor and commits one history snapshot on release. Walls stay fixed.
@@ -122,7 +122,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 6 tools, `Delete` delete the selection, `Shift` plus click toggle selection, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Delete` delete the selection, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 

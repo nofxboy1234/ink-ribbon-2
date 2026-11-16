@@ -24,7 +24,7 @@ The core (`geom.*`, `level.*`) includes no sokol or ImGui header and builds with
 
 The prototype comparison picked click door placement, automatic room fill on wall-loop close, and cut door rendering. Those are now the only behavior. The Prototype panel and the drag-placement, manual-fill, and overlay-render branches were removed. The Room tool still draws explicit fills for painted areas that do not follow walls.
 
-Selection is UI state in `editor.c`, not part of `Level`. It is five bounded per-kind sets plus a primary reference. Shift-click toggles, a marquee replaces or adds, and Delete removes every selected object in one snapshot. Labels, stairs, and rooms move as a group. Doors keep door-only slide and resize gestures.
+Selection is UI state in `editor.c`, not part of `Level`. It is five bounded per-kind sets plus a primary reference. Shift-click adds, Ctrl-click toggles, a marquee replaces or adds, and Delete removes every selected object in one snapshot. Labels, stairs, and rooms move as a group. Doors keep door-only slide and resize gestures.
 
 Snap applies to placement and to label, stair, room, door, and group drags. Group drags snap from the primary object's anchor so relative spacing is preserved. The Snap checkbox and grid size remain user controls.
 
