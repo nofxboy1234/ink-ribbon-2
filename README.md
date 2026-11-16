@@ -40,13 +40,14 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 
 - Draw walls click by click. Every segment is horizontal or vertical and continues from the last click.
 - Close a drawn loop by clicking its first point or pressing Enter. Close with an L-shaped pair when the last point is not aligned with the first. Press Esc to keep the chain open.
-- Create a painted area automatically when a loop closes, or draw one explicitly with the Room tool. Recolor any area blue or red.
+- Each drawn chain is one wall shape. Select any of its lines to select the shape, then drag a line to reshape it: that line moves and the lines connected to it stretch, while opposite lines stay put.
+- A closed shape fills only its own inside, in blue or red, or not at all with the None fill. Draw a painted area independently with the Room tool when it should not follow walls.
 - Add white, red, or blue doors to walls. A door keeps a fixed thickness, slides along its wall, and changes length by dragging either end or with the inspector.
 - Add text labels anywhere, edit the text in the inspector, resize and move them.
 - Add standard stairs with 2 to 48 steps. The step count sets the run length, and each run is horizontal or vertical.
-- Select, move, edit, and delete the placed objects. Deleting a wall also deletes the doors hosted by it.
-- Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step, and dragging anything selected moves the group together.
-- Snap to the grid on placement and movement. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
+- Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
+- Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step. Dragging a wall line reshapes its shape, and dragging labels, rooms, or stairs moves them together.
+- Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
 ## Controls
@@ -57,6 +58,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Left click | Use the active tool |
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
+| Drag a wall line | Reshape the shape by sliding that line and stretching its neighbours |
 | Drag on empty canvas | Marquee select; Shift adds to the selection |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
@@ -79,93 +81,27 @@ Painted areas are explicit polygons. That keeps their color and identity when ne
 
 Labels store a position, a size, and a string. Stairs store a center, a direction, and a step count. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size.
 
-Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a selected wall moves the wall, or the whole group when it is part of a multi-selection. Selected rooms, labels, and stairs move with it. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
+Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a wall line reshapes its shape. Selected rooms, labels, and stairs move as a group when dragged. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
 
-Snap-to-grid applies to wall and room points, labels, stairs, door centers, door resize spans, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
+Snap-to-grid applies to wall and room points, labels, stairs, door centers, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. Closing a loop writes its closing walls and the fill together. The history keeps 64 levels.
 
-## Selection and snapping
+## Selection, shapes, and snapping
 
 ![Marquee selection in progress](docs/screenshots/marquee.png)
 
-A plain click on an unselected object selects only it. Clicking an object already in a multi-selection keeps the group and makes it primary, so the group can be dragged. Shift-click adds an object and never removes one. Ctrl-click toggles it. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
+A plain click on an unselected object selects only it. Clicking an object already in a multi-selection keeps the group and makes it primary. Shift-click adds an object and never removes one. Ctrl-click toggles it. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
 
-![Two selected labels](docs/screenshots/selection.png)
+A wall belongs to a shape, so clicking any of its lines selects the whole shape. The inspector then shows the shape: its fill, whether it is closed, and how many walls it has.
 
-![The whole level dragged as one group](docs/screenshots/group-drag.png)
+![A wall shape selected](docs/screenshots/selection.png)
 
-Marquee select everything, then drag any selected wall. The walls, their doors, the fills, the labels, and the stairs move by one grid-snapped delta and commit as one undo step.
+Drag one of the shape's lines to reshape it. The line slides along its normal, snapped to the grid, and every line that meets it stretches. Lines on the opposite side stay where they are.
 
-Dragging moves the whole group, walls and their doors included. A door has no independent position, so it follows its host wall; selecting a door without its wall leaves it in place and the status line says so. A door dragged alone slides along its wall, and dragging an end handle resizes it. Snap uses the grid size set in the left panel, and the group snaps from the primary object's anchor so the rest keeps its offset.
+![A line dragged to reshape the shape](docs/screenshots/reshape.png)
 
-The recommended interaction settings are now the only behavior. Door placement is click only, closing a wall loop always creates a fill, and a door always opens the wall behind it. The Prototype panel and its unused variants were removed.
-
-## Level format
-
-Levels are UTF-8 text and diff cleanly in git. A short example:
-
-```text
-ink-level 1
-wall 1 40.000 40.000 520.000 40.000
-wall 2 520.000 40.000 520.000 640.000
-room 1 4 100.000 120.000 220.000 120.000 220.000 260.000 100.000 260.000
-door 0 1 0.5000 44.000
-label 120.000 300.000 19.000 West Storage Room
-stairs 420.000 110.000 0 10
-```
-
-Records are `wall`, `room`, `door`, `label`, and `stairs`. Walls carry their ids so door hosts survive a save and load. Load parses into a temporary level and leaves the open level untouched on any error.
-
-## Project layout
-
-| Path | Owns |
-| --- | --- |
-| `src/main.c` | sokol app lifecycle, font, frame order |
-| `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
-| `src/level.c` | level document, edits, save, load, undo ring |
-| `src/geom.c` | vectors, snapping, segment and polygon math |
-| `tests/test_level.c` | 171 headless checks for the core |
-| `tools/verify.sh` | end-to-end X11 check with pixel evidence |
-| `tools/shot.sh` | build, launch, drive, screenshot |
-| `tools/gen_demo_map.py` | regenerate the demo level |
-| `tools/level_info.c` | print counts and bounds for a level file |
-
-Only `main.c` and `editor.c` include sokol or ImGui headers. `make test` links the core with gcc alone, so a core file that pulls in a UI header fails the build.
-
-## Verification
-
-```sh
-make test
-make verify
-```
-
-`make verify` runs `tools/verify.sh`, which rebuilds, runs the core tests, drives the real X11 window with xdotool, samples canvas pixels, and checks the saved file. A recorded run at 1280x800:
-
-```text
-PASS build without warnings
-PASS prototype settings removed
-PASS core tests (171 checks)
-PASS demo fills blue=28197 red=25854 white=440
-PASS closed loop added a fill (+9296 blue px)
-PASS delete removed the fill
-PASS undo restored the fill
-PASS click placement added a white door (+52 white px)
-PASS label typed and deactivated
-PASS save wrote 46 walls, 11 doors, a grid label, and a grid door
-PASS reload restored the level (blue=37899)
-PASS marquee selected all and shift-click preserved the selected walls, rooms, and doors
-PASS undo restored the level after marquee delete
-PASS group drag moved both labels onto the grid
-PASS group drag moved walls and their doors with the rest of the selection
-PASS shift selection deleted both labels in one step
-PASS dragged wall moved onto grid coordinates
-PASS l-shaped close created a fill (+6884 blue px)
-PASS l-shaped close saved 4 new walls and a 4 point room
-ALL EDITOR CHECKS PASSED
-```
-
-The script assumes a 1280x800 window and the default panel widths, and it uses its own Xvfb display. Screenshots land in `/tmp/ink-ribbon-verify-*.png`.
+Doors ride their host wall through a reshape. A door dragged alone slides along its wall, and dragging an end handle resizes it. Labels, rooms, and stairs still move as a group when they are dragged together.
 
 ## Focus and the pointer
 

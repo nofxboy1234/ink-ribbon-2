@@ -9,7 +9,7 @@ One sokol window titled `Ink Ribbon Level Editor`, 1280 by 800 initial size, nea
 The frame builds a full-viewport ImGui layout:
 
 - A main menu bar at the top: File, Edit, View, Help.
-- A left tool panel, 190 px wide, from below the menu bar to the bottom.
+- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the tool buttons, then Grid, Snap, and Show grid, then only the options the active tool uses.
 - A right inspector panel, 300 px wide, same vertical span.
 - A canvas filling the middle. Canvas rect is stored in the editor so the mouse can be converted between screen and world.
 - A one-line status strip overlaid at the bottom of the canvas. It shows the active tool hint, cursor world coordinates, zoom, the current snap size or `snap off`, and the latest action or error.
@@ -18,7 +18,7 @@ Panels use `ImGuiWindowFlags_NoTitleBar | NoResize | NoMove | NoCollapse | NoScr
 
 ## Visual language
 
-Match the reference. Near-black canvas `#0b0c0e`. Grid lines at the selected Grid size, subtle at `#333b45` with low alpha, a brighter line every 4 cells and the brightest every 16. The grid gets coarser only when the fine lines would be closer than 4 screen pixels. Walls `#8b9097`, 2 screen pixels wide. Room blue `#2b3f50`, room red `#4a2028`, both opaque. Doors white `#f2f2f2`, red `#b3323b`, blue `#3d7fb5`. Labels `#e6e6e6`. Stairs `#767d85` treads on a slightly lighter footprint fill. Selection accent `#5aa0c8` with a 2 px outline or handles.
+Match the reference. Near-black canvas `#0b0c0e`. Grid lines at the selected Grid size, subtle at `#333b45` with low alpha, a brighter line every 4 cells and the brightest every 16. The grid gets coarser only when the fine lines would be closer than 4 screen pixels. Walls `#8b9097`, 2 screen pixels wide. Fill blue `#2b3f50`, fill red `#4a2028`, both opaque. A closed wall shape can also use None, which draws no fill. Fills are ear-clipped into triangles, so a shape fills its own outline and never its bounding rectangle. Doors white `#f2f2f2`, red `#b3323b`, blue `#3d7fb5`. Labels `#e6e6e6`. Stairs `#767d85` treads on a slightly lighter footprint fill. Selection accent `#5aa0c8` with a 2 px outline or handles.
 
 Dark ImGui theme: window background `#101114`, panel `#16181c`, frame `#1d2025`, borders `#2a2e34`, text `#d9dadd`, accent `#4e7f9e`. Rounded corners 3 px. Sentence-case headings.
 
@@ -45,11 +45,12 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 
 - The first click starts a chain at the grid-snapped point.
 - Each later click uses `snap_ortho(chain_last, cursor_world, grid)` so a segment is horizontal when `|dx| > |dy|`, vertical otherwise, and the free coordinate snaps to the grid.
-- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, then add a room polygon from the chain points using the current fill color. End the chain. Select the new room.
+- The first click creates a shape with `level_add_shape`. Every later click calls `level_add_wall_to_shape`.
+- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, call `level_close_shape`, then `level_set_shape_fill` with the tool's fill colour. End the chain. Select the shape. A close needs at least four walls; report that when it fails. No Room is created.
 - `Enter` also closes the chain when it has at least three points. `Esc` or right-click ends it open, keeping only the walls already added.
 - `Backspace` removes the last wall added in the current chain and moves the chain tip back. This is a live document mutation; commit history after it.
 - Show a preview segment from the last point to the constrained cursor, the first-point marker with a "close" highlight when near, and small vertex dots.
-- Chain points are capped at `LEVEL_MAX_ROOM_PTS`; past that, closing still adds the wall but skips the room and reports why.
+- Chain points are bounded by the wall pool and the shape pool; a failed add reports why in the status strip.
 
 ### Room
 
@@ -73,7 +74,9 @@ Click places stairs at the snapped point using the current direction and step co
 
 ### Select
 
-Click hit-tests in this order: door, label, stairs, wall, room. Tolerance is 7 screen pixels for walls and doors. Labels use their measured text rect. Stairs use `level_stairs_rect`. Rooms use `level_room_at`.
+Click hit-tests in this order: door, label, stairs, wall, room. Tolerance is 7 screen pixels for walls and doors. Labels use their measured text rect. Stairs use `level_stairs_rect`. Rooms use `level_room_at`. A wall hit selects that wall's shape, because the shape is the object; the hit wall is remembered for the drag that may follow.
+
+Dragging a wall starts a reshape. A horizontal wall slides in y, a vertical one in x. The drag snaps the moved coordinate to the grid, then `level_slide_wall_edge` carries every coincident endpoint, so connected lines stretch and opposite lines stay. The gesture commits one snapshot on release and restores the previous snapshot on Esc or right-click.
 
 Selection is a bounded set per object kind plus a primary reference. The set is never serialized.
 
@@ -81,7 +84,7 @@ Selection is a bounded set per object kind plus a primary reference. The set is 
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out. Neither starts a drag.
 - Plain press on empty canvas clears the selection and starts a marquee. Shift-press starts an additive marquee. Travel under 4 screen pixels is a click.
 - On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap, rooms use polygon intersection.
-- Drag a selected wall to move it, or the whole group when it is part of a multi-selection. Selected rooms, labels, and stairs move with it. The group snaps from the primary object's anchor and commits one history snapshot on release. A wall keeps its id and stays axis-aligned.
+- Drag a wall line to reshape its shape, as described under Wall. Selected rooms, labels, and stairs move as a group when dragged. A group snaps from the primary object's anchor and commits one history snapshot on release.
 - A door follows its host wall, so it moves with a selected wall. A door whose host wall is not selected stays put and the status line says so. A door dragged when it is the only selected object slides along its wall, and dragging an end handle resizes it.
 - `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.
 - `Esc` clears selection, cancels a draft, or restores a live drag.
@@ -133,7 +136,7 @@ The UI owner must verify all of these on the real X11 window and report the comm
 1. `make` builds with no warnings from `src/`.
 2. Launch with the demo level. Screenshot shows blue and red fills, white/red/blue doors, labels, and hatched stairs. Sample pixels to prove the fill colors exist.
 3. Draw a closed four-click rectangle with the Wall tool. Screenshot shows the walls and a new fill. Verify with `level_stats` text or pixel sampling.
-4. Switch to Select, click the new fill, press Delete, screenshot or status confirms removal.
+4. Switch to Select, click a wall of the new shape, press Delete, screenshot or status confirms removal.
 5. Place a door on a wall, drag it along the wall, resize it, change its color in the inspector.
 6. Add a label, type in the inspector, move it. Add stairs, change step count and direction.
 7. Save to a temp path, New, Open the temp path, confirm the same object counts.
