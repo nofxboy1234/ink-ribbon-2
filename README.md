@@ -175,7 +175,7 @@ The script assumes a 1280x800 window and the default panel widths. Screenshots l
 - Walls are horizontal or vertical only. Walls can be selected and deleted, but their endpoints do not drag. Deleting a wall cascades its doors.
 - Painted areas are independent polygons and do not follow wall edits.
 - Fixed capacities are 512 walls, 64 areas, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
-- One level is open at a time. There is no copy and paste, no multi-select, and no native file dialog.
+- One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste, no multi-select, and no native file dialog.
 - The editor was tested on Linux and X11 only.
 - The door prototype holds the wall stroke under the bar in Overlay mode so the difference from Cut is visible at normal zoom.
 
