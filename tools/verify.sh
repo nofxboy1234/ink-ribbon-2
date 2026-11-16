@@ -3,6 +3,7 @@
 # usage: tools/verify.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. tools/xvfb.sh
 
 out=/tmp/ink-ribbon-verify
 rm -f "$out"-*.png /tmp/ink-ribbon-verify.lvl /tmp/ink-ribbon-allgone.lvl
@@ -43,11 +44,13 @@ echo "PASS core tests ($(grep -c '^PASS' /tmp/ink-ribbon-test.log) checks)"
 
 gcc -std=gnu11 -Isrc tools/level_info.c src/level.c src/geom.c -lm -o /tmp/ink-level-info
 
+xvfb_start
 ./build/editor --level levels/re2-library.lvl >/tmp/ink-ribbon-verify.log 2>&1 &
 pid=$!
 cleanup() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
+    xvfb_stop
 }
 trap cleanup EXIT
 
@@ -65,7 +68,7 @@ fi
 eval "$(xdotool getwindowgeometry --shell "$win" | tr -d '\r')"
 WX=$X
 WY=$Y
-xdotool windowactivate --sync "$win"
+xdotool windowfocus "$win" 2>/dev/null || true
 sleep 0.5
 
 shot() { import -window "$win" "$1"; }
@@ -276,6 +279,55 @@ if [ "$blue4" -lt "$blue1" ]; then
     exit 1
 fi
 echo "PASS reload restored the level (blue=$blue4)"
+
+echo "== marquee all, then drag walls, rooms, and doors together =="
+save_as /tmp/ink-ribbon-before-drag.lvl
+drag 975 760 200 60
+shot "$out-drag-all.png"
+drag 547 510 667 550
+save_as /tmp/ink-ribbon-after-drag.lvl
+drag_check=$(awk '
+    FNR == NR {
+        if ($1 == "wall") { bw[$2] = $3 " " $4 " " $5 " " $6; back[$2] = 1 }
+        if ($1 == "label") { nl++; bl[nl] = $2 " " $3 }
+        if ($1 == "door") { nd++; bd[nd] = $3 " " $4 " " $5 }
+        next
+    }
+    $1 == "wall" && back[$2] {
+        split(bw[$2], a, " ")
+        wdx = $3 - a[1]; wdy = $4 - a[2]
+        if (wdx != 0 || wdy != 0) {
+            wmoved++
+            if (first == 0) { first = 1; fx = wdx; fy = wdy }
+            else if (wdx != fx || wdy != fy) bad = 1
+            if (($5 - $3) != (a[3] - a[1]) || ($6 - $4) != (a[4] - a[2])) bad = 1
+        }
+    }
+    $1 == "label" {
+        li++
+        split(bl[li], b, " ")
+        ldx = $2 - b[1]; ldy = $3 - b[2]
+        if (ldx != 0 || ldy != 0) {
+            lmoved++
+            if (ldx != fx || ldy != fy) bad = 1
+        }
+    }
+    $1 == "door" {
+        di++
+        split(bd[di], b, " ")
+        if ($3 != b[1] || $4 != b[2] || $5 != b[3]) bad = 1
+    }
+    END {
+        grid = (fx % 8 == 0) && (fy % 8 == 0)
+        if (wmoved > 0 && lmoved > 0 && !bad && grid) print "ok"
+        else print "walls=" wmoved " labels=" lmoved " bad=" bad " grid=" grid " d=" fx "," fy
+    }' /tmp/ink-ribbon-before-drag.lvl /tmp/ink-ribbon-after-drag.lvl)
+if [ "$drag_check" != "ok" ]; then
+    echo "FAIL group drag did not move walls, rooms, and doors together ($drag_check)"
+    exit 1
+fi
+echo "PASS group drag moved walls and their doors with the rest of the selection"
+undo
 
 echo "== marquee select all, delete, undo =="
 xdotool key --clearmodifiers 1
