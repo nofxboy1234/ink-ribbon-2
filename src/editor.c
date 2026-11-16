@@ -2082,7 +2082,7 @@ static void draw_left_panel(Editor* e) {
     igDummy((ImVec2){ 0.0f, 2.0f });
     heading("Selection");
     small_note("Shift-click adds. Ctrl-click toggles. Drag to marquee.");
-    small_note("Labels, stairs, and rooms move together; snap follows the grid.");
+    small_note("Walls, rooms, labels, and stairs move together.");
 
     igEnd();
 }
@@ -2263,7 +2263,7 @@ static void inspector_many(Editor* e) {
     if (sel_count_kind(s, SEL_LABEL)) igText("Labels  %d", sel_count_kind(s, SEL_LABEL));
     if (sel_count_kind(s, SEL_STAIRS)) igText("Stairs  %d", sel_count_kind(s, SEL_STAIRS));
     igDummy((ImVec2){ 0.0f, 6.0f });
-    small_note("Labels, stairs, and rooms move together. Doors slide individually.");
+    small_note("Selected walls, rooms, labels, and stairs move together. Doors follow their wall; one door alone slides.");
     igDummy((ImVec2){ 0.0f, 6.0f });
     object_delete_button(e);
 }
@@ -2311,7 +2311,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("F fit level, G toggle grid");
         igTextDisabled("Shift-click adds; Ctrl-click toggles");
         igTextDisabled("Drag empty canvas to marquee");
-        igTextDisabled("Drag labels, stairs, or rooms together");
+        igTextDisabled("Drag walls, rooms, labels, or stairs together");
         igTextDisabled("Drag a door to slide; drag an end to resize");
         igTextDisabled("Delete removes every selected object");
         igTextDisabled("Esc deselects then cancels a draft");
@@ -2397,7 +2397,7 @@ static void draw_help_modal(Editor* e) {
     igBullet();
     igText("Drag empty canvas to marquee a group.");
     igBullet();
-    igText("Drag labels, stairs, or rooms to move the group.");
+    igText("Drag walls, rooms, labels, or stairs to move the group.");
     igBullet();
     igText("Drag a door to slide it; drag an end to resize.");
     igBullet();

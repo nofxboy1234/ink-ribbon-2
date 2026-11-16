@@ -79,8 +79,8 @@ Selection is a bounded set per object kind plus a primary reference. The set is 
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out. Neither starts a drag.
 - Plain press on empty canvas clears the selection and starts a marquee. Shift-press starts an additive marquee. Travel under 4 screen pixels is a click.
 - On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap, rooms use polygon intersection.
-- Drag a selected label, stair, or room to move every selected label, stair, and room together. The group snaps from the primary object's anchor and commits one history snapshot on release. Walls stay fixed.
-- A selected door still slides or resizes on its own.
+- Drag a selected wall to move it, or the whole group when it is part of a multi-selection. Selected rooms, labels, and stairs move with it. The group snaps from the primary object's anchor and commits one history snapshot on release. A wall keeps its id and stays axis-aligned.
+- A door follows its host wall, so it moves with a selected wall. A door whose host wall is not selected stays put and the status line says so. A door dragged when it is the only selected object slides along its wall, and dragging an end handle resizes it.
 - `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.
 - `Esc` clears selection, cancels a draft, or restores a live drag.
 

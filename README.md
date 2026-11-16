@@ -45,7 +45,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Add text labels anywhere, edit the text in the inspector, resize and move them.
 - Add standard stairs with 2 to 48 steps. The step count sets the run length, and each run is horizontal or vertical.
 - Select, move, edit, and delete the placed objects. Deleting a wall also deletes the doors hosted by it.
-- Click to select, shift-click to add or remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step, and dragging selected labels, stairs, and rooms moves them together.
+- Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step, and dragging anything selected moves the group together.
 - Snap to the grid on placement and movement. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
@@ -79,7 +79,7 @@ Painted areas are explicit polygons. That keeps their color and identity when ne
 
 Labels store a position, a size, and a string. Stairs store a center, a direction, and a step count. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size.
 
-Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a selected label, stair, or room moves all selected labels, stairs, and rooms together. Doors keep their own slide and end-resize gestures. Walls stay selected but do not move.
+Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a selected wall moves the wall, or the whole group when it is part of a multi-selection. Selected rooms, labels, and stairs move with it. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
 
 Snap-to-grid applies to wall and room points, labels, stairs, door centers, door resize spans, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
@@ -93,7 +93,11 @@ A plain click on an unselected object selects only it. Clicking an object alread
 
 ![Two selected labels](docs/screenshots/selection.png)
 
-Dragging a selected label, stair, or room moves every selected label, stair, and room. A door in a multi-selection still slides along its wall or resizes from an end. Snap uses the grid size set in the left panel. The group snaps from the primary object's anchor, so the rest of the group keeps its offset.
+![The whole level dragged as one group](docs/screenshots/group-drag.png)
+
+Marquee select everything, then drag any selected wall. The walls, their doors, the fills, the labels, and the stairs move by one grid-snapped delta and commit as one undo step.
+
+Dragging moves the whole group, walls and their doors included. A door has no independent position, so it follows its host wall; selecting a door without its wall leaves it in place and the status line says so. A door dragged alone slides along its wall, and dragging an end handle resizes it. Snap uses the grid size set in the left panel, and the group snaps from the primary object's anchor so the rest keeps its offset.
 
 The recommended interaction settings are now the only behavior. Door placement is click only, closing a wall loop always creates a fill, and a door always opens the wall behind it. The Prototype panel and its unused variants were removed.
 
@@ -121,7 +125,7 @@ Records are `wall`, `room`, `door`, `label`, and `stairs`. Walls carry their ids
 | `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
 | `src/level.c` | level document, edits, save, load, undo ring |
 | `src/geom.c` | vectors, snapping, segment and polygon math |
-| `tests/test_level.c` | 163 headless checks for the core |
+| `tests/test_level.c` | 171 headless checks for the core |
 | `tools/verify.sh` | end-to-end X11 check with pixel evidence |
 | `tools/shot.sh` | build, launch, drive, screenshot |
 | `tools/gen_demo_map.py` | regenerate the demo level |
@@ -141,7 +145,7 @@ make verify
 ```text
 PASS build without warnings
 PASS prototype settings removed
-PASS core tests (163 checks)
+PASS core tests (171 checks)
 PASS demo fills blue=28197 red=25854 white=440
 PASS closed loop added a fill (+9296 blue px)
 PASS delete removed the fill
@@ -153,7 +157,9 @@ PASS reload restored the level (blue=37899)
 PASS marquee selected all and shift-click preserved the selected walls, rooms, and doors
 PASS undo restored the level after marquee delete
 PASS group drag moved both labels onto the grid
+PASS group drag moved walls and their doors with the rest of the selection
 PASS shift selection deleted both labels in one step
+PASS dragged wall moved onto grid coordinates
 PASS l-shaped close created a fill (+6884 blue px)
 PASS l-shaped close saved 4 new walls and a 4 point room
 ALL EDITOR CHECKS PASSED
@@ -167,7 +173,7 @@ The script assumes a 1280x800 window and the default panel widths. Screenshots l
 - Painted areas are independent polygons and do not follow wall edits.
 - Fixed capacities are 512 walls, 64 areas, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
 - One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.
-- Group drag moves labels, stairs, and rooms. Walls and doors stay fixed, and a door slides or resizes on its own.
+- Group drag moves walls, rooms, labels, and stairs. Doors follow their host walls, so a selected door whose wall is not selected stays put. A single selected door slides along its wall instead.
 - The editor was tested on Linux and X11 only.
 
 ## Third party
