@@ -80,6 +80,31 @@ Rect rect_from_points(Vec2 a, Vec2 b) {
     };
 }
 
+bool segment_intersects_rect(Vec2 a, Vec2 b, Rect r) {
+    if (rect_contains(r, a) || rect_contains(r, b)) return true;
+    float t0 = 0.0f;
+    float t1 = 1.0f;
+    float dx = b.x - a.x;
+    float dy = b.y - a.y;
+    const float p[4] = { -dx, dx, -dy, dy };
+    const float q[4] = { a.x - r.min.x, r.max.x - a.x, a.y - r.min.y, r.max.y - a.y };
+    for (int i = 0; i < 4; i++) {
+        if (fabsf(p[i]) <= GEOM_EPS) {
+            if (q[i] < 0.0f) return false;
+            continue;
+        }
+        float t = q[i] / p[i];
+        if (p[i] < 0.0f) {
+            if (t > t1) return false;
+            if (t > t0) t0 = t;
+        } else {
+            if (t < t0) return false;
+            if (t < t1) t1 = t;
+        }
+    }
+    return t0 <= t1;
+}
+
 Vec2 segment_point(Vec2 a, Vec2 b, float t) {
     return v2_lerp(a, b, t);
 }
@@ -109,6 +134,27 @@ bool point_in_polygon(const Vec2* pts, int count, Vec2 p) {
         }
     }
     return inside;
+}
+
+bool polygon_intersects_rect(const Vec2* pts, int count, Rect r) {
+    if (!pts || count < 3) return false;
+    if (!rect_overlaps(polygon_bounds(pts, count), r)) return false;
+    for (int i = 0; i < count; i++) {
+        if (rect_contains(r, pts[i])) return true;
+    }
+    for (int i = 0, j = count - 1; i < count; j = i++) {
+        if (segment_intersects_rect(pts[j], pts[i], r)) return true;
+    }
+    const Vec2 corners[4] = {
+        r.min,
+        { r.min.x, r.max.y },
+        r.max,
+        { r.max.x, r.min.y },
+    };
+    for (int i = 0; i < 4; i++) {
+        if (point_in_polygon(pts, count, corners[i])) return true;
+    }
+    return false;
 }
 
 float polygon_area(const Vec2* pts, int count) {

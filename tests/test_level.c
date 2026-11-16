@@ -58,6 +58,13 @@ static void test_geometry(void) {
     check(rect_overlaps(rr, rect_from_points(v2(9, 9), v2(11, 11))) &&
               !rect_overlaps(rr, rect_from_points(v2(20, 20), v2(30, 30))),
           "rect_overlaps detects overlap and separation");
+    Rect marquee = rect_from_points(v2(2, 2), v2(8, 8));
+    check(segment_intersects_rect(v2(0, 5), v2(10, 5), marquee),
+          "segment_intersects_rect catches a crossing segment");
+    check(!segment_intersects_rect(v2(0, 20), v2(10, 20), marquee),
+          "segment_intersects_rect rejects a separate segment");
+    check(segment_intersects_rect(v2(3, 3), v2(4, 4), marquee),
+          "segment_intersects_rect catches a segment inside the box");
 
     check(nearf(clampf(150, 0, 100), 100) && nearf(lerpf(0, 10, 0.25f), 2.5f),
           "clampf and lerpf");
@@ -88,6 +95,16 @@ static void test_polygon(void) {
           "polygon_area is orientation independent");
     check(polygon_simplify(square, 4) == 4,
           "polygon_simplify leaves a simple polygon unchanged");
+
+    check(polygon_intersects_rect(square, 4, rect_from_points(v2(2, 2), v2(3, 3))),
+          "polygon_intersects_rect sees a box inside the polygon");
+    check(polygon_intersects_rect(square, 4, rect_from_points(v2(-2, 4), v2(2, 6))),
+          "polygon_intersects_rect sees a box crossing an edge");
+    check(!polygon_intersects_rect(square, 4, rect_from_points(v2(20, 20), v2(30, 30))),
+          "polygon_intersects_rect rejects a separate box");
+    Vec2 ell[6] = { { 0, 0 }, { 10, 0 }, { 10, 4 }, { 4, 4 }, { 4, 10 }, { 0, 10 } };
+    check(!polygon_intersects_rect(ell, 6, rect_from_points(v2(6, 6), v2(9, 9))),
+          "polygon_intersects_rect respects a concave notch");
 }
 
 static void test_walls(void) {

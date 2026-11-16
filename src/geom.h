@@ -31,6 +31,7 @@ Vec2 snap_grid(Vec2 p, float grid);
 
 bool rect_contains(Rect r, Vec2 p);
 bool rect_overlaps(Rect a, Rect b);
+bool segment_intersects_rect(Vec2 a, Vec2 b, Rect r);
 Rect rect_from_points(Vec2 a, Vec2 b);
 
 float point_segment_dist(Vec2 p, Vec2 a, Vec2 b);
@@ -38,6 +39,7 @@ float point_segment_t(Vec2 p, Vec2 a, Vec2 b);
 Vec2 segment_point(Vec2 a, Vec2 b, float t);
 
 bool point_in_polygon(const Vec2* pts, int count, Vec2 p);
+bool polygon_intersects_rect(const Vec2* pts, int count, Rect r);
 float polygon_area(const Vec2* pts, int count);
 /* Removes duplicate and collinear vertices in place, returns new count. */
 int polygon_simplify(Vec2* pts, int count);
