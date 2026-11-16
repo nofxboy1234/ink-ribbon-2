@@ -319,6 +319,10 @@ static void validate_selection(Editor* e) {
 
 static void switch_tool(Editor* e, Tool tool) {
     if (e->tool == tool) return;
+    if (gesture_is_drag(e) && e->gesture.kind != GESTURE_PLACE_DRAG) {
+        history_restore_current(&e->history, &e->level);
+        validate_selection(e);
+    }
     cancel_gesture(e);
     e->tool = tool;
     set_status(e, false, "%s tool", TOOL_NAMES[tool]);
@@ -1290,7 +1294,10 @@ static void cancel_transient(Editor* e) {
         cancel_gesture(e);
         set_status(e, false, "Draft cancelled");
     } else if (gesture_is_drag(e)) {
+        bool restored = history_restore_current(&e->history, &e->level);
+        validate_selection(e);
         cancel_gesture(e);
+        set_status(e, false, restored ? "Drag cancelled" : "Drag cancelled, no history");
     }
 }
 
@@ -2212,7 +2219,9 @@ static void handle_shortcuts(Editor* e) {
         else if (e->gesture.kind == GESTURE_POLYGON) close_polygon(e);
     }
     if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
-        if (e->selection.kind != SEL_NONE) {
+        if (gesture_is_drag(e)) {
+            cancel_transient(e);
+        } else if (e->selection.kind != SEL_NONE) {
             clear_selection(e);
             set_status(e, false, "Selection cleared");
         } else if (gesture_active(e)) {

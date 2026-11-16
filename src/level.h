@@ -153,6 +153,7 @@ void history_reset(History* history, const Level* level);
 void history_commit(History* history, const Level* level);
 bool history_undo(History* history, Level* level);
 bool history_redo(History* history, Level* level);
+bool history_restore_current(History* history, Level* level);
 bool history_can_undo(const History* history);
 bool history_can_redo(const History* history);
 

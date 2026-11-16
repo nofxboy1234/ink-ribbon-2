@@ -22,6 +22,8 @@ Debian and Ubuntu:
 sudo apt install gcc g++ make pkg-config libx11-dev libxi-dev libxcursor-dev libgl1-mesa-dev
 ```
 
+`make verify` also needs `xdotool` and ImageMagick, which provide `import`, `convert`, and `compare`. The editor itself does not use them.
+
 Build and run from the repository root:
 
 ```sh
@@ -72,7 +74,7 @@ Painted areas are explicit polygons. That keeps their color and identity when ne
 
 Labels store a position, a size, and a string. Stairs store a center, a direction, and a step count. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size.
 
-Undo stores whole level snapshots. Every completed gesture writes one snapshot, so a drag, a property edit, or a closed loop undoes in one step. The history keeps 64 levels.
+Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. Closing a loop writes its closing walls and the fill together. The history keeps 64 levels.
 
 ## Prototype options
 
@@ -158,10 +160,11 @@ PASS delete removed the fill
 PASS undo restored the fill
 PASS click placement added a white door (+50 white px)
 PASS label typed and deactivated
-PASS save wrote 46 walls and the edited label
+PASS save wrote 46 walls, 11 doors, and the unmoved label
 PASS reload restored the level (blue=37760)
-PASS overlay render differs by 708 px
+PASS overlay render differs by 793 px
 PASS l-shaped close created a fill (+6800 blue px)
+PASS l-shaped close saved 4 new walls and a 4 point room
 ALL EDITOR CHECKS PASSED
 ```
 

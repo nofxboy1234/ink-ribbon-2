@@ -535,6 +535,22 @@ static void test_history(void) {
           "undo after a branching commit skips the dropped redo state");
     history_shutdown(&h);
 
+    History restore;
+    check(history_init(&restore), "history_init for the restore test");
+    Level live;
+    level_init(&live);
+    level_add_wall(&live, v2(0, 0), v2(4, 0));
+    history_reset(&restore, &live);
+    level_add_wall(&live, v2(0, 0), v2(0, 4));
+    history_commit(&restore, &live);
+    level_add_wall(&live, v2(8, 0), v2(8, 4));
+    check(live.wall_count == 3, "uncommitted edit is live in the document");
+    check(history_restore_current(&restore, &live) && live.wall_count == 2,
+          "history_restore_current discards an uncommitted edit");
+    check(!history_restore_current(NULL, &live),
+          "history_restore_current rejects a null history");
+    history_shutdown(&restore);
+
     History ring;
     check(history_init(&ring), "history_init for the ring test");
     Level r;

@@ -9,7 +9,11 @@ rm -f "$out"-*.png /tmp/ink-ribbon-verify.lvl
 build_log=/tmp/ink-ribbon-build.log
 
 echo "== build =="
-make -B -j4 >"$build_log" 2>&1
+if ! make -B -j4 >"$build_log" 2>&1; then
+    tail -40 "$build_log"
+    echo "FAIL build"
+    exit 1
+fi
 if grep -E "warning:|error:" "$build_log"; then
     echo "FAIL build warnings"
     exit 1
@@ -22,7 +26,11 @@ if ! make -s test >/tmp/ink-ribbon-test.log 2>&1; then
     echo "FAIL core tests"
     exit 1
 fi
-grep -q "ALL CORE TESTS PASSED" /tmp/ink-ribbon-test.log
+if ! grep -q "ALL CORE TESTS PASSED" /tmp/ink-ribbon-test.log; then
+    tail -20 /tmp/ink-ribbon-test.log
+    echo "FAIL core test marker"
+    exit 1
+fi
 echo "PASS core tests"
 
 gcc -std=gnu11 -Isrc tools/level_info.c src/level.c src/geom.c -lm -o /tmp/ink-level-info
@@ -112,7 +120,7 @@ if [ "$blue3" -lt "$blue1" ]; then
 fi
 echo "PASS undo restored the fill"
 
-echo "== place a door with a click, then undo =="
+echo "== place a door with a click =="
 xdotool key --clearmodifiers 4
 click 547 420
 xdotool mousemove --sync $((WX + 900)) $((WY + 600))
@@ -124,10 +132,6 @@ if [ $((white1 - white0)) -lt 30 ]; then
     exit 1
 fi
 echo "PASS click placement added a white door (+$((white1 - white0)) white px)"
-xdotool keydown ctrl; sleep 0.1
-xdotool key z; sleep 0.1
-xdotool keyup ctrl
-sleep 0.4
 
 echo "== label text survives clicking away =="
 xdotool key --clearmodifiers 5
@@ -139,6 +143,20 @@ click 1100 700
 sleep 0.4
 shot "$out-label.png"
 echo "PASS label typed and deactivated"
+
+echo "== cancel a label drag with Escape =="
+xdotool key --clearmodifiers 1
+sleep 0.2
+xdotool mousemove --sync $((WX + 460)) $((WY + 630))
+xdotool mousedown 1
+sleep 0.15
+xdotool mousemove --sync $((WX + 560)) $((WY + 680))
+sleep 0.2
+xdotool key Escape
+sleep 0.2
+xdotool mouseup 1
+sleep 0.4
+shot "$out-cancel.png"
 
 echo "== save as =="
 xdotool keydown ctrl; sleep 0.1
@@ -156,8 +174,9 @@ if [ ! -f /tmp/ink-ribbon-verify.lvl ]; then
     exit 1
 fi
 walls=$(grep -c '^wall' /tmp/ink-ribbon-verify.lvl)
-if [ "$walls" -ne 46 ]; then
-    echo "FAIL saved wall count $walls, expected 46"
+doors=$(grep -c '^door' /tmp/ink-ribbon-verify.lvl)
+if [ "$walls" -ne 46 ] || [ "$doors" -ne 11 ]; then
+    echo "FAIL saved counts walls=$walls doors=$doors, expected 46 and 11"
     exit 1
 fi
 /tmp/ink-level-info /tmp/ink-ribbon-verify.lvl
@@ -165,7 +184,11 @@ if ! grep -q '^label .*VERIFY LABEL' /tmp/ink-ribbon-verify.lvl; then
     echo "FAIL label text was lost when the input lost focus"
     exit 1
 fi
-echo "PASS save wrote 46 walls and the edited label"
+if ! grep -q '^label 384.000 672.000 19.000 VERIFY LABEL' /tmp/ink-ribbon-verify.lvl; then
+    echo "FAIL cancelled drag still moved the label"
+    exit 1
+fi
+echo "PASS save wrote 46 walls, 11 doors, and the unmoved label"
 
 echo "== reload through --level =="
 kill "$pid" 2>/dev/null || true
@@ -230,6 +253,25 @@ if [ $((blue5 - blue4)) -lt 2000 ]; then
     exit 1
 fi
 echo "PASS l-shaped close created a fill (+$((blue5 - blue4)) blue px)"
+
+echo "== l-shaped close saved as a four point room =="
+xdotool keydown ctrl; sleep 0.1
+xdotool keydown shift; sleep 0.1
+xdotool key s; sleep 0.1
+xdotool keyup shift; sleep 0.1
+xdotool keyup ctrl
+sleep 0.5
+xdotool type --clearmodifiers --delay 20 "/tmp/ink-ribbon-lclose.lvl"
+sleep 0.2
+xdotool key --clearmodifiers Return
+sleep 0.6
+walls_l=$(grep -c '^wall' /tmp/ink-ribbon-lclose.lvl)
+points=$(grep '^room' /tmp/ink-ribbon-lclose.lvl | tail -1 | awk '{ print $3 }')
+if [ "$walls_l" -ne 50 ] || [ "$points" -ne 4 ]; then
+    echo "FAIL l-close saved walls=$walls_l points=$points, expected 50 and 4"
+    exit 1
+fi
+echo "PASS l-shaped close saved 4 new walls and a 4 point room"
 
 echo "ALL EDITOR CHECKS PASSED"
 echo "screenshots: $out-*.png"

@@ -788,6 +788,15 @@ bool history_redo(History* history, Level* level) {
     return true;
 }
 
+bool history_restore_current(History* history, Level* level) {
+    if (!history || !history->snapshots || history->cursor < 0 ||
+        history->cursor >= history->count) {
+        return false;
+    }
+    *level = history->snapshots[history->cursor];
+    return true;
+}
+
 bool history_can_undo(const History* history) {
     return history->snapshots && history->count > 0 && history->cursor > 0;
 }
