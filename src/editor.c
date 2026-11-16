@@ -22,8 +22,9 @@
 #define CLOSE_TOL_PX 12.0f
 #define DRAG_END_PX 8.0f
 #define CANVAS_BG 0x0b0c0e
-#define GRID_COL 0x15171a
-#define GRID_BRIGHT 0x1d2126
+#define GRID_FINE 0x111316
+#define GRID_COL 0x181b1f
+#define GRID_BRIGHT 0x232830
 #define WALL_COL 0x8b9097
 #define ROOM_BLUE_COL 0x2b3f50
 #define ROOM_RED_COL 0x4a2028
@@ -879,7 +880,11 @@ static void draw_grid(Editor* e) {
     float maxx = w0.x > w1.x ? w0.x : w1.x;
     float miny = w0.y < w1.y ? w0.y : w1.y;
     float maxy = w0.y > w1.y ? w0.y : w1.y;
-    const float step = 32.0f;
+    /* The drawn lattice is a multiple of the snap lattice, so every line is a
+       position an object can land on. It gets coarser only when the fine lines
+       would smear together at this zoom. */
+    float step = e->grid_size > 0.0f ? e->grid_size : 32.0f;
+    while (step * e->camera.zoom < 4.0f) step *= 4.0f;
     int i0 = (int)floorf(minx / step);
     int i1 = (int)ceilf(maxx / step);
     int j0 = (int)floorf(miny / step);
@@ -888,13 +893,17 @@ static void draw_grid(Editor* e) {
     for (int i = i0; i <= i1; i++) {
         float x = i * step;
         ImVec2 a = world_to_screen(e, v2(x, miny));
-        ImU32 col = (i % 4 == 0) ? col32(GRID_BRIGHT) : col32(GRID_COL);
+        ImU32 col = col32a(0x333b45, 46);
+        if (i % 4 == 0) col = col32a(0x3a4350, 120);
+        if (i % 16 == 0) col = col32a(0x4a5563, 190);
         ImDrawList_AddLineVEx(dl, a.x, e->canvas.min.y, e->canvas.max.y, col, 1.0f, 0);
     }
     for (int j = j0; j <= j1; j++) {
         float y = j * step;
         ImVec2 a = world_to_screen(e, v2(minx, y));
-        ImU32 col = (j % 4 == 0) ? col32(GRID_BRIGHT) : col32(GRID_COL);
+        ImU32 col = col32a(0x333b45, 46);
+        if (j % 4 == 0) col = col32a(0x3a4350, 120);
+        if (j % 16 == 0) col = col32a(0x4a5563, 190);
         ImDrawList_AddLineHEx(dl, e->canvas.min.x, e->canvas.max.x, a.y, col, 1.0f, 0);
     }
 }
