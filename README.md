@@ -22,7 +22,7 @@ Debian and Ubuntu:
 sudo apt install gcc g++ make pkg-config libx11-dev libxi-dev libxcursor-dev libgl1-mesa-dev
 ```
 
-`make verify` also needs `xdotool` and ImageMagick, which provide `import`, `convert`, and `compare`. The editor itself does not use them.
+`make verify` also needs `xdotool`, ImageMagick (for `import`, `convert`, and `compare`), and `Xvfb`. The editor itself does not use them. Verification runs on a private Xvfb display, so it never moves your mouse or touches your desktop. The harness names its processes `ink-ribbon-xvfb` and `ink-ribbon-editor`, kills them on exit and on SIGTERM, and reaps any that a killed run left behind on the next start. `make verify` also fails if any survive it.
 
 Build and run from the repository root:
 
@@ -165,7 +165,7 @@ PASS l-shaped close saved 4 new walls and a 4 point room
 ALL EDITOR CHECKS PASSED
 ```
 
-The script assumes a 1280x800 window and the default panel widths. Screenshots land in `/tmp/ink-ribbon-verify-*.png`.
+The script assumes a 1280x800 window and the default panel widths, and it uses its own Xvfb display. Screenshots land in `/tmp/ink-ribbon-verify-*.png`.
 
 ## Limits
 

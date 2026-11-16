@@ -45,14 +45,16 @@ echo "PASS core tests ($(grep -c '^PASS' /tmp/ink-ribbon-test.log) checks)"
 gcc -std=gnu11 -Isrc tools/level_info.c src/level.c src/geom.c -lm -o /tmp/ink-level-info
 
 xvfb_start
-./build/editor --level levels/re2-library.lvl >/tmp/ink-ribbon-verify.log 2>&1 &
+( exec -a "$EDITOR_TAG" ./build/editor --level levels/re2-library.lvl ) \
+    >/tmp/ink-ribbon-verify.log 2>&1 &
 pid=$!
 cleanup() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     xvfb_stop
+    test_reap
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
 
 win=""
 for _ in $(seq 1 60); do
@@ -255,7 +257,8 @@ echo "PASS save wrote 46 walls, 11 doors, a grid label, and a grid door"
 echo "== reload through --level =="
 kill "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
-./build/editor --level /tmp/ink-ribbon-verify.lvl >/tmp/ink-ribbon-verify2.log 2>&1 &
+( exec -a "$EDITOR_TAG" ./build/editor --level /tmp/ink-ribbon-verify.lvl ) \
+    >/tmp/ink-ribbon-verify2.log 2>&1 &
 pid=$!
 sleep 0.8
 win=""
@@ -477,6 +480,16 @@ if ! awk -v x="$glx" -v y="$gly" 'BEGIN { exit !(x % 32 == 0 && y % 32 == 0) }';
     exit 1
 fi
 echo "PASS a new object lands on the selected 32-unit lattice"
+
+echo "== no leftover test processes =="
+cleanup
+overflow=$(test_leftovers)
+if [ -n "$overflow" ]; then
+    echo "FAIL test processes left running:"
+    echo "$overflow"
+    exit 1
+fi
+echo "PASS no leftover editor or display processes"
 
 echo "ALL EDITOR CHECKS PASSED"
 echo "screenshots: $out-*.png"

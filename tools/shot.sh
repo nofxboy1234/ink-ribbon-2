@@ -11,11 +11,16 @@ drive=${2:-}
 
 make -s
 xvfb_start
-trap 'xvfb_stop' EXIT
+meanwhile() {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    xvfb_stop
+    test_reap
+}
+trap meanwhile EXIT INT TERM HUP
 
-./build/editor >/tmp/ink-ribbon.log 2>&1 &
+( exec -a "$EDITOR_TAG" ./build/editor ) >/tmp/ink-ribbon.log 2>&1 &
 pid=$!
-trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; xvfb_stop' EXIT
 
 win=""
 for _ in $(seq 1 80); do
