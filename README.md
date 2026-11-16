@@ -134,7 +134,7 @@ Records are `wall`, `room`, `door`, `label`, and `stairs`. Walls carry their ids
 | `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
 | `src/level.c` | level document, edits, save, load, undo ring |
 | `src/geom.c` | vectors, snapping, segment and polygon math |
-| `tests/test_level.c` | 152 headless checks for the core |
+| `tests/test_level.c` | 156 headless checks for the core |
 | `tools/verify.sh` | end-to-end X11 check with pixel evidence |
 | `tools/shot.sh` | build, launch, drive, screenshot |
 | `tools/gen_demo_map.py` | regenerate the demo level |
