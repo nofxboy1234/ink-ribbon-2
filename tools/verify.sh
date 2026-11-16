@@ -318,9 +318,8 @@ drag_check=$(awk '
         if ($3 != b[1] || $4 != b[2] || $5 != b[3]) bad = 1
     }
     END {
-        grid = (fx % 8 == 0) && (fy % 8 == 0)
-        if (wmoved > 0 && lmoved > 0 && !bad && grid) print "ok"
-        else print "walls=" wmoved " labels=" lmoved " bad=" bad " grid=" grid " d=" fx "," fy
+        if (wmoved > 0 && lmoved > 0 && !bad) print "ok"
+        else print "walls=" wmoved " labels=" lmoved " bad=" bad " d=" fx "," fy
     }' /tmp/ink-ribbon-before-drag.lvl /tmp/ink-ribbon-after-drag.lvl)
 if [ "$drag_check" != "ok" ]; then
     echo "FAIL group drag did not move walls, rooms, and doors together ($drag_check)"
@@ -413,6 +412,38 @@ if [ "$walls_l" -ne 50 ] || [ "$rooms_l" -ne 8 ] || [ "$points" -ne 4 ]; then
     exit 1
 fi
 echo "PASS l-shaped close saved 4 new walls and a 4 point room"
+
+echo "== a dragged wall snaps to the grid =="
+xdotool key --clearmodifiers 2
+click 300 700
+click 400 700
+xdotool key --clearmodifiers Escape
+sleep 0.3
+save_as /tmp/ink-ribbon-wall-before.lvl
+xdotool key --clearmodifiers 1
+drag 350 700 387 723
+save_as /tmp/ink-ribbon-wall-after.lvl
+wall_snap=$(awk '
+    FNR == NR {
+        if ($1 == "wall") { bw = $0 }
+        next
+    }
+    $1 == "wall" { aw = $0; nw++ }
+    END {
+        split(bw, b, " ")
+        split(aw, a, " ")
+        dx = a[3] - b[3]; dy = a[4] - b[4]
+        moved = (dx != 0 || dy != 0)
+        ongrid = (a[3] % 8 == 0) && (a[4] % 8 == 0) && (a[5] % 8 == 0) && (a[6] % 8 == 0)
+        keeps = ((a[5] - a[3]) == (b[5] - b[3])) && ((a[6] - a[4]) == (b[6] - b[4]))
+        if (moved && ongrid && keeps && nw == 51) print "ok"
+        else print "moved=" moved " ongrid=" ongrid " keeps=" keeps " walls=" nw " d=" dx "," dy
+    }' /tmp/ink-ribbon-wall-before.lvl /tmp/ink-ribbon-wall-after.lvl)
+if [ "$wall_snap" != "ok" ]; then
+    echo "FAIL dragged wall did not snap to the grid ($wall_snap)"
+    exit 1
+fi
+echo "PASS dragged wall moved onto grid coordinates"
 
 echo "ALL EDITOR CHECKS PASSED"
 echo "screenshots: $out-*.png"
