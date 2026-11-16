@@ -1282,11 +1282,16 @@ static void draw_status_strip(Editor* e) {
     float x = pmin.x + 12.0f;
 
     char right[160];
+    char snap_text[32];
+    if (e->snap) snprintf(snap_text, sizeof snap_text, "snap %.0f", e->grid_size);
+    else snprintf(snap_text, sizeof snap_text, "snap off");
     if (e->cursor_valid) {
-        snprintf(right, sizeof right, "x %.1f   y %.1f      %.0f%%",
-                 e->cursor_world.x, e->cursor_world.y, e->camera.zoom * 100.0f);
+        snprintf(right, sizeof right, "x %.1f   y %.1f      %.0f%%   %s",
+                 e->cursor_world.x, e->cursor_world.y, e->camera.zoom * 100.0f,
+                 snap_text);
     } else {
-        snprintf(right, sizeof right, "x --   y --      %.0f%%", e->camera.zoom * 100.0f);
+        snprintf(right, sizeof right, "x --   y --      %.0f%%   %s",
+                 e->camera.zoom * 100.0f, snap_text);
     }
     ImVec2 rsz = ImFont_CalcTextSizeA(font, size, FLT_MAX, 0.0f, right);
     float right_x = pmax.x - 12.0f - rsz.x;

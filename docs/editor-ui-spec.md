@@ -12,7 +12,7 @@ The frame builds a full-viewport ImGui layout:
 - A left tool panel, 190 px wide, from below the menu bar to the bottom.
 - A right inspector panel, 300 px wide, same vertical span.
 - A canvas filling the middle. Canvas rect is stored in the editor so the mouse can be converted between screen and world.
-- A one-line status strip overlaid at the bottom of the canvas. It shows the active tool hint, cursor world coordinates, zoom, and the latest action or error.
+- A one-line status strip overlaid at the bottom of the canvas. It shows the active tool hint, cursor world coordinates, zoom, the current snap size or `snap off`, and the latest action or error.
 
 Panels use `ImGuiWindowFlags_NoTitleBar | NoResize | NoMove | NoCollapse | NoScrollbar`. Positions and sizes come from `igGetIO()->DisplaySize` and the menu bar height each frame.
 
