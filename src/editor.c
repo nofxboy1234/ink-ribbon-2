@@ -296,6 +296,13 @@ static bool primary_anchor(const Editor* e, Vec2* out) {
     }
 }
 
+/* ImGui reports the pointer as -FLT_MAX when it has none, which is what a focus
+   loss does. That is not a world position, so treat it as "no pointer". */
+static bool mouse_available(ImVec2 p) {
+    return isfinite(p.x) && isfinite(p.y) &&
+           p.x > -0.5f * FLT_MAX && p.y > -0.5f * FLT_MAX;
+}
+
 static float screen_dist(ImVec2 a, ImVec2 b) {
     float dx = a.x - b.x;
     float dy = a.y - b.y;
@@ -858,7 +865,8 @@ static void draw_dashed_line(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col,
     float ux = dx / len;
     float uy = dy / len;
     float at = 0.0f;
-    while (at < len) {
+    int guard = 0;
+    while (at < len && guard++ < 4096) {
         float end = at + dash;
         if (end > len) end = len;
         ImVec2 p0 = { a.x + ux * at, a.y + uy * at };
@@ -1403,15 +1411,19 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
     set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
 }
 
-static void update_drag(Editor* e) {
+static void update_drag(Editor* e, bool have_pointer) {
     ImGuiIO* io = igGetIO();
     Gesture* g = &e->gesture;
     if (!gesture_is_drag(e)) return;
-    Vec2 world = screen_to_world(e, io->MousePos);
-    bool down = io->MouseDown[0];
+    bool down = have_pointer && io->MouseDown[0];
+    Vec2 world = have_pointer ? screen_to_world(e, io->MousePos) : g->anchor;
 
     switch (g->kind) {
         case GESTURE_MARQUEE: {
+            if (!have_pointer) {
+                cancel_gesture(e);
+                break;
+            }
             g->cur_world = world;
             if (screen_dist(io->MousePos, v2_to_im(g->press_screen)) >= 4.0f) {
                 g->moved = true;
@@ -1835,9 +1847,16 @@ static void handle_canvas_click(Editor* e, Vec2 world, ImVec2 mouse, int hover_w
     }
 }
 
-static void handle_canvas_input(Editor* e, bool hovered) {
+static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     ImGuiIO* io = igGetIO();
     if (e->modal != MODAL_NONE) return;
+    if (!have_pointer) {
+        /* Nothing to hover or drag toward, but a drag that was under way still
+           has to end at its last applied position. */
+        update_drag(e, false);
+        e->cursor_valid = false;
+        return;
+    }
 
     Vec2 world = screen_to_world(e, io->MousePos);
     if (hovered) {
@@ -1875,11 +1894,11 @@ static void handle_canvas_input(Editor* e, bool hovered) {
         }
     }
 
-    update_drag(e);
+    update_drag(e, true);
 
     int hover_wall = -1;
     float hover_t = 0.0f;
-    if (e->tool == TOOL_DOOR && hovered) {
+    if (have_pointer && e->tool == TOOL_DOOR && hovered) {
         float tol = DOOR_TOL_PX / e->camera.zoom;
         hover_wall = level_nearest_wall(&e->level, world, tol, &hover_t);
     }
@@ -1893,7 +1912,7 @@ static void handle_canvas_input(Editor* e, bool hovered) {
     }
 }
 
-static void draw_canvas(Editor* e, ImVec2 mouse) {
+static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
@@ -1914,14 +1933,14 @@ static void draw_canvas(Editor* e, ImVec2 mouse) {
                       (ImVec2){ e->canvas.max.x - e->canvas.min.x,
                                 e->canvas.max.y - e->canvas.min.y },
                       0);
-    bool hovered = igIsItemHovered(0);
-    bool inside = rect_contains(e->canvas, v2(mouse.x, mouse.y));
+    bool hovered = have_pointer && igIsItemHovered(0);
+    bool inside = have_pointer && rect_contains(e->canvas, v2(mouse.x, mouse.y));
     if (e->fit_pending) {
         fit_camera(e);
         e->fit_pending = false;
     }
 
-    handle_canvas_input(e, hovered && inside);
+    handle_canvas_input(e, hovered && inside, have_pointer);
 
     ImDrawList* dl = igGetWindowDrawList();
     ImDrawList_AddRectFilledEx(dl, v2_to_im(e->canvas.min), v2_to_im(e->canvas.max),
@@ -1935,15 +1954,15 @@ static void draw_canvas(Editor* e, ImVec2 mouse) {
 
     int hover_wall = -1;
     float hover_t = 0.0f;
-    if (e->tool == TOOL_DOOR && hovered) {
+    if (have_pointer && e->tool == TOOL_DOOR && hovered) {
         Vec2 world = screen_to_world(e, mouse);
         hover_wall = level_nearest_wall(&e->level, world,
                                         DOOR_TOL_PX / e->camera.zoom, &hover_t);
     }
     draw_door_preview(e, hover_wall, hover_t);
 
-    if (e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
-    if (e->gesture.kind == GESTURE_POLYGON) draw_polygon_preview(e, mouse);
+    if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
+    if (have_pointer && e->gesture.kind == GESTURE_POLYGON) draw_polygon_preview(e, mouse);
     draw_selection(e);
     draw_marquee(e);
     draw_status_strip(e);
@@ -2668,7 +2687,7 @@ void editor_frame(Editor* e) {
 
     draw_left_panel(e);
     draw_inspector(e);
-    draw_canvas(e, io->MousePos);
+    draw_canvas(e, io->MousePos, mouse_available(io->MousePos));
     handle_shortcuts(e);
     draw_modals(e);
 }
