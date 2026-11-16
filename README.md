@@ -161,6 +161,7 @@ PASS label typed and deactivated
 PASS save wrote 46 walls and the edited label
 PASS reload restored the level (blue=37760)
 PASS overlay render differs by 708 px
+PASS l-shaped close created a fill (+6800 blue px)
 ALL EDITOR CHECKS PASSED
 ```
 

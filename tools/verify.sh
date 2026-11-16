@@ -215,5 +215,21 @@ if [ "$diff_px" -lt 100 ]; then
 fi
 echo "PASS overlay render differs by $diff_px px"
 
+echo "== l-shaped close when the last point is not aligned =="
+xdotool key --clearmodifiers 2
+sleep 0.2
+click 600 650
+click 700 650
+click 700 730
+click 600 650
+sleep 0.4
+shot "$out-lclose.png"
+blue5=$(count_hex "$out-lclose.png" 2b3f50)
+if [ $((blue5 - blue4)) -lt 2000 ]; then
+    echo "FAIL l-shaped close did not create a fill $blue4 -> $blue5"
+    exit 1
+fi
+echo "PASS l-shaped close created a fill (+$((blue5 - blue4)) blue px)"
+
 echo "ALL EDITOR CHECKS PASSED"
 echo "screenshots: $out-*.png"
