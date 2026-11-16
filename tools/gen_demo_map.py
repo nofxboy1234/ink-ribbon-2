@@ -9,22 +9,36 @@ from pathlib import Path
 OUT = Path(__file__).resolve().parent.parent / "levels" / "re2-library.lvl"
 
 walls = []
+shapes = []
 doors = []
 rooms = []
 labels = []
 stairs = []
 
 
+def begin_shape():
+    shapes.append({"walls": [], "closed": False})
+
+
+def end_shape(closed=False):
+    shapes[-1]["closed"] = closed
+
+
 def wall(a, b):
+    if not shapes:
+        begin_shape()
     walls.append((a, b))
+    shapes[-1]["walls"].append(len(walls))
     return len(walls)
 
 
 def box(x0, y0, x1, y1):
+    begin_shape()
     first = wall((x0, y0), (x1, y0))
     wall((x1, y0), (x1, y1))
     wall((x1, y1), (x0, y1))
     wall((x0, y1), (x0, y0))
+    end_shape(closed=True)
     return first
 
 
@@ -63,12 +77,14 @@ def stair(x, y, direction, steps):
 # Left building shell.
 box(40, 40, 520, 640)
 # West storage, L shaped.
+begin_shape()
 wall((90, 120), (240, 120))
 wall((240, 120), (240, 180))
 wall((240, 180), (300, 180))
 wall((300, 180), (300, 430))
 wall((300, 430), (90, 430))
 wall((90, 430), (90, 120))
+end_shape(closed=True)
 # Top right red room.
 box(340, 60, 500, 160)
 # Library.
@@ -84,10 +100,14 @@ box(860, 90, 1130, 380)
 # Balcony.
 box(1000, 380, 1160, 560)
 # Corridor divider above the library.
+begin_shape()
 wall((330, 160), (500, 160))
 wall((500, 160), (500, 250))
+end_shape()
+begin_shape()
 wall((330, 430), (330, 520))
 wall((330, 520), (500, 520))
+end_shape()
 
 # Painted areas. The reference uses dark desaturated fills under thin walls.
 room([(45, 45), (335, 45), (335, 165), (305, 165), (305, 245),
@@ -125,9 +145,13 @@ stair(430, 495, "h", 8)
 stair(1090, 165, "v", 9)
 stair(700, 90, "h", 12)
 
-lines = ["ink-level 1"]
+lines = ["ink-level 2"]
+fill_index = {"none": 0, "blue": 1, "red": 2}
+for sid, shape in enumerate(shapes, start=1):
+    lines.append(f"shape {sid} {1 if shape['closed'] else 0} {fill_index[shape.get('fill', 'none')]}")
 for i, (a, b) in enumerate(walls, start=1):
-    lines.append(f"wall {i} {a[0]:.3f} {a[1]:.3f} {b[0]:.3f} {b[1]:.3f}")
+    sid = next(sid for sid, shape in enumerate(shapes, start=1) if i in shape["walls"])
+    lines.append(f"wall {i} {sid} {a[0]:.3f} {a[1]:.3f} {b[0]:.3f} {b[1]:.3f}")
 for points, color in rooms:
     nums = " ".join(f"{v:.3f}" for p in points for v in p)
     lines.append(f"room {1 if color == 'red' else 0} {len(points)} {nums}")
@@ -141,5 +165,5 @@ for x, y, direction, steps in stairs:
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text("\n".join(lines) + "\n")
-print(f"wrote {OUT} with {len(walls)} walls, {len(rooms)} rooms, {len(doors)} doors, "
+print(f"wrote {OUT} with {len(shapes)} shapes, {len(walls)} walls, {len(rooms)} rooms, {len(doors)} doors, "
       f"{len(labels)} labels, {len(stairs)} stairs")

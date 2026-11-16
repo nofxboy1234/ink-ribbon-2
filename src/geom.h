@@ -44,5 +44,9 @@ float polygon_area(const Vec2* pts, int count);
 /* Removes duplicate and collinear vertices in place, returns new count. */
 int polygon_simplify(Vec2* pts, int count);
 Rect polygon_bounds(const Vec2* pts, int count);
+/* Ear-clipping triangulation for a simple polygon of either winding. Writes
+   three point indices per triangle into out and returns the triangle count, or
+   -1 when the polygon is degenerate or cannot be clipped. */
+int polygon_triangulate(const Vec2* pts, int count, int* out, int max_triangles);
 
 #endif

@@ -25,6 +25,34 @@ static bool nearv(Vec2 a, Vec2 b) {
     return nearf(a.x, b.x) && nearf(a.y, b.y);
 }
 
+static bool write_text_file(const char* path, const char* text) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return false;
+    bool ok = fputs(text, f) >= 0;
+    if (fclose(f) != 0) ok = false;
+    return ok;
+}
+
+static float triangle_area(Vec2 a, Vec2 b, Vec2 c) {
+    float cross = (b.x - a.x) * (c.y - a.y) -
+                  (b.y - a.y) * (c.x - a.x);
+    return fabsf(cross) * 0.5f;
+}
+
+static ShapeId add_rectangle(Level* level, Vec2 origin, float w, float h,
+                             int walls[4]) {
+    ShapeId id = level_add_shape(level);
+    walls[0] = level_add_wall_to_shape(level, id, origin,
+                                       v2(origin.x + w, origin.y));
+    walls[1] = level_add_wall_to_shape(level, id, v2(origin.x + w, origin.y),
+                                       v2(origin.x + w, origin.y + h));
+    walls[2] = level_add_wall_to_shape(level, id, v2(origin.x + w, origin.y + h),
+                                       v2(origin.x, origin.y + h));
+    walls[3] = level_add_wall_to_shape(level, id, v2(origin.x, origin.y + h),
+                                       origin);
+    return id;
+}
+
 static void test_geometry(void) {
     check(nearv(snap_ortho(v2(10, 10), v2(23, 14), 10), v2(20, 10)),
           "snap_ortho chooses horizontal and snaps free x");
@@ -247,57 +275,6 @@ static void test_doors(void) {
           "delete the last wall leaves no orphan doors");
 }
 
-static void test_wall_moves(void) {
-    Level level;
-    level_init(&level);
-    level_add_wall(&level, v2(0, 0), v2(100, 0));
-    level_add_door(&level, level.walls[0].id, 0.5f, 20, DOOR_RED);
-
-    Vec2 old_a = level.walls[0].a;
-    Vec2 old_b = level.walls[0].b;
-    WallId old_id = level.walls[0].id;
-    Vec2 old_span_a, old_span_b, old_center;
-    level_door_span(&level, &level.doors[0], &old_span_a, &old_span_b);
-    old_center = level_door_center(&level, &level.doors[0]);
-    Rect old_bounds = level_bounds(&level);
-
-    Vec2 delta = v2(16, 24);
-    check(level_move_wall(&level, 0, delta), "move a wall");
-    check(nearv(level.walls[0].a, v2_add(old_a, delta)) &&
-              nearv(level.walls[0].b, v2_add(old_b, delta)) &&
-              level.walls[0].id == old_id,
-          "moved wall shifts both endpoints and keeps its id");
-
-    Vec2 span_a, span_b;
-    level_door_span(&level, &level.doors[0], &span_a, &span_b);
-    check(nearv(span_a, v2_add(old_span_a, delta)) &&
-              nearv(span_b, v2_add(old_span_b, delta)),
-          "door span shifts by the wall delta");
-    check(nearv(level_door_center(&level, &level.doors[0]),
-                v2_add(old_center, delta)),
-          "door center shifts by the wall delta");
-
-    Rect new_bounds = level_bounds(&level);
-    check(nearv(new_bounds.min, v2_add(old_bounds.min, delta)) &&
-              nearv(new_bounds.max, v2_add(old_bounds.max, delta)),
-          "level bounds follow the moved wall");
-
-    Level unchanged = level;
-    check(!level_move_wall(&level, -1, delta) &&
-              !level_move_wall(&level, level.wall_count, delta) &&
-              memcmp(&level, &unchanged, sizeof level) == 0,
-          "move wall rejects a bad index and leaves the level unchanged");
-
-    Level finite = level;
-    check(!level_move_wall(&level, 0, v2(INFINITY, 0)) &&
-              !level_move_wall(&level, 0, v2(0, NAN)) &&
-              memcmp(&level, &finite, sizeof level) == 0,
-          "move wall rejects a non-finite delta and leaves the level unchanged");
-    check(!level_move_wall(&level, 0, v2(0, 0)) &&
-              memcmp(&level, &finite, sizeof level) == 0,
-          "move wall reports no movement for a zero delta");
-}
-
 static void test_labels(void) {
     Level level;
     level_init(&level);
@@ -392,18 +369,21 @@ static void test_save_load(void) {
     char file[8192] = { 0 };
     if (f) {
         if (fgets(first, sizeof first, f)) {
-            check(strcmp(first, "ink-level 1\n") == 0,
-                  "saved file starts with ink-level 1");
+            check(strcmp(first, "ink-level 2\n") == 0,
+                  "saved file starts with ink-level 2");
         } else {
-            check(false, "saved file starts with ink-level 1");
+            check(false, "saved file starts with ink-level 2");
         }
         rewind(f);
         size_t got = fread(file, 1, sizeof file - 1, f);
         file[got] = '\0';
         fclose(f);
     }
-    check(strstr(file, "wall 2 100.000 0.000 100.000 100.000\n") != NULL,
-          "save writes wall records with %.3f floats and preserved ids");
+    check(strstr(file, "shape 2 0 0\n") != NULL &&
+              strstr(file, "shape 3 0 0\n") != NULL,
+          "save writes one open shape per wall");
+    check(strstr(file, "wall 2 2 100.000 0.000 100.000 100.000\n") != NULL,
+          "save writes wall records with the shape id and preserved ids");
     check(strstr(file, "door 1 2 0.500 20.000\n") != NULL,
           "save writes the door host and span");
     check(strstr(file, "label 10.000 20.000 12.000 attic stairs\n") != NULL,
@@ -420,6 +400,14 @@ static void test_save_load(void) {
     check(dst.wall_count == 2 && dst.walls[0].id == 2 && dst.walls[1].id == 3,
           "roundtrip preserves wall ids");
     check(dst.next_wall_id == 4, "load sets next_wall_id to max wall id + 1");
+    check(dst.shape_count == 2 && dst.shapes[0].id == 2 && dst.shapes[1].id == 3 &&
+              !dst.shapes[0].closed && !dst.shapes[1].closed &&
+              dst.shapes[0].fill == SHAPE_FILL_NONE,
+          "roundtrip preserves open unfilled shapes");
+    check(dst.walls[0].shape == 2 && dst.walls[1].shape == 3,
+          "roundtrip preserves each wall's shape id");
+    check(dst.next_shape_id == 4,
+          "load sets next_shape_id to max shape id + 1");
     check(dst.door_count == 1 && dst.doors[0].wall == 2 &&
               nearf(dst.doors[0].t, 0.5f) && nearf(dst.doors[0].width, 20),
           "roundtrip preserves the door host and span");
@@ -446,6 +434,9 @@ static void test_save_load(void) {
     int nw = level_add_wall(&dst, v2(0, 0), v2(0, 50));
     check(nw == 2 && dst.walls[2].id == 4,
           "loaded level continues the wall id sequence");
+    check(dst.shape_count == 3 && dst.shapes[2].id == 4 &&
+              dst.walls[2].shape == 4 && dst.next_shape_id == 5,
+          "a wall added after load gets its own new shape");
 
     char comments[256];
     snprintf(comments, sizeof comments, "/tmp/ink_ribbon_comments_%ld.lvl",
@@ -464,6 +455,10 @@ static void test_save_load(void) {
           "level_load ignores blank lines and comments");
     check(cl.wall_count == 1 && cl.walls[0].id == 7 && cl.next_wall_id == 8,
           "commented load preserves the wall id");
+    check(cl.shape_count == 1 && cl.shapes[0].id == 1 &&
+              !cl.shapes[0].closed && cl.shapes[0].fill == SHAPE_FILL_NONE &&
+              cl.walls[0].shape == 1 && cl.next_shape_id == 2,
+          "version 1 load gives each wall its own open shape");
 
     char bad_path[256];
     snprintf(bad_path, sizeof bad_path, "/tmp/ink_ribbon_bad_%ld.lvl",
@@ -638,18 +633,397 @@ static void test_history(void) {
     history_shutdown(&ring);
 }
 
+static void test_shape_lifecycle(void) {
+    Level level;
+    level_init(&level);
+    check(level.next_shape_id == 1 && level.shape_count == 0,
+          "level_init starts shape ids at 1");
+
+    ShapeId shape = level_add_shape(&level);
+    check(shape == 1 && level.shape_count == 1,
+          "level_add_shape returns a new id");
+    check(level.shapes[0].id == 1 && !level.shapes[0].closed &&
+              level.shapes[0].fill == SHAPE_FILL_NONE,
+          "a new shape is open with no fill");
+    check(level_shape_by_id(&level, shape) == &level.shapes[0] &&
+              level_shape_by_id_const(&level, shape) == &level.shapes[0],
+          "shape lookup finds the shape");
+    check(level_shape_by_id(&level, 99) == NULL &&
+              level_shape_by_id_const(&level, 0) == NULL,
+          "shape lookup rejects unknown ids");
+
+    check(level_set_shape_fill(&level, shape, SHAPE_FILL_RED) &&
+              level.shapes[0].fill == SHAPE_FILL_RED,
+          "level_set_shape_fill sets the fill");
+    check(!level_set_shape_fill(&level, shape, (ShapeFill)9) &&
+              level.shapes[0].fill == SHAPE_FILL_RED,
+          "level_set_shape_fill rejects an unknown fill");
+
+    check(level_add_wall_to_shape(&level, 99, v2(0, 0), v2(10, 0)) == -1,
+          "add wall rejects an unknown shape");
+    check(level_add_wall_to_shape(&level, shape, v2(0, 0), v2(10, 10)) == -1,
+          "add wall rejects a non-orthogonal segment");
+    check(level_add_wall_to_shape(&level, shape, v2(5, 5), v2(5, 5)) == -1,
+          "add wall rejects a zero-length segment");
+
+    int w0 = level_add_wall_to_shape(&level, shape, v2(0, 0), v2(100, 0));
+    int w1 = level_add_wall_to_shape(&level, shape, v2(100, 0), v2(100, 100));
+    int w2 = level_add_wall_to_shape(&level, shape, v2(100, 100), v2(0, 100));
+    int w3 = level_add_wall_to_shape(&level, shape, v2(0, 100), v2(0, 0));
+    check(w0 == 0 && w1 == 1 && w2 == 2 && w3 == 3,
+          "shape walls are appended in wall order");
+    check(level.walls[0].shape == shape && level.walls[1].shape == shape &&
+              level.walls[2].shape == shape && level.walls[3].shape == shape,
+          "each added wall records its shape id");
+
+    int indices[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+    check(level_shape_wall_indices(&level, shape, indices, 8) == 4 &&
+              indices[0] == 0 && indices[1] == 1 &&
+              indices[2] == 2 && indices[3] == 3,
+          "shape wall indices follow insertion order");
+    check(level_shape_wall_indices(&level, shape, indices, 2) == 2 &&
+              indices[0] == 0 && indices[1] == 1,
+          "shape wall indices are capped by the output count");
+    check(level_shape_wall_indices(&level, 99, indices, 8) == -1,
+          "shape wall indices rejects an unknown shape");
+
+    Vec2 polygon[8];
+    check(level_shape_polygon(&level, shape, polygon, 8) == -1,
+          "an open shape has no polygon");
+    check(level_close_shape(&level, shape), "close a four-wall loop");
+    check(level.shapes[0].closed && level.shapes[0].fill == SHAPE_FILL_RED,
+          "closing keeps the fill");
+    int count = level_shape_polygon(&level, shape, polygon, 8);
+    check(count == 4 &&
+              nearv(polygon[0], v2(0, 0)) &&
+              nearv(polygon[1], v2(100, 0)) &&
+              nearv(polygon[2], v2(100, 100)) &&
+              nearv(polygon[3], v2(0, 100)),
+          "polygon returns the vertices in wall order without a closing point");
+    check(level_shape_polygon(&level, shape, polygon, 3) == -1,
+          "polygon rejects a too-small output buffer");
+    check(!level_close_shape(&level, 99), "close rejects an unknown shape");
+
+    Level chain;
+    level_init(&chain);
+    ShapeId open = level_add_shape(&chain);
+    level_add_wall_to_shape(&chain, open, v2(0, 0), v2(10, 0));
+    level_add_wall_to_shape(&chain, open, v2(10, 0), v2(10, 10));
+    level_add_wall_to_shape(&chain, open, v2(10, 10), v2(0, 10));
+    check(!level_close_shape(&chain, open),
+          "three walls that do not reconnect cannot close");
+
+    Level mixed;
+    level_init(&mixed);
+    ShapeId mixed_shape = level_add_shape(&mixed);
+    level_add_wall_to_shape(&mixed, mixed_shape, v2(0, 0), v2(100, 0));
+    level_add_wall_to_shape(&mixed, mixed_shape, v2(100, 100), v2(100, 0));
+    level_add_wall_to_shape(&mixed, mixed_shape, v2(100, 100), v2(0, 100));
+    level_add_wall_to_shape(&mixed, mixed_shape, v2(0, 0), v2(0, 100));
+    check(level_close_shape(&mixed, mixed_shape),
+          "close handles walls whose stored direction alternates");
+    check(level_shape_polygon(&mixed, mixed_shape, polygon, 8) == 4 &&
+              nearv(polygon[0], v2(0, 0)) &&
+              nearv(polygon[1], v2(100, 0)) &&
+              nearv(polygon[2], v2(100, 100)) &&
+              nearv(polygon[3], v2(0, 100)),
+          "polygon follows the connected traversal order");
+}
+
+static void test_delete_shape(void) {
+    Level level;
+    level_init(&level);
+    int keep_wall = level_add_wall(&level, v2(0, 0), v2(10, 0));
+    ShapeId keep_shape = level.walls[keep_wall].shape;
+    WallId keep_id = level.walls[keep_wall].id;
+
+    int walls[4];
+    ShapeId gone = add_rectangle(&level, v2(100, 0), 100, 100, walls);
+    check(level_close_shape(&level, gone), "close the shape slated for deletion");
+    level_add_door(&level, keep_id, 0.5f, 4, DOOR_WHITE);
+    level_add_door(&level, level.walls[walls[0]].id, 0.5f, 20, DOOR_RED);
+    level_add_door(&level, level.walls[walls[1]].id, 0.5f, 20, DOOR_BLUE);
+
+    check(level_delete_shape(&level, gone),
+          "delete shape removes a closed shape");
+    check(level.wall_count == 1 && level.walls[0].id == keep_id &&
+              level.walls[0].shape == keep_shape,
+          "delete shape removes only that shape's walls");
+    check(level.shape_count == 1 &&
+              level_shape_by_id(&level, gone) == NULL &&
+              level_shape_by_id(&level, keep_shape) != NULL,
+          "delete shape removes the shape record");
+    check(level.door_count == 1 && level.doors[0].wall == keep_id,
+          "delete shape cascades doors hosted by its walls");
+    check(!level_delete_shape(&level, gone),
+          "delete shape rejects an id that no longer exists");
+
+    Level chain;
+    level_init(&chain);
+    ShapeId id = level_add_shape(&chain);
+    level_add_wall_to_shape(&chain, id, v2(0, 0), v2(10, 0));
+    level_add_wall_to_shape(&chain, id, v2(10, 0), v2(20, 0));
+    check(level_delete_wall(&chain, 0) && chain.wall_count == 1 &&
+              chain.shape_count == 1 && chain.walls[0].shape == id,
+          "deleting one wall keeps its shape while walls remain");
+    check(level_delete_wall(&chain, 0) && chain.wall_count == 0 &&
+              chain.shape_count == 0,
+          "deleting the last wall removes its shape");
+}
+
+static void test_shape_reshape(void) {
+    Level level;
+    level_init(&level);
+    int walls[4];
+    ShapeId shape = add_rectangle(&level, v2(0, 0), 100, 100, walls);
+    check(level_close_shape(&level, shape), "close the rectangle before sliding");
+    level_add_door(&level, level.walls[walls[0]].id, 0.5f, 20, DOOR_RED);
+    WallId bottom_id = level.walls[walls[0]].id;
+
+    check(level_slide_wall_edge(&level, walls[0], 40, 8),
+          "slide a horizontal edge by +40");
+    check(nearv(level.walls[walls[0]].a, v2(0, 40)) &&
+              nearv(level.walls[walls[0]].b, v2(100, 40)),
+          "the slid edge moves along its normal");
+    check(nearv(level.walls[walls[1]].a, v2(100, 40)) &&
+              nearv(level.walls[walls[1]].b, v2(100, 100)),
+          "the right neighbor stretches from the moved endpoint");
+    check(nearv(level.walls[walls[3]].a, v2(0, 100)) &&
+              nearv(level.walls[walls[3]].b, v2(0, 40)),
+          "the left neighbor stretches from the moved endpoint");
+    check(nearv(level.walls[walls[2]].a, v2(100, 100)) &&
+              nearv(level.walls[walls[2]].b, v2(0, 100)),
+          "the opposite edge stays put");
+    check(level.shapes[0].closed, "the shape stays closed after the slide");
+
+    Vec2 polygon[8];
+    check(level_shape_polygon(&level, shape, polygon, 8) == 4 &&
+              nearv(polygon[0], v2(0, 40)) &&
+              nearv(polygon[1], v2(100, 40)) &&
+              nearv(polygon[2], v2(100, 100)) &&
+              nearv(polygon[3], v2(0, 100)),
+          "the reshaped polygon follows the moved edge");
+    check(level.door_count == 1 && level.doors[0].wall == bottom_id &&
+              nearf(level.doors[0].t, 0.5f) &&
+              nearv(level_door_center(&level, &level.doors[0]), v2(50, 40)),
+          "a door keeps its wall id and t and rides the moved edge");
+
+    Level clamp;
+    level_init(&clamp);
+    int clamp_walls[4];
+    ShapeId clamp_shape = add_rectangle(&clamp, v2(0, 0), 100, 100, clamp_walls);
+    level_close_shape(&clamp, clamp_shape);
+    check(level_slide_wall_edge(&clamp, clamp_walls[0], 140, 8),
+          "a long slide clamps to the neighbor minimum length");
+    check(nearv(clamp.walls[clamp_walls[0]].a, v2(0, 92)) &&
+              nearv(clamp.walls[clamp_walls[0]].b, v2(100, 92)),
+          "the clamped edge stops before the neighbor collapses");
+    check(nearf(wall_length(&clamp.walls[clamp_walls[1]]), 8) &&
+              nearf(wall_length(&clamp.walls[clamp_walls[3]]), 8),
+          "the vertical neighbors keep exactly the minimum length");
+    check(clamp.shapes[0].closed, "the clamped shape stays closed");
+
+    Level before = clamp;
+    check(!level_slide_wall_edge(&clamp, clamp_walls[0], 50, 8) &&
+              memcmp(&clamp, &before, sizeof clamp) == 0,
+          "a slide that would collapse a neighbor is rejected unchanged");
+    check(!level_slide_wall_edge(&clamp, -1, 10, 8) &&
+              memcmp(&clamp, &before, sizeof clamp) == 0,
+          "a slide rejects a bad wall index unchanged");
+
+    Level sideways;
+    level_init(&sideways);
+    int side_walls[4];
+    ShapeId side_shape = add_rectangle(&sideways, v2(0, 0), 100, 100,
+                                       side_walls);
+    level_close_shape(&sideways, side_shape);
+    check(level_slide_wall_edge(&sideways, side_walls[1], -40, 8),
+          "slide a vertical edge by -40");
+    check(nearv(sideways.walls[side_walls[1]].a, v2(60, 0)) &&
+              nearv(sideways.walls[side_walls[1]].b, v2(60, 100)),
+          "the vertical edge moves on x");
+    check(nearv(sideways.walls[side_walls[0]].b, v2(60, 0)) &&
+              nearv(sideways.walls[side_walls[2]].a, v2(60, 100)) &&
+              nearv(sideways.walls[side_walls[3]].a, v2(0, 100)),
+          "the horizontal neighbors stretch and the opposite edge stays");
+    check(sideways.shapes[0].closed,
+          "the vertically slid shape stays closed");
+}
+
+static void test_save_load_shapes(void) {
+    Level src;
+    level_init(&src);
+    int walls[4];
+    ShapeId shape = add_rectangle(&src, v2(0, 0), 100, 100, walls);
+    check(level_close_shape(&src, shape) &&
+              level_set_shape_fill(&src, shape, SHAPE_FILL_BLUE),
+          "prepare a closed blue shape");
+    level_add_door(&src, src.walls[walls[0]].id, 0.5f, 20, DOOR_BLUE);
+
+    char path[256];
+    snprintf(path, sizeof path, "/tmp/ink_ribbon_shapes_%ld.lvl",
+             (long)getpid());
+    LevelError err;
+    check(level_save(&src, path, &err), "save a closed filled shape");
+
+    char file[8192] = { 0 };
+    FILE* f = fopen(path, "rb");
+    check(f != NULL, "saved shape file is readable");
+    if (f) {
+        size_t got = fread(file, 1, sizeof file - 1, f);
+        file[got] = '\0';
+        fclose(f);
+    }
+    check(strncmp(file, "ink-level 2\n", 12) == 0,
+          "shape save starts with ink-level 2");
+    check(strstr(file, "shape 1 1 1\n") != NULL,
+          "shape save writes the closed flag and fill before walls");
+    check(strstr(file, "wall 1 1 0.000 0.000 100.000 0.000\n") != NULL,
+          "shape save writes the wall's shape id");
+
+    Level dst;
+    level_init(&dst);
+    check(level_load(&dst, path, &err), "load a version 2 shape file");
+    check(dst.shape_count == 1 && dst.shapes[0].id == 1 &&
+              dst.shapes[0].closed && dst.shapes[0].fill == SHAPE_FILL_BLUE,
+          "roundtrip preserves the closed flag and fill");
+    check(dst.wall_count == 4 && dst.walls[0].shape == 1 &&
+              dst.walls[1].shape == 1 && dst.walls[2].shape == 1 &&
+              dst.walls[3].shape == 1,
+          "roundtrip preserves every wall's shape id");
+    check(dst.next_shape_id == 2,
+          "shape load sets next_shape_id to max shape id + 1");
+    Vec2 polygon[8];
+    check(level_shape_polygon(&dst, 1, polygon, 8) == 4 &&
+              nearv(polygon[2], v2(100, 100)),
+          "the loaded shape keeps its polygon");
+    int added = level_add_wall(&dst, v2(0, 0), v2(0, 50));
+    check(added == 4 && dst.walls[4].id == 5 && dst.walls[4].shape == 2 &&
+              dst.next_shape_id == 3,
+          "a wall added after loading gets the next wall and shape ids");
+
+    char v1_path[256];
+    snprintf(v1_path, sizeof v1_path, "/tmp/ink_ribbon_v1_%ld.lvl",
+             (long)getpid());
+    check(write_text_file(v1_path,
+                          "ink-level 1\n"
+                          "wall 10 0.000 0.000 50.000 0.000\n"
+                          "wall 11 50.000 0.000 50.000 50.000\n"),
+          "write a version 1 fixture");
+    Level old;
+    level_init(&old);
+    check(level_load(&old, v1_path, &err), "version 1 files still load");
+    check(old.shape_count == 2 && old.shapes[0].id == 1 &&
+              old.shapes[1].id == 2 && !old.shapes[0].closed &&
+              !old.shapes[1].closed &&
+              old.shapes[0].fill == SHAPE_FILL_NONE &&
+              old.walls[0].shape == 1 && old.walls[1].shape == 2,
+          "version 1 gives every wall one fresh open shape");
+    check(old.next_wall_id == 12 && old.next_shape_id == 3,
+          "version 1 load continues both id sequences");
+
+    char bad_path[256];
+    snprintf(bad_path, sizeof bad_path, "/tmp/ink_ribbon_bad_shape_%ld.lvl",
+             (long)getpid());
+    Level intact;
+    level_init(&intact);
+    level_add_wall(&intact, v2(0, 0), v2(5, 0));
+    Level snapshot = intact;
+
+    check(write_text_file(bad_path,
+                          "ink-level 2\n"
+                          "wall 1 9 0.000 0.000 10.000 0.000\n"),
+          "write an unknown-shape fixture");
+    check(!level_load(&intact, bad_path, &err),
+          "load rejects a wall on an unknown shape");
+    check(strncmp(err.message, "line 2:", 7) == 0,
+          "unknown shape error names the wall line");
+    check(memcmp(&intact, &snapshot, sizeof intact) == 0,
+          "a rejected shape load leaves the target level untouched");
+
+    check(write_text_file(bad_path,
+                          "ink-level 2\n"
+                          "shape 1 0 0\n"
+                          "shape 1 0 0\n"),
+          "write a duplicate-shape fixture");
+    check(!level_load(&intact, bad_path, &err),
+          "load rejects duplicate shape ids");
+
+    check(write_text_file(bad_path,
+                          "ink-level 2\n"
+                          "shape 1 1 0\n"
+                          "wall 1 1 0.000 0.000 10.000 0.000\n"
+                          "wall 2 1 10.000 0.000 10.000 10.000\n"),
+          "write a short closed-shape fixture");
+    check(!level_load(&intact, bad_path, &err),
+          "load rejects a closed shape with fewer than three walls");
+
+    check(write_text_file(bad_path,
+                          "ink-level 2\n"
+                          "shape 1 0 3\n"),
+          "write a bad-fill fixture");
+    check(!level_load(&intact, bad_path, &err),
+          "load rejects an out-of-range fill");
+
+    remove(path);
+    remove(v1_path);
+    remove(bad_path);
+}
+
+static void test_triangulate(void) {
+    Vec2 square[4] = { { 0, 0 }, { 10, 0 }, { 10, 10 }, { 0, 10 } };
+    int triangles[32];
+    int count = polygon_triangulate(square, 4, triangles, 2);
+    float area = 0.0f;
+    for (int i = 0; count == 2 && i < count; i++) {
+        area += triangle_area(square[triangles[i * 3]],
+                              square[triangles[i * 3 + 1]],
+                              square[triangles[i * 3 + 2]]);
+    }
+    check(count == 2 && nearf(area, 100),
+          "a square triangulates into two triangles covering its area");
+
+    Vec2 reversed[4] = { { 0, 0 }, { 0, 10 }, { 10, 10 }, { 10, 0 } };
+    check(polygon_triangulate(reversed, 4, triangles, 2) == 2,
+          "triangulation accepts clockwise winding");
+
+    Vec2 plus[12] = {
+        { 4, 0 }, { 6, 0 }, { 6, 4 }, { 10, 4 }, { 10, 6 }, { 6, 6 },
+        { 6, 10 }, { 4, 10 }, { 4, 6 }, { 0, 6 }, { 0, 4 }, { 4, 4 },
+    };
+    count = polygon_triangulate(plus, 12, triangles, 10);
+    area = 0.0f;
+    for (int i = 0; count == 10 && i < count; i++) {
+        area += triangle_area(plus[triangles[i * 3]],
+                              plus[triangles[i * 3 + 1]],
+                              plus[triangles[i * 3 + 2]]);
+    }
+    check(count == 10 && nearf(area, 36),
+          "a 12-point plus triangulates into ten triangles covering its area");
+
+    Vec2 line[3] = { { 0, 0 }, { 1, 0 }, { 2, 0 } };
+    check(polygon_triangulate(line, 3, triangles, 1) == -1,
+          "a collinear triangle is degenerate");
+    check(polygon_triangulate(square, 4, triangles, 1) == -1,
+          "triangulation rejects a too-small output buffer");
+}
+
 int main(void) {
     test_geometry();
     test_polygon();
     test_walls();
     test_rooms();
     test_doors();
-    test_wall_moves();
     test_labels();
     test_stairs();
     test_save_load();
     test_bounds();
     test_history();
+    test_shape_lifecycle();
+    test_delete_shape();
+    test_shape_reshape();
+    test_save_load_shapes();
+    test_triangulate();
 
     if (failures == 0) {
         printf("ALL CORE TESTS PASSED\n");

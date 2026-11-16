@@ -40,6 +40,93 @@ static bool wall_ok(Vec2 a, Vec2 b) {
     return dx <= ORTHO_EPS || dy <= ORTHO_EPS;
 }
 
+/* 0 slides a vertical wall on x, 1 slides a horizontal wall on y. */
+static int wall_slide_axis(const Wall* wall) {
+    float dx = fabsf(wall->b.x - wall->a.x);
+    float dy = fabsf(wall->b.y - wall->a.y);
+    if (dy <= ORTHO_EPS && dx > ORTHO_EPS) return 1;
+    if (dx <= ORTHO_EPS && dy > ORTHO_EPS) return 0;
+    return -1;
+}
+
+static int shape_index_by_id(const Level* level, ShapeId id) {
+    if (id == 0) return -1;
+    for (int i = 0; i < level->shape_count; i++) {
+        if (level->shapes[i].id == id) return i;
+    }
+    return -1;
+}
+
+static void remove_shape_at(Level* level, int shape_index) {
+    memmove(&level->shapes[shape_index], &level->shapes[shape_index + 1],
+            (size_t)(level->shape_count - shape_index - 1) * sizeof(Shape));
+    level->shape_count--;
+}
+
+static void remove_wall_at(Level* level, int wall_index) {
+    WallId id = level->walls[wall_index].id;
+    memmove(&level->walls[wall_index], &level->walls[wall_index + 1],
+            (size_t)(level->wall_count - wall_index - 1) * sizeof(Wall));
+    level->wall_count--;
+
+    int keep = 0;
+    for (int i = 0; i < level->door_count; i++) {
+        if (level->doors[i].wall == id) continue;
+        if (keep != i) level->doors[keep] = level->doors[i];
+        keep++;
+    }
+    level->door_count = keep;
+}
+
+static int append_wall(Level* level, ShapeId shape, Vec2 a, Vec2 b) {
+    if (level->wall_count >= LEVEL_MAX_WALLS) return -1;
+    if (!wall_ok(a, b)) return -1;
+
+    int index = level->wall_count++;
+    level->walls[index] = (Wall){ level->next_wall_id++, shape, a, b };
+    return index;
+}
+
+static bool shape_has_walls(const Level* level, ShapeId id) {
+    for (int i = 0; i < level->wall_count; i++) {
+        if (level->walls[i].shape == id) return true;
+    }
+    return false;
+}
+
+/* Walks the shape's walls in insertion order, choosing each wall's start so the
+   chain stays connected. Writes one start point per wall when out is non-NULL. */
+static int shape_loop(const Level* level, ShapeId id, Vec2* out, int cap) {
+    int indices[LEVEL_MAX_WALLS];
+    int count = 0;
+    for (int i = 0; i < level->wall_count; i++) {
+        if (level->walls[i].shape == id) indices[count++] = i;
+    }
+    if (count < 3) return -1;
+
+    const Wall* first = &level->walls[indices[0]];
+    Vec2 start = first->a;
+    Vec2 far = first->b;
+    if (out && cap > 0) out[0] = start;
+
+    for (int i = 1; i < count; i++) {
+        const Wall* wall = &level->walls[indices[i]];
+        Vec2 near;
+        if (v2_equal(wall->a, far, ORTHO_EPS)) {
+            near = wall->a;
+            far = wall->b;
+        } else if (v2_equal(wall->b, far, ORTHO_EPS)) {
+            near = wall->b;
+            far = wall->a;
+        } else {
+            return -1;
+        }
+        if (out && i < cap) out[i] = near;
+    }
+    if (!v2_equal(far, start, ORTHO_EPS)) return -1;
+    return count;
+}
+
 static int clamp_steps(int steps) {
     if (steps < STAIR_MIN_STEPS) return STAIR_MIN_STEPS;
     if (steps > STAIR_MAX_STEPS) return STAIR_MAX_STEPS;
@@ -128,6 +215,7 @@ static bool read_int(char** save, int* out) {
 void level_init(Level* level) {
     memset(level, 0, sizeof *level);
     level->next_wall_id = 1;
+    level->next_shape_id = 1;
 }
 
 bool level_is_empty(const Level* level) {
@@ -167,28 +255,110 @@ Rect level_bounds(const Level* level) {
 
 int level_add_wall(Level* level, Vec2 a, Vec2 b) {
     if (level->wall_count >= LEVEL_MAX_WALLS) return -1;
+    if (level->shape_count >= LEVEL_MAX_SHAPES) return -1;
     if (!wall_ok(a, b)) return -1;
 
-    int index = level->wall_count++;
-    level->walls[index] = (Wall){ level->next_wall_id++, a, b };
-    return index;
+    ShapeId shape = level_add_shape(level);
+    if (shape == 0) return -1;
+    return append_wall(level, shape, a, b);
+}
+
+ShapeId level_add_shape(Level* level) {
+    if (level->shape_count >= LEVEL_MAX_SHAPES) return 0;
+
+    ShapeId id = level->next_shape_id++;
+    level->shapes[level->shape_count++] =
+        (Shape){ id, false, SHAPE_FILL_NONE };
+    return id;
+}
+
+Shape* level_shape_by_id(Level* level, ShapeId id) {
+    int index = shape_index_by_id(level, id);
+    return index < 0 ? NULL : &level->shapes[index];
+}
+
+const Shape* level_shape_by_id_const(const Level* level, ShapeId id) {
+    int index = shape_index_by_id(level, id);
+    return index < 0 ? NULL : &level->shapes[index];
+}
+
+bool level_set_shape_fill(Level* level, ShapeId id, ShapeFill fill) {
+    if (fill != SHAPE_FILL_NONE && fill != SHAPE_FILL_BLUE &&
+        fill != SHAPE_FILL_RED) {
+        return false;
+    }
+    Shape* shape = level_shape_by_id(level, id);
+    if (!shape) return false;
+    shape->fill = fill;
+    return true;
+}
+
+int level_add_wall_to_shape(Level* level, ShapeId shape, Vec2 a, Vec2 b) {
+    if (!level_shape_by_id(level, shape)) return -1;
+    return append_wall(level, shape, a, b);
+}
+
+bool level_close_shape(Level* level, ShapeId id) {
+    Shape* shape = level_shape_by_id(level, id);
+    if (!shape) return false;
+    if (shape_loop(level, id, NULL, 0) < 3) return false;
+    shape->closed = true;
+    return true;
+}
+
+int level_shape_wall_indices(const Level* level, ShapeId id, int* out, int cap) {
+    if (!level || !level_shape_by_id_const(level, id)) return -1;
+    if (cap <= 0) return 0;
+
+    int total = 0;
+    for (int i = 0; i < level->wall_count; i++) {
+        if (level->walls[i].shape != id) continue;
+        if (out && total < cap) out[total] = i;
+        total++;
+    }
+    return total < cap ? total : cap;
+}
+
+int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap) {
+    const Shape* shape = level_shape_by_id_const(level, id);
+    if (!shape || !shape->closed || !out || cap <= 0) return -1;
+
+    int count = shape_loop(level, id, NULL, 0);
+    if (count < 3 || cap < count) return -1;
+    return shape_loop(level, id, out, cap);
 }
 
 bool level_delete_wall(Level* level, int wall_index) {
     if (wall_index < 0 || wall_index >= level->wall_count) return false;
-    WallId id = level->walls[wall_index].id;
+    ShapeId shape = level->walls[wall_index].shape;
+    remove_wall_at(level, wall_index);
 
-    memmove(&level->walls[wall_index], &level->walls[wall_index + 1],
-            (size_t)(level->wall_count - wall_index - 1) * sizeof(Wall));
-    level->wall_count--;
+    if (shape != 0 && !shape_has_walls(level, shape)) {
+        int index = shape_index_by_id(level, shape);
+        if (index >= 0) remove_shape_at(level, index);
+    }
+    return true;
+}
+
+bool level_delete_shape(Level* level, ShapeId id) {
+    int index = shape_index_by_id(level, id);
+    if (index < 0) return false;
 
     int keep = 0;
     for (int i = 0; i < level->door_count; i++) {
-        if (level->doors[i].wall == id) continue;
+        int wall_index = level_find_wall_index(level, level->doors[i].wall);
+        bool hosted = wall_index >= 0 &&
+                      level->walls[wall_index].shape == id;
+        if (hosted) continue;
         if (keep != i) level->doors[keep] = level->doors[i];
         keep++;
     }
     level->door_count = keep;
+
+    for (int i = level->wall_count - 1; i >= 0; i--) {
+        if (level->walls[i].shape == id) remove_wall_at(level, i);
+    }
+    remove_shape_at(level, index);
     return true;
 }
 
@@ -280,14 +450,75 @@ bool level_move_room(Level* level, int room_index, Vec2 delta) {
     return true;
 }
 
-bool level_move_wall(Level* level, int wall_index, Vec2 delta) {
-    if (wall_index < 0 || wall_index >= level->wall_count) return false;
-    if (!isfinite(delta.x) || !isfinite(delta.y)) return false;
-    if (delta.x == 0.0f && delta.y == 0.0f) return false;
+static int shared_endpoint_mask(const Wall* wall, Vec2 a, Vec2 b) {
+    int mask = 0;
+    if (v2_equal(wall->a, a, ORTHO_EPS) || v2_equal(wall->a, b, ORTHO_EPS)) {
+        mask |= 1;
+    }
+    if (v2_equal(wall->b, a, ORTHO_EPS) || v2_equal(wall->b, b, ORTHO_EPS)) {
+        mask |= 2;
+    }
+    return mask;
+}
 
-    Wall* wall = &level->walls[wall_index];
-    wall->a = v2_add(wall->a, delta);
-    wall->b = v2_add(wall->b, delta);
+bool level_slide_wall_edge(Level* level, int wall_index, float delta,
+                           float min_len) {
+    if (!level || wall_index < 0 || wall_index >= level->wall_count) return false;
+    if (!isfinite(delta) || delta == 0.0f) return false;
+
+    Wall* moved = &level->walls[wall_index];
+    int axis = wall_slide_axis(moved);
+    if (axis < 0) return false;
+
+    Vec2 normal = axis == 1 ? v2(0.0f, 1.0f) : v2(1.0f, 0.0f);
+    Vec2 perpendicular = axis == 1 ? v2(1.0f, 0.0f) : v2(0.0f, 1.0f);
+    Vec2 moved_a = moved->a;
+    Vec2 moved_b = moved->b;
+    float keep = fmaxf(min_len, ORTHO_EPS);
+
+    float lo = -INFINITY;
+    float hi = INFINITY;
+    for (int i = 0; i < level->wall_count; i++) {
+        if (i == wall_index) continue;
+        Wall* wall = &level->walls[i];
+        int mask = shared_endpoint_mask(wall, moved_a, moved_b);
+        if (mask == 0 || mask == 3) continue;
+
+        Vec2 fixed = mask == 1 ? wall->b : wall->a;
+        Vec2 moving = mask == 1 ? wall->a : wall->b;
+        Vec2 span = v2_sub(moving, fixed);
+        float along = v2_dot(span, normal);
+        float across = v2_dot(span, perpendicular);
+
+        if (fabsf(across) > ORTHO_EPS || fabsf(along) <= ORTHO_EPS) {
+            lo = fmaxf(lo, 0.0f);
+            hi = fminf(hi, 0.0f);
+        } else if (along > 0.0f) {
+            lo = fmaxf(lo, keep - along);
+        } else {
+            hi = fminf(hi, -keep - along);
+        }
+    }
+
+    if (lo > hi) return false;
+
+    float applied = delta;
+    if (applied < lo) applied = lo;
+    if (applied > hi) applied = hi;
+    if (!isfinite(applied) || fabsf(applied) <= 1e-6f) return false;
+    if ((applied > 0.0f) != (delta > 0.0f)) return false;
+
+    Vec2 shift = v2_scale(normal, applied);
+    moved->a = v2_add(moved_a, shift);
+    moved->b = v2_add(moved_b, shift);
+
+    for (int i = 0; i < level->wall_count; i++) {
+        if (i == wall_index) continue;
+        Wall* wall = &level->walls[i];
+        int mask = shared_endpoint_mask(wall, moved_a, moved_b);
+        if (mask & 1) wall->a = v2_add(wall->a, shift);
+        if (mask & 2) wall->b = v2_add(wall->b, shift);
+    }
     return true;
 }
 
@@ -464,12 +695,17 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
         return false;
     }
 
-    bool ok = fprintf(f, "ink-level 1\n") >= 0;
+    bool ok = fprintf(f, "ink-level 2\n") >= 0;
 
+    for (int i = 0; ok && i < level->shape_count; i++) {
+        const Shape* shape = &level->shapes[i];
+        ok = fprintf(f, "shape %" PRIu32 " %d %d\n", shape->id,
+                     shape->closed ? 1 : 0, (int)shape->fill) >= 0;
+    }
     for (int i = 0; ok && i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
-        ok = fprintf(f, "wall %" PRIu32 " %.3f %.3f %.3f %.3f\n",
-                     w->id, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
+        ok = fprintf(f, "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f\n",
+                     w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
     }
     for (int i = 0; ok && i < level->room_count; i++) {
         const Room* room = &level->rooms[i];
@@ -542,6 +778,9 @@ bool level_load(Level* level, const char* path, LevelError* err) {
     Level tmp;
     level_init(&tmp);
     int door_lines[LEVEL_MAX_DOORS];
+    int wall_lines[LEVEL_MAX_WALLS];
+    int shape_lines[LEVEL_MAX_SHAPES];
+    int version = 0;
     char buf[LOAD_LINE_MAX];
     int line_no = 0;
     bool saw_header = false;
@@ -564,23 +803,68 @@ bool level_load(Level* level, const char* path, LevelError* err) {
         if (!tag) continue;
 
         if (!saw_header) {
-            char* version = next_token(&save);
+            char* version_text = next_token(&save);
             char* extra = next_token(&save);
-            if (strcmp(tag, "ink-level") != 0 || !version ||
-                strcmp(version, "1") != 0 || extra) {
-                ok = fail_line(err, line_no, "expected ink-level 1");
+            if (strcmp(tag, "ink-level") != 0 || !version_text || extra ||
+                (strcmp(version_text, "1") != 0 &&
+                 strcmp(version_text, "2") != 0)) {
+                ok = fail_line(err, line_no, "expected ink-level 1 or 2");
                 break;
             }
+            version = version_text[0] - '0';
             saw_header = true;
             continue;
         }
 
-        if (strcmp(tag, "wall") == 0) {
+        if (strcmp(tag, "shape") == 0) {
             uint32_t id;
+            int closed, fill;
+            if (version != 2) {
+                ok = fail_line(err, line_no, "shape record requires ink-level 2");
+                break;
+            }
+            if (!read_uint(&save, &id) || !read_int(&save, &closed) ||
+                !read_int(&save, &fill) || next_token(&save)) {
+                ok = fail_line(err, line_no, "malformed shape record");
+                break;
+            }
+            if (id == 0) {
+                ok = fail_line(err, line_no, "shape id must be non-zero");
+                break;
+            }
+            if (closed != 0 && closed != 1) {
+                ok = fail_line(err, line_no, "bad shape closed flag");
+                break;
+            }
+            if (fill < 0 || fill > 2) {
+                ok = fail_line(err, line_no, "bad shape fill");
+                break;
+            }
+            if (tmp.shape_count >= LEVEL_MAX_SHAPES) {
+                ok = fail_line(err, line_no, "too many shapes");
+                break;
+            }
+            if (shape_index_by_id(&tmp, id) >= 0) {
+                ok = fail_line(err, line_no, "duplicate shape id");
+                break;
+            }
+            shape_lines[tmp.shape_count] = line_no;
+            tmp.shapes[tmp.shape_count++] =
+                (Shape){ id, closed != 0, (ShapeFill)fill };
+        } else if (strcmp(tag, "wall") == 0) {
+            uint32_t id, shape = 0;
             float x1, y1, x2, y2;
-            if (!read_uint(&save, &id) || !read_float(&save, &x1) ||
-                !read_float(&save, &y1) || !read_float(&save, &x2) ||
-                !read_float(&save, &y2) || next_token(&save)) {
+            if (!read_uint(&save, &id)) {
+                ok = fail_line(err, line_no, "malformed wall record");
+                break;
+            }
+            if (version == 2 && !read_uint(&save, &shape)) {
+                ok = fail_line(err, line_no, "malformed wall record");
+                break;
+            }
+            if (!read_float(&save, &x1) || !read_float(&save, &y1) ||
+                !read_float(&save, &x2) || !read_float(&save, &y2) ||
+                next_token(&save)) {
                 ok = fail_line(err, line_no, "malformed wall record");
                 break;
             }
@@ -605,7 +889,8 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                                zero ? "zero-length wall" : "non-orthogonal wall");
                 break;
             }
-            tmp.walls[tmp.wall_count++] = (Wall){ id, a, b };
+            wall_lines[tmp.wall_count] = line_no;
+            tmp.walls[tmp.wall_count++] = (Wall){ id, shape, a, b };
         } else if (strcmp(tag, "room") == 0) {
             int color, count;
             if (!read_int(&save, &color) || !read_int(&save, &count)) {
@@ -713,7 +998,36 @@ bool level_load(Level* level, const char* path, LevelError* err) {
     if (!ok) return false;
 
     if (!saw_header) {
-        return fail_line(err, line_no + 1, "expected ink-level 1");
+        return fail_line(err, line_no + 1, "expected ink-level 1 or 2");
+    }
+
+    if (version == 1) {
+        for (int i = 0; i < tmp.wall_count; i++) {
+            ShapeId shape = level_add_shape(&tmp);
+            if (shape == 0) {
+                return fail_line(err, 1, "too many shapes");
+            }
+            tmp.walls[i].shape = shape;
+        }
+    } else {
+        for (int i = 0; i < tmp.wall_count; i++) {
+            if (!level_shape_by_id_const(&tmp, tmp.walls[i].shape)) {
+                return fail_line(err, wall_lines[i],
+                                 "wall references unknown shape %" PRIu32,
+                                 tmp.walls[i].shape);
+            }
+        }
+        for (int i = 0; i < tmp.shape_count; i++) {
+            if (!tmp.shapes[i].closed) continue;
+            int walls = 0;
+            for (int j = 0; j < tmp.wall_count; j++) {
+                if (tmp.walls[j].shape == tmp.shapes[i].id) walls++;
+            }
+            if (walls < 3) {
+                return fail_line(err, shape_lines[i],
+                                 "closed shape needs at least three walls");
+            }
+        }
     }
 
     for (int i = 0; i < tmp.door_count; i++) {
@@ -729,6 +1043,12 @@ bool level_load(Level* level, const char* path, LevelError* err) {
     for (int i = 0; i < tmp.wall_count; i++) {
         if (tmp.walls[i].id >= tmp.next_wall_id) {
             tmp.next_wall_id = tmp.walls[i].id + 1;
+        }
+    }
+    tmp.next_shape_id = 1;
+    for (int i = 0; i < tmp.shape_count; i++) {
+        if (tmp.shapes[i].id >= tmp.next_shape_id) {
+            tmp.next_shape_id = tmp.shapes[i].id + 1;
         }
     }
 

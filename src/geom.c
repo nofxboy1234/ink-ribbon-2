@@ -211,3 +211,86 @@ Rect polygon_bounds(const Vec2* pts, int count) {
     }
     return r;
 }
+
+static float triangle_area2(Vec2 a, Vec2 b, Vec2 c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+static bool point_in_triangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
+    float d1 = triangle_area2(a, b, p);
+    float d2 = triangle_area2(b, c, p);
+    float d3 = triangle_area2(c, a, p);
+    bool negative = d1 < -GEOM_EPS || d2 < -GEOM_EPS || d3 < -GEOM_EPS;
+    bool positive = d1 > GEOM_EPS || d2 > GEOM_EPS || d3 > GEOM_EPS;
+    return !(negative && positive);
+}
+
+int polygon_triangulate(const Vec2* pts, int count, int* out, int max_triangles) {
+    if (!pts || !out || count < 3) return -1;
+    int triangle_count = count - 2;
+    if (max_triangles < triangle_count) return -1;
+
+    Rect bounds = polygon_bounds(pts, count);
+    float extent = fmaxf(bounds.max.x - bounds.min.x,
+                         bounds.max.y - bounds.min.y);
+    if (!(extent > GEOM_EPS)) return -1;
+
+    float area2 = 0.0f;
+    for (int i = 0, j = count - 1; i < count; j = i++) {
+        area2 += pts[j].x * pts[i].y - pts[i].x * pts[j].y;
+    }
+    float epsilon = GEOM_EPS * extent * extent;
+    if (fabsf(area2) <= epsilon) return -1;
+    bool ccw = area2 > 0.0f;
+
+    int active[count];
+    for (int i = 0; i < count; i++) active[i] = i;
+
+    int n = count;
+    int written = 0;
+    while (n > 3) {
+        bool clipped = false;
+        for (int i = 0; i < n; i++) {
+            int prev = (i + n - 1) % n;
+            int next = (i + 1) % n;
+            int ia = active[prev];
+            int ib = active[i];
+            int ic = active[next];
+            Vec2 a = pts[ia];
+            Vec2 b = pts[ib];
+            Vec2 c = pts[ic];
+
+            float cross = triangle_area2(a, b, c);
+            if (ccw ? cross <= epsilon : cross >= -epsilon) continue;
+
+            bool ear = true;
+            for (int j = 0; j < n; j++) {
+                if (j == prev || j == i || j == next) continue;
+                if (point_in_triangle(pts[active[j]], a, b, c)) {
+                    ear = false;
+                    break;
+                }
+            }
+            if (!ear) continue;
+
+            out[written * 3 + 0] = ia;
+            out[written * 3 + 1] = ib;
+            out[written * 3 + 2] = ic;
+            written++;
+
+            for (int j = i; j < n - 1; j++) active[j] = active[j + 1];
+            n--;
+            clipped = true;
+            break;
+        }
+        if (!clipped) return -1;
+    }
+
+    float cross = triangle_area2(pts[active[0]], pts[active[1]], pts[active[2]]);
+    if (fabsf(cross) <= epsilon) return -1;
+    out[written * 3 + 0] = active[0];
+    out[written * 3 + 1] = active[1];
+    out[written * 3 + 2] = active[2];
+    written++;
+    return written == triangle_count ? written : -1;
+}
