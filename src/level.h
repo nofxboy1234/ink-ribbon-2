@@ -146,6 +146,18 @@ int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap);
    flip. Returns true and writes the applied delta when it moved. */
 bool level_slide_wall_edge(Level* level, int wall_index, float delta,
                            float min_len);
+/* Reshape several edges at once. selected[i] marks walls[i]. The pointer delta
+   is projected onto each selected wall's normal, so a horizontal edge takes
+   only dy and a vertical edge only dx. A corner shared by two selected edges
+   takes both axes, and a neighbour that is not selected is dragged along.
+   Returns true when any wall moved. */
+bool level_slide_edges(Level* level, const bool* selected, int count, Vec2 delta,
+                       float min_len);
+/* Rigid translate: moves every selected wall by delta, so their doors follow by
+   wall id. Returns true when any wall moved. */
+bool level_move_walls(Level* level, const bool* selected, int count, Vec2 delta);
+/* Index of the closed shape whose outline contains p, or -1. */
+int level_shape_at(const Level* level, Vec2 p);
 bool level_delete_wall(Level* level, int wall_index);
 Wall* level_wall_by_id(Level* level, WallId id);
 const Wall* level_wall_by_id_const(const Level* level, WallId id);

@@ -328,14 +328,44 @@ int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap) {
     return shape_loop(level, id, out, cap);
 }
 
+int level_shape_at(const Level* level, Vec2 p) {
+    if (!level) return -1;
+
+    Vec2 polygon[LEVEL_MAX_WALLS];
+    int best = -1;
+    float best_area = INFINITY;
+    for (int i = 0; i < level->shape_count; i++) {
+        const Shape* shape = &level->shapes[i];
+        if (!shape->closed) continue;
+        int count = level_shape_polygon(level, shape->id, polygon,
+                                        LEVEL_MAX_WALLS);
+        if (count < 3 || !point_in_polygon(polygon, count, p)) continue;
+
+        float area = polygon_area(polygon, count);
+        if (area < best_area) {
+            best_area = area;
+            best = i;
+        }
+    }
+    return best;
+}
+
 bool level_delete_wall(Level* level, int wall_index) {
     if (wall_index < 0 || wall_index >= level->wall_count) return false;
     ShapeId shape = level->walls[wall_index].shape;
     remove_wall_at(level, wall_index);
 
-    if (shape != 0 && !shape_has_walls(level, shape)) {
-        int index = shape_index_by_id(level, shape);
-        if (index >= 0) remove_shape_at(level, index);
+    if (shape == 0) return true;
+    Shape* record = level_shape_by_id(level, shape);
+    if (!record) return true;
+    if (!shape_has_walls(level, shape)) {
+        remove_shape_at(level, shape_index_by_id(level, shape));
+        return true;
+    }
+    /* Removing an edge can break the loop. A closed shape that no longer
+       closes would save a file the loader rejects, so reopen it. */
+    if (record->closed && shape_loop(level, shape, NULL, 0) < 3) {
+        record->closed = false;
     }
     return true;
 }
@@ -450,15 +480,116 @@ bool level_move_room(Level* level, int room_index, Vec2 delta) {
     return true;
 }
 
-static int shared_endpoint_mask(const Wall* wall, Vec2 a, Vec2 b) {
-    int mask = 0;
-    if (v2_equal(wall->a, a, ORTHO_EPS) || v2_equal(wall->a, b, ORTHO_EPS)) {
-        mask |= 1;
+/* Coincident endpoints form one vertex group so they move as a unit. */
+static int endpoint_group(Vec2* groups, int* count, Vec2 p) {
+    for (int i = 0; i < *count; i++) {
+        if (v2_equal(groups[i], p, ORTHO_EPS)) return i;
     }
-    if (v2_equal(wall->b, a, ORTHO_EPS) || v2_equal(wall->b, b, ORTHO_EPS)) {
-        mask |= 2;
+    groups[*count] = p;
+    return (*count)++;
+}
+
+bool level_slide_edges(Level* level, const bool* selected, int count, Vec2 delta,
+                       float min_len) {
+    if (!level || !selected) return false;
+    if (count < 0 || count > level->wall_count) return false;
+    if (!isfinite(delta.x) || !isfinite(delta.y)) return false;
+    if (delta.x == 0.0f && delta.y == 0.0f) return false;
+
+    Vec2 group_pos[LEVEL_MAX_WALLS * 2];
+    bool group_x[LEVEL_MAX_WALLS * 2] = { false };
+    bool group_y[LEVEL_MAX_WALLS * 2] = { false };
+    int a_group[LEVEL_MAX_WALLS];
+    int b_group[LEVEL_MAX_WALLS];
+    int group_count = 0;
+    for (int i = 0; i < level->wall_count; i++) {
+        a_group[i] = endpoint_group(group_pos, &group_count, level->walls[i].a);
+        b_group[i] = endpoint_group(group_pos, &group_count, level->walls[i].b);
     }
-    return mask;
+
+    bool move_x = false;
+    bool move_y = false;
+    for (int i = 0; i < count; i++) {
+        if (!selected[i]) continue;
+        int axis = wall_slide_axis(&level->walls[i]);
+        if (axis == 0) {
+            group_x[a_group[i]] = true;
+            group_x[b_group[i]] = true;
+            move_x = true;
+        } else if (axis == 1) {
+            group_y[a_group[i]] = true;
+            group_y[b_group[i]] = true;
+            move_y = true;
+        }
+    }
+    if (!move_x && !move_y) return false;
+
+    float keep = fmaxf(min_len, ORTHO_EPS);
+    float lo_x = -INFINITY;
+    float hi_x = INFINITY;
+    float lo_y = -INFINITY;
+    float hi_y = INFINITY;
+
+    for (int i = 0; i < level->wall_count; i++) {
+        const Wall* wall = &level->walls[i];
+        if (group_x[a_group[i]] != group_x[b_group[i]]) {
+            Vec2 fixed = group_x[a_group[i]] ? wall->b : wall->a;
+            Vec2 moving = group_x[a_group[i]] ? wall->a : wall->b;
+            float along = moving.x - fixed.x;
+            float across = moving.y - fixed.y;
+            if (fabsf(across) > ORTHO_EPS || fabsf(along) <= ORTHO_EPS) {
+                lo_x = fmaxf(lo_x, 0.0f);
+                hi_x = fminf(hi_x, 0.0f);
+            } else if (along > 0.0f) {
+                lo_x = fmaxf(lo_x, keep - along);
+            } else {
+                hi_x = fminf(hi_x, -keep - along);
+            }
+        }
+        if (group_y[a_group[i]] != group_y[b_group[i]]) {
+            Vec2 fixed = group_y[a_group[i]] ? wall->b : wall->a;
+            Vec2 moving = group_y[a_group[i]] ? wall->a : wall->b;
+            float along = moving.y - fixed.y;
+            float across = moving.x - fixed.x;
+            if (fabsf(across) > ORTHO_EPS || fabsf(along) <= ORTHO_EPS) {
+                lo_y = fmaxf(lo_y, 0.0f);
+                hi_y = fminf(hi_y, 0.0f);
+            } else if (along > 0.0f) {
+                lo_y = fmaxf(lo_y, keep - along);
+            } else {
+                hi_y = fminf(hi_y, -keep - along);
+            }
+        }
+    }
+
+    float applied_x = 0.0f;
+    float applied_y = 0.0f;
+    if (move_x && delta.x != 0.0f && lo_x <= hi_x) {
+        applied_x = clampf(delta.x, lo_x, hi_x);
+    }
+    if (move_y && delta.y != 0.0f && lo_y <= hi_y) {
+        applied_y = clampf(delta.y, lo_y, hi_y);
+    }
+    if (!isfinite(applied_x) || fabsf(applied_x) <= 1e-6f) applied_x = 0.0f;
+    if (!isfinite(applied_y) || fabsf(applied_y) <= 1e-6f) applied_y = 0.0f;
+    if (applied_x != 0.0f &&
+        (applied_x > 0.0f) != (delta.x > 0.0f)) {
+        applied_x = 0.0f;
+    }
+    if (applied_y != 0.0f &&
+        (applied_y > 0.0f) != (delta.y > 0.0f)) {
+        applied_y = 0.0f;
+    }
+    if (applied_x == 0.0f && applied_y == 0.0f) return false;
+
+    for (int i = 0; i < level->wall_count; i++) {
+        Wall* wall = &level->walls[i];
+        if (group_x[a_group[i]]) wall->a.x += applied_x;
+        if (group_y[a_group[i]]) wall->a.y += applied_y;
+        if (group_x[b_group[i]]) wall->b.x += applied_x;
+        if (group_y[b_group[i]]) wall->b.y += applied_y;
+    }
+    return true;
 }
 
 bool level_slide_wall_edge(Level* level, int wall_index, float delta,
@@ -466,60 +597,30 @@ bool level_slide_wall_edge(Level* level, int wall_index, float delta,
     if (!level || wall_index < 0 || wall_index >= level->wall_count) return false;
     if (!isfinite(delta) || delta == 0.0f) return false;
 
-    Wall* moved = &level->walls[wall_index];
-    int axis = wall_slide_axis(moved);
+    int axis = wall_slide_axis(&level->walls[wall_index]);
     if (axis < 0) return false;
 
-    Vec2 normal = axis == 1 ? v2(0.0f, 1.0f) : v2(1.0f, 0.0f);
-    Vec2 perpendicular = axis == 1 ? v2(1.0f, 0.0f) : v2(0.0f, 1.0f);
-    Vec2 moved_a = moved->a;
-    Vec2 moved_b = moved->b;
-    float keep = fmaxf(min_len, ORTHO_EPS);
+    bool selected[LEVEL_MAX_WALLS] = { false };
+    selected[wall_index] = true;
+    Vec2 projected = axis == 1 ? v2(0.0f, delta) : v2(delta, 0.0f);
+    return level_slide_edges(level, selected, level->wall_count, projected,
+                             min_len);
+}
 
-    float lo = -INFINITY;
-    float hi = INFINITY;
-    for (int i = 0; i < level->wall_count; i++) {
-        if (i == wall_index) continue;
-        Wall* wall = &level->walls[i];
-        int mask = shared_endpoint_mask(wall, moved_a, moved_b);
-        if (mask == 0 || mask == 3) continue;
+bool level_move_walls(Level* level, const bool* selected, int count, Vec2 delta) {
+    if (!level || !selected) return false;
+    if (count < 0 || count > level->wall_count) return false;
+    if (!isfinite(delta.x) || !isfinite(delta.y)) return false;
+    if (delta.x == 0.0f && delta.y == 0.0f) return false;
 
-        Vec2 fixed = mask == 1 ? wall->b : wall->a;
-        Vec2 moving = mask == 1 ? wall->a : wall->b;
-        Vec2 span = v2_sub(moving, fixed);
-        float along = v2_dot(span, normal);
-        float across = v2_dot(span, perpendicular);
-
-        if (fabsf(across) > ORTHO_EPS || fabsf(along) <= ORTHO_EPS) {
-            lo = fmaxf(lo, 0.0f);
-            hi = fminf(hi, 0.0f);
-        } else if (along > 0.0f) {
-            lo = fmaxf(lo, keep - along);
-        } else {
-            hi = fminf(hi, -keep - along);
-        }
+    bool moved = false;
+    for (int i = 0; i < count; i++) {
+        if (!selected[i]) continue;
+        level->walls[i].a = v2_add(level->walls[i].a, delta);
+        level->walls[i].b = v2_add(level->walls[i].b, delta);
+        moved = true;
     }
-
-    if (lo > hi) return false;
-
-    float applied = delta;
-    if (applied < lo) applied = lo;
-    if (applied > hi) applied = hi;
-    if (!isfinite(applied) || fabsf(applied) <= 1e-6f) return false;
-    if ((applied > 0.0f) != (delta > 0.0f)) return false;
-
-    Vec2 shift = v2_scale(normal, applied);
-    moved->a = v2_add(moved_a, shift);
-    moved->b = v2_add(moved_b, shift);
-
-    for (int i = 0; i < level->wall_count; i++) {
-        if (i == wall_index) continue;
-        Wall* wall = &level->walls[i];
-        int mask = shared_endpoint_mask(wall, moved_a, moved_b);
-        if (mask & 1) wall->a = v2_add(wall->a, shift);
-        if (mask & 2) wall->b = v2_add(wall->b, shift);
-    }
-    return true;
+    return moved;
 }
 
 int level_add_door(Level* level, WallId wall, float t, float width, DoorColor color) {

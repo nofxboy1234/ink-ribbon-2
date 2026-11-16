@@ -275,6 +275,34 @@ static void test_doors(void) {
           "delete the last wall leaves no orphan doors");
 }
 
+static void test_delete_edge_reopens_shape(void) {
+    Level level;
+    level_init(&level);
+    ShapeId shape = level_add_shape(&level);
+    level_add_wall_to_shape(&level, shape, v2(0, 0), v2(100, 0));
+    level_add_wall_to_shape(&level, shape, v2(100, 0), v2(100, 100));
+    level_add_wall_to_shape(&level, shape, v2(100, 100), v2(0, 100));
+    level_add_wall_to_shape(&level, shape, v2(0, 100), v2(0, 0));
+    check(level_close_shape(&level, shape), "close a four wall shape");
+    const Shape* record = level_shape_by_id_const(&level, shape);
+    check(record && record->closed, "closed shape reports closed");
+
+    check(level_delete_wall(&level, 3), "delete one edge of a closed shape");
+    record = level_shape_by_id_const(&level, shape);
+    check(record && !record->closed, "deleting an edge reopens the shape");
+    check(level_shape_polygon(&level, shape, NULL, 0) < 0 ||
+              level_shape_polygon(&level, shape, NULL, 0) == -1,
+          "an open shape has no fill polygon");
+    check(level_shape_at(&level, v2(50, 50)) < 0,
+          "an open shape is not a click target");
+
+    level_delete_wall(&level, 2);
+    level_delete_wall(&level, 1);
+    level_delete_wall(&level, 0);
+    check(level.shape_count == 0 && level.wall_count == 0,
+          "deleting every edge removes the shape");
+}
+
 static void test_labels(void) {
     Level level;
     level_init(&level);
@@ -850,6 +878,198 @@ static void test_shape_reshape(void) {
           "the vertically slid shape stays closed");
 }
 
+static void test_slide_edges_multi(void) {
+    Level level;
+    level_init(&level);
+    int walls[4];
+    ShapeId shape = add_rectangle(&level, v2(0, 0), 100, 100, walls);
+    check(level_close_shape(&level, shape),
+          "close the rectangle before multi-edge sliding");
+
+    bool bottom_only[4] = { true, false, false, false };
+    check(level_slide_edges(&level, bottom_only, 4, v2(30, 40), 8),
+          "slide the bottom edge and ignore the pointer x delta");
+    check(nearv(level.walls[walls[0]].a, v2(0, 40)) &&
+              nearv(level.walls[walls[0]].b, v2(100, 40)),
+          "the selected bottom edge moves only on y");
+    check(nearv(level.walls[walls[1]].a, v2(100, 40)) &&
+              nearv(level.walls[walls[1]].b, v2(100, 100)) &&
+              nearv(level.walls[walls[3]].a, v2(0, 100)) &&
+              nearv(level.walls[walls[3]].b, v2(0, 40)),
+          "the two vertical neighbours stretch to the moved edge");
+    check(nearv(level.walls[walls[2]].a, v2(100, 100)) &&
+              nearv(level.walls[walls[2]].b, v2(0, 100)),
+          "the top edge stays where it was");
+    check(level.shapes[0].closed &&
+              nearv(level.walls[walls[1]].a, level.walls[walls[0]].b) &&
+              nearv(level.walls[walls[3]].b, level.walls[walls[0]].a) &&
+              nearv(level.walls[walls[2]].a, level.walls[walls[1]].b),
+          "the rectangle stays closed after sliding one edge");
+
+    Level both;
+    level_init(&both);
+    int both_walls[4];
+    ShapeId both_shape = add_rectangle(&both, v2(0, 0), 100, 100, both_walls);
+    level_close_shape(&both, both_shape);
+    bool bottom_and_top[4] = { true, false, true, false };
+    check(level_slide_edges(&both, bottom_and_top, 4, v2(0, 40), 8),
+          "slide the bottom and top edges together");
+    check(nearv(both.walls[both_walls[0]].a, v2(0, 40)) &&
+              nearv(both.walls[both_walls[0]].b, v2(100, 40)) &&
+              nearv(both.walls[both_walls[2]].a, v2(100, 140)) &&
+              nearv(both.walls[both_walls[2]].b, v2(0, 140)),
+          "both horizontal edges move by the full delta");
+    check(nearf(wall_length(&both.walls[both_walls[1]]), 100) &&
+              nearf(wall_length(&both.walls[both_walls[3]]), 100),
+          "the vertical neighbours keep their length when both edges move");
+    check(both.shapes[0].closed &&
+              nearv(both.walls[both_walls[1]].a, both.walls[both_walls[0]].b) &&
+              nearv(both.walls[both_walls[1]].b, both.walls[both_walls[2]].a) &&
+              nearv(both.walls[both_walls[3]].b, both.walls[both_walls[0]].a),
+          "the shape stays closed when both edges move");
+
+    Level corner;
+    level_init(&corner);
+    int corner_walls[4];
+    ShapeId corner_shape = add_rectangle(&corner, v2(0, 0), 100, 100,
+                                         corner_walls);
+    level_close_shape(&corner, corner_shape);
+    bool left_and_bottom[4] = { true, false, false, true };
+    check(level_slide_edges(&corner, left_and_bottom, 4, v2(40, 30), 8),
+          "drag the left and bottom edges diagonally");
+    check(nearv(corner.walls[corner_walls[0]].a, v2(40, 30)) &&
+              nearv(corner.walls[corner_walls[0]].b, v2(100, 30)),
+          "the bottom edge follows the shared corner in both axes");
+    check(nearv(corner.walls[corner_walls[3]].a, v2(40, 100)) &&
+              nearv(corner.walls[corner_walls[3]].b, v2(40, 30)),
+          "the left edge follows the shared corner in both axes");
+    check(nearv(corner.walls[corner_walls[1]].a, v2(100, 30)) &&
+              nearv(corner.walls[corner_walls[1]].b, v2(100, 100)) &&
+              nearv(corner.walls[corner_walls[2]].a, v2(100, 100)) &&
+              nearv(corner.walls[corner_walls[2]].b, v2(40, 100)),
+          "the unselected top and right edges follow their moved endpoints");
+    check(corner.shapes[0].closed &&
+              nearv(corner.walls[corner_walls[0]].a,
+                    corner.walls[corner_walls[3]].b) &&
+              nearv(corner.walls[corner_walls[1]].a,
+                    corner.walls[corner_walls[0]].b) &&
+              nearv(corner.walls[corner_walls[2]].a,
+                    corner.walls[corner_walls[1]].b) &&
+              nearv(corner.walls[corner_walls[3]].a,
+                    corner.walls[corner_walls[2]].b),
+          "the diagonally dragged shape stays closed");
+
+    Level clamp;
+    level_init(&clamp);
+    int clamp_walls[4];
+    ShapeId clamp_shape = add_rectangle(&clamp, v2(0, 0), 100, 100,
+                                        clamp_walls);
+    level_close_shape(&clamp, clamp_shape);
+    bool clamp_edges[4] = { true, false, false, true };
+    check(level_slide_edges(&clamp, clamp_edges, 4, v2(140, 140), 60),
+          "an oversized diagonal drag clamps instead of collapsing walls");
+    bool all_keep = true;
+    float shortest = INFINITY;
+    for (int i = 0; i < clamp.wall_count; i++) {
+        float len = wall_length(&clamp.walls[i]);
+        shortest = fminf(shortest, len);
+        if (len < 60.0f - 1e-4f) all_keep = false;
+    }
+    check(all_keep && nearf(shortest, 60.0f),
+          "the clamp keeps every wall at or above min_len");
+    check(nearv(clamp.walls[clamp_walls[0]].a, v2(40, 40)) &&
+              nearv(clamp.walls[clamp_walls[0]].b, v2(100, 40)) &&
+              nearv(clamp.walls[clamp_walls[3]].b, v2(40, 40)),
+          "the clamp stops the moving corner before either wall flips");
+    check(clamp.shapes[0].closed, "the clamped shape stays closed");
+
+    Level still = clamp;
+    check(!level_slide_edges(&clamp, clamp_edges, 4, v2(0, 0), 60) &&
+              memcmp(&clamp, &still, sizeof clamp) == 0,
+          "a zero multi-edge delta changes nothing");
+}
+
+static void test_move_walls(void) {
+    Level level;
+    level_init(&level);
+    int walls[4];
+    ShapeId shape = add_rectangle(&level, v2(0, 0), 100, 100, walls);
+    level_close_shape(&level, shape);
+    WallId ids[4];
+    for (int i = 0; i < 4; i++) ids[i] = level.walls[walls[i]].id;
+    level_add_door(&level, ids[0], 0.5f, 20, DOOR_RED);
+
+    bool selected[4] = { true, true, true, true };
+    Vec2 delta = v2(25, -15);
+    check(level_move_walls(&level, selected, 4, delta),
+          "move every wall of a shape by the drag delta");
+    check(nearv(level.walls[walls[0]].a, v2(25, -15)) &&
+              nearv(level.walls[walls[0]].b, v2(125, -15)) &&
+              nearv(level.walls[walls[2]].a, v2(125, 85)) &&
+              nearv(level.walls[walls[2]].b, v2(25, 85)),
+          "each wall translates by exactly the delta");
+    check(level.walls[walls[0]].id == ids[0] &&
+              level.walls[walls[1]].id == ids[1] &&
+              level.walls[walls[2]].id == ids[2] &&
+              level.walls[walls[3]].id == ids[3] &&
+              level.walls[walls[0]].shape == shape,
+          "wall ids and shape membership survive the move");
+    check(level.door_count == 1 && level.doors[0].wall == ids[0] &&
+              nearf(level.doors[0].t, 0.5f) &&
+              nearv(level_door_center(&level, &level.doors[0]), v2(75, -15)),
+          "a door stays on its wall and rides the translation");
+
+    Level before = level;
+    check(!level_move_walls(&level, selected, 4, v2(0, 0)) &&
+              memcmp(&level, &before, sizeof level) == 0,
+          "move walls rejects a zero delta unchanged");
+    check(!level_move_walls(&level, selected, 4, v2(NAN, 0)) &&
+              memcmp(&level, &before, sizeof level) == 0,
+          "move walls rejects a NaN delta unchanged");
+    check(!level_move_walls(&level, selected, 4, v2(INFINITY, 0)) &&
+              memcmp(&level, &before, sizeof level) == 0,
+          "move walls rejects an infinite delta unchanged");
+    check(!level_move_walls(&level, NULL, 4, delta) &&
+              memcmp(&level, &before, sizeof level) == 0,
+          "move walls rejects a null selection unchanged");
+    check(!level_move_walls(&level, selected, -1, delta) &&
+              memcmp(&level, &before, sizeof level) == 0,
+          "move walls rejects a negative count unchanged");
+    check(!level_move_walls(&level, selected, level.wall_count + 1, delta) &&
+              memcmp(&level, &before, sizeof level) == 0,
+          "move walls rejects a count past the wall array unchanged");
+}
+
+static void test_shape_at(void) {
+    Level level;
+    level_init(&level);
+    int outer_walls[4];
+    int inner_walls[4];
+    ShapeId outer = add_rectangle(&level, v2(0, 0), 200, 200, outer_walls);
+    check(level_close_shape(&level, outer),
+          "close the outer rectangle for shape_at");
+    ShapeId inner = add_rectangle(&level, v2(50, 50), 100, 100, inner_walls);
+    check(level_close_shape(&level, inner),
+          "close the nested rectangle for shape_at");
+
+    check(level_shape_at(&level, v2(100, 100)) == 1,
+          "shape_at returns the innermost closed shape under the point");
+    check(level_shape_at(&level, v2(20, 20)) == 0,
+          "shape_at returns the outer shape outside the inner one");
+    check(level_shape_at(&level, v2(300, 20)) == -1,
+          "shape_at misses a point outside every closed shape");
+
+    Level open;
+    level_init(&open);
+    ShapeId open_shape = level_add_shape(&open);
+    level_add_wall_to_shape(&open, open_shape, v2(0, 0), v2(100, 0));
+    level_add_wall_to_shape(&open, open_shape, v2(100, 0), v2(100, 100));
+    level_add_wall_to_shape(&open, open_shape, v2(0, 0), v2(0, 100));
+    check(!open.shapes[0].closed &&
+              level_shape_at(&open, v2(50, 50)) == -1,
+          "shape_at ignores an open shape");
+}
+
 static void test_save_load_shapes(void) {
     Level src;
     level_init(&src);
@@ -1022,6 +1242,10 @@ int main(void) {
     test_shape_lifecycle();
     test_delete_shape();
     test_shape_reshape();
+    test_slide_edges_multi();
+    test_move_walls();
+    test_shape_at();
+    test_delete_edge_reopens_shape();
     test_save_load_shapes();
     test_triangulate();
 
