@@ -33,6 +33,7 @@
 #define STAIR_FILL 0x1c2026
 #define ACCENT_COL 0x5aa0c8
 #define SELECT_COL 0x5aa0c8
+#define VERTEX_SELECT_COL 0xe0a33c
 #define TEXT_COL 0xd9dadd
 #define MUTED_COL 0x7f868e
 #define ERROR_COL 0xd07373
@@ -55,13 +56,22 @@ typedef enum {
 typedef enum {
     SEL_NONE = 0,
     SEL_WALL,
-    SEL_SHAPE,
     SEL_ROOM,
     SEL_DOOR,
     SEL_LABEL,
     SEL_STAIRS,
     SEL_KIND_COUNT,
 } SelKind;
+
+typedef enum {
+    HIT_NONE = 0,
+    HIT_WALL,
+    HIT_SHAPE_INTERIOR,
+    HIT_ROOM,
+    HIT_DOOR,
+    HIT_LABEL,
+    HIT_STAIRS,
+} HitKind;
 
 typedef enum {
     MODAL_NONE = 0,
@@ -81,6 +91,15 @@ typedef enum {
     GESTURE_DOOR_RESIZE,
 } GestureKind;
 
+/* What a press landed on. A shape interior and a single edge both resolve to
+   a wall set so selection and gestures have one path. */
+typedef struct {
+    SelKind kind;
+    int index;
+    int walls[LEVEL_MAX_WALLS];
+    int wall_count;
+} Target;
+
 typedef struct {
     GestureKind kind;
     Vec2 pts[LEVEL_MAX_WALLS + 1];
@@ -93,9 +112,13 @@ typedef struct {
     Vec2 anchor;
     Vec2 move_applied;
     int object_index;
-    int wall_index;
-    float start_coord;
-    float applied;
+    bool walls[LEVEL_MAX_WALLS];
+    int ref_wall_x;
+    int ref_wall_y;
+    float ref_start_x;
+    float ref_start_y;
+    Target collapse;
+    bool collapse_on_release;
     bool additive;
     bool moved;
     float fixed_t;
@@ -112,7 +135,7 @@ typedef struct {
 } SelRef;
 
 typedef struct {
-    bool shapes[LEVEL_MAX_SHAPES];
+    bool walls[LEVEL_MAX_WALLS];
     bool rooms[LEVEL_MAX_ROOMS];
     bool doors[LEVEL_MAX_DOORS];
     bool labels[LEVEL_MAX_LABELS];
@@ -121,7 +144,7 @@ typedef struct {
 } Selection;
 
 typedef struct {
-    SelKind kind;
+    HitKind kind;
     int index;
 } Hit;
 
@@ -175,7 +198,7 @@ static const char* TOOL_NAMES[TOOL_COUNT] = {
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click a wall to select its shape, shift adds, drag a wall to reshape",
+    "click an edge to select it, shift adds, drag to reshape or move",
     "click to add walls, click the first point or Enter closes the shape",
     "click to draw a fill, Enter or double-click closes",
     "click a wall to place a door",
@@ -295,16 +318,10 @@ static bool primary_anchor(const Editor* e, Vec2* out) {
             if (e->level.rooms[ref.index].count <= 0) return false;
             *out = e->level.rooms[ref.index].pts[0];
             return true;
-        case SEL_SHAPE: {
-            if (ref.index < 0 || ref.index >= e->level.shape_count) return false;
-            ShapeId id = e->level.shapes[ref.index].id;
-            for (int i = 0; i < e->level.wall_count; i++) {
-                if (e->level.walls[i].shape != id) continue;
-                *out = e->level.walls[i].a;
-                return true;
-            }
-            return false;
-        }
+        case SEL_WALL:
+            if (ref.index < 0 || ref.index >= e->level.wall_count) return false;
+            *out = e->level.walls[ref.index].a;
+            return true;
         case SEL_DOOR:
             if (ref.index < 0 || ref.index >= e->level.door_count) return false;
             if (!level_wall_by_id_const(&e->level, e->level.doors[ref.index].wall)) {
@@ -348,16 +365,6 @@ static void cancel_gesture(Editor* e) {
     memset(&e->gesture, 0, sizeof e->gesture);
 }
 
-static int shape_index_of_id(const Editor* e, ShapeId id) {
-    const Shape* shape = level_shape_by_id_const(&e->level, id);
-    return shape ? (int)(shape - e->level.shapes) : -1;
-}
-
-static int shape_index_of_wall(const Editor* e, int wall_index) {
-    if (wall_index < 0 || wall_index >= e->level.wall_count) return -1;
-    return shape_index_of_id(e, e->level.walls[wall_index].shape);
-}
-
 /* A chain creates its shape on the first click, so a chain cancelled before
    its first wall would otherwise leave an empty shape behind. */
 static void discard_empty_chain_shape(Editor* e) {
@@ -370,12 +377,11 @@ static void discard_empty_chain_shape(Editor* e) {
 
 static bool* sel_pool(Selection* s, SelKind kind) {
     switch (kind) {
-        case SEL_SHAPE: return s->shapes;
+        case SEL_WALL: return s->walls;
         case SEL_ROOM: return s->rooms;
         case SEL_DOOR: return s->doors;
         case SEL_LABEL: return s->labels;
         case SEL_STAIRS: return s->stairs;
-        case SEL_WALL:
         case SEL_NONE:
         default: return NULL;
     }
@@ -383,12 +389,11 @@ static bool* sel_pool(Selection* s, SelKind kind) {
 
 static const bool* sel_pool_const(const Selection* s, SelKind kind) {
     switch (kind) {
-        case SEL_SHAPE: return s->shapes;
+        case SEL_WALL: return s->walls;
         case SEL_ROOM: return s->rooms;
         case SEL_DOOR: return s->doors;
         case SEL_LABEL: return s->labels;
         case SEL_STAIRS: return s->stairs;
-        case SEL_WALL:
         case SEL_NONE:
         default: return NULL;
     }
@@ -396,12 +401,11 @@ static const bool* sel_pool_const(const Selection* s, SelKind kind) {
 
 static int sel_cap(SelKind kind) {
     switch (kind) {
-        case SEL_SHAPE: return LEVEL_MAX_SHAPES;
+        case SEL_WALL: return LEVEL_MAX_WALLS;
         case SEL_ROOM: return LEVEL_MAX_ROOMS;
         case SEL_DOOR: return LEVEL_MAX_DOORS;
         case SEL_LABEL: return LEVEL_MAX_LABELS;
         case SEL_STAIRS: return LEVEL_MAX_STAIRS;
-        case SEL_WALL:
         case SEL_NONE:
         default: return 0;
     }
@@ -461,8 +465,8 @@ static void sel_promote(Editor* e) {
 
 static bool sel_valid(const Editor* e, SelRef ref) {
     switch (ref.kind) {
-        case SEL_SHAPE:
-            return ref.index >= 0 && ref.index < e->level.shape_count;
+        case SEL_WALL:
+            return ref.index >= 0 && ref.index < e->level.wall_count;
         case SEL_ROOM:
             return ref.index >= 0 && ref.index < e->level.room_count;
         case SEL_DOOR:
@@ -557,14 +561,118 @@ static void sel_only(Editor* e, SelKind kind, int index) {
     e->selection.primary = (SelRef){ kind, index };
 }
 
-static void sel_toggle(Editor* e, SelKind kind, int index) {
-    if (sel_has(&e->selection, kind, index)) {
-        sel_remove(e, kind, index);
+static bool target_selected(const Editor* e, const Target* target) {
+    if (target->kind == SEL_WALL) {
+        if (target->wall_count <= 0) return false;
+        for (int i = 0; i < target->wall_count; i++) {
+            if (!sel_has(&e->selection, SEL_WALL, target->walls[i])) return false;
+        }
+        return true;
+    }
+    if (target->kind == SEL_NONE) return false;
+    return sel_has(&e->selection, target->kind, target->index);
+}
+
+static void target_add(Editor* e, const Target* target) {
+    if (target->kind == SEL_WALL) {
+        for (int i = 0; i < target->wall_count; i++) {
+            sel_add(e, SEL_WALL, target->walls[i]);
+        }
         return;
     }
-    if (sel_add(e, kind, index)) {
-        sel_set_primary(e, kind, index);
+    sel_add(e, target->kind, target->index);
+}
+
+static void target_remove(Editor* e, const Target* target) {
+    if (target->kind == SEL_WALL) {
+        for (int i = 0; i < target->wall_count; i++) {
+            sel_remove(e, SEL_WALL, target->walls[i]);
+        }
+        return;
     }
+    sel_remove(e, target->kind, target->index);
+}
+
+static void target_toggle(Editor* e, const Target* target) {
+    if (target_selected(e, target)) target_remove(e, target);
+    else target_add(e, target);
+}
+
+static void target_only(Editor* e, const Target* target) {
+    sel_clear(e);
+    target_add(e, target);
+}
+
+/* A press that never moved is a click: narrow a multi-selection to the object
+   under the pointer, while a real drag keeps the group it started on. */
+static void collapse_click(Editor* e) {
+    Gesture* g = &e->gesture;
+    if (g->moved || !g->collapse_on_release || g->collapse.kind == SEL_NONE) {
+        return;
+    }
+    target_only(e, &g->collapse);
+    if (g->collapse.index >= 0) {
+        sel_set_primary(e, g->collapse.kind, g->collapse.index);
+    }
+    int n = sel_count(&e->selection);
+    if (n == 1) set_status(e, false, "One object selected");
+    else set_status(e, false, "%d objects selected", n);
+}
+
+static void target_from_hit(const Editor* e, Hit hit, Target* out) {
+    memset(out, 0, sizeof *out);
+    out->index = -1;
+    switch (hit.kind) {
+        case HIT_WALL:
+            out->kind = SEL_WALL;
+            out->index = hit.index;
+            out->walls[0] = hit.index;
+            out->wall_count = 1;
+            break;
+        case HIT_SHAPE_INTERIOR: {
+            out->kind = SEL_WALL;
+            if (hit.index < 0 || hit.index >= e->level.shape_count) break;
+            out->wall_count = level_shape_wall_indices(
+                &e->level, e->level.shapes[hit.index].id, out->walls,
+                LEVEL_MAX_WALLS);
+            if (out->wall_count > 0) out->index = out->walls[0];
+            else out->wall_count = 0;
+            break;
+        }
+        case HIT_ROOM: out->kind = SEL_ROOM; out->index = hit.index; break;
+        case HIT_DOOR: out->kind = SEL_DOOR; out->index = hit.index; break;
+        case HIT_LABEL: out->kind = SEL_LABEL; out->index = hit.index; break;
+        case HIT_STAIRS: out->kind = SEL_STAIRS; out->index = hit.index; break;
+        case HIT_NONE:
+        default: out->kind = SEL_NONE; break;
+    }
+}
+
+/* The whole shape selected means a rigid move; any other wall set reshapes. */
+static bool selection_walls_whole_shape(const Editor* e) {
+    const Selection* s = &e->selection;
+    int selected = sel_count_kind(s, SEL_WALL);
+    if (selected <= 0 || sel_count(s) != selected) return false;
+    ShapeId shape = 0;
+    int total = 0;
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (!s->walls[i]) continue;
+        if (shape == 0) shape = e->level.walls[i].shape;
+        else if (e->level.walls[i].shape != shape) return false;
+    }
+    if (shape == 0) return false;
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (e->level.walls[i].shape == shape) total++;
+    }
+    return total == selected;
+}
+
+static void sel_only_shape_walls(Editor* e, ShapeId id) {
+    sel_clear(e);
+    int indices[LEVEL_MAX_WALLS];
+    int n = level_shape_wall_indices(&e->level, id, indices, LEVEL_MAX_WALLS);
+    for (int i = 0; i < n; i++) sel_add(e, SEL_WALL, indices[i]);
+    sel_promote(e);
 }
 
 static void switch_tool(Editor* e, Tool tool) {
@@ -614,7 +722,7 @@ static Rect label_world_rect(const Editor* e, const Label* label) {
 }
 
 static Hit hit_test(const Editor* e, Vec2 world) {
-    Hit hit = { SEL_NONE, -1 };
+    Hit hit = { HIT_NONE, -1 };
     float tol = HIT_TOL_PX / e->camera.zoom;
 
     for (int i = e->level.door_count - 1; i >= 0; i--) {
@@ -622,21 +730,21 @@ static Hit hit_test(const Editor* e, Vec2 world) {
         level_door_span(&e->level, &e->level.doors[i], &a, &b);
         float d = point_segment_dist(world, a, b);
         if (d <= tol + DOOR_THICKNESS * 0.5f) {
-            hit.kind = SEL_DOOR;
+            hit.kind = HIT_DOOR;
             hit.index = i;
             return hit;
         }
     }
     for (int i = e->level.label_count - 1; i >= 0; i--) {
         if (rect_contains(label_world_rect(e, &e->level.labels[i]), world)) {
-            hit.kind = SEL_LABEL;
+            hit.kind = HIT_LABEL;
             hit.index = i;
             return hit;
         }
     }
     for (int i = e->level.stairs_count - 1; i >= 0; i--) {
         if (rect_contains(level_stairs_rect(&e->level.stairs[i]), world)) {
-            hit.kind = SEL_STAIRS;
+            hit.kind = HIT_STAIRS;
             hit.index = i;
             return hit;
         }
@@ -644,15 +752,21 @@ static Hit hit_test(const Editor* e, Vec2 world) {
     for (int i = e->level.wall_count - 1; i >= 0; i--) {
         const Wall* w = &e->level.walls[i];
         if (point_segment_dist(world, w->a, w->b) <= tol) {
-            hit.kind = SEL_WALL;
+            hit.kind = HIT_WALL;
             hit.index = i;
             return hit;
         }
     }
     int room = level_room_at(&e->level, world);
     if (room >= 0) {
-        hit.kind = SEL_ROOM;
+        hit.kind = HIT_ROOM;
         hit.index = room;
+        return hit;
+    }
+    int shape = level_shape_at(&e->level, world);
+    if (shape >= 0) {
+        hit.kind = HIT_SHAPE_INTERIOR;
+        hit.index = shape;
     }
     return hit;
 }
@@ -677,9 +791,15 @@ static void delete_selection(Editor* e) {
     sel_prune(e);
     if (sel_count(&e->selection) == 0) return;
     Selection* s = &e->selection;
+    bool wall_delete[LEVEL_MAX_WALLS] = { false };
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (s->walls[i]) wall_delete[i] = true;
+    }
     int deleted = 0;
     for (int i = e->level.door_count - 1; i >= 0; i--) {
-        if (s->doors[i] && level_delete_door(&e->level, i)) deleted++;
+        int wall = level_find_wall_index(&e->level, e->level.doors[i].wall);
+        bool hosted = wall >= 0 && wall_delete[wall];
+        if ((s->doors[i] || hosted) && level_delete_door(&e->level, i)) deleted++;
     }
     for (int i = e->level.label_count - 1; i >= 0; i--) {
         if (s->labels[i] && level_delete_label(&e->level, i)) deleted++;
@@ -690,9 +810,8 @@ static void delete_selection(Editor* e) {
     for (int i = e->level.room_count - 1; i >= 0; i--) {
         if (s->rooms[i] && level_delete_room(&e->level, i)) deleted++;
     }
-    for (int i = e->level.shape_count - 1; i >= 0; i--) {
-        if (!s->shapes[i]) continue;
-        if (level_delete_shape(&e->level, e->level.shapes[i].id)) deleted++;
+    for (int i = e->level.wall_count - 1; i >= 0; i--) {
+        if (wall_delete[i] && level_delete_wall(&e->level, i)) deleted++;
     }
     sel_clear(e);
     cancel_gesture(e);
@@ -707,11 +826,12 @@ static void delete_selection(Editor* e) {
 }
 
 typedef struct {
-    int shapes, rooms, doors, labels, stairs;
+    int walls, shapes, rooms, doors, labels, stairs;
 } LevelCounts;
 
 static LevelCounts level_counts(const Level* level) {
     return (LevelCounts){
+        level->wall_count,
         level->shape_count,
         level->room_count,
         level->door_count,
@@ -721,8 +841,8 @@ static LevelCounts level_counts(const Level* level) {
 }
 
 static bool counts_equal(LevelCounts a, LevelCounts b) {
-    return a.shapes == b.shapes && a.rooms == b.rooms && a.doors == b.doors &&
-           a.labels == b.labels && a.stairs == b.stairs;
+    return a.walls == b.walls && a.shapes == b.shapes && a.rooms == b.rooms &&
+           a.doors == b.doors && a.labels == b.labels && a.stairs == b.stairs;
 }
 
 static void sel_after_history(Editor* e, LevelCounts before) {
@@ -1163,21 +1283,6 @@ static void draw_selection_object(const Editor* e, SelKind kind, int index, bool
     ImDrawList* dl = igGetWindowDrawList();
     ImU32 col = col32(SELECT_COL);
     switch (kind) {
-        case SEL_SHAPE: {
-            int indices[LEVEL_MAX_WALLS];
-            int n = level_shape_wall_indices(&e->level, e->level.shapes[index].id,
-                                             indices, LEVEL_MAX_WALLS);
-            float thickness = primary ? 3.0f : 2.5f;
-            float radius = primary ? 3.5f : 2.5f;
-            for (int k = 0; k < n; k++) {
-                const Wall* w = &e->level.walls[indices[k]];
-                ImDrawList_AddLineEx(dl, world_to_screen(e, w->a),
-                                     world_to_screen(e, w->b), col, thickness, 0);
-                ImDrawList_AddCircleFilled(dl, world_to_screen(e, w->a), radius, col, 12);
-                ImDrawList_AddCircleFilled(dl, world_to_screen(e, w->b), radius, col, 12);
-            }
-            break;
-        }
         case SEL_ROOM: {
             const Room* room = &e->level.rooms[index];
             ImVec2 pts[LEVEL_MAX_ROOM_PTS + 1];
@@ -1246,6 +1351,7 @@ static void draw_selection_object(const Editor* e, SelKind kind, int index, bool
             else ImDrawList_AddRectEx(dl, pmin, pmax, col, 0.0f, 2.0f, 0);
             break;
         }
+        case SEL_WALL:
         case SEL_NONE:
         default: break;
     }
@@ -1262,10 +1368,78 @@ static void draw_marquee(const Editor* e) {
     ImDrawList_AddRectEx(dl, pmin, pmax, col32a(ACCENT_COL, 220), 0.0f, 1.5f, 0);
 }
 
+static bool wall_selected(const Selection* s, int index) {
+    return index >= 0 && index < LEVEL_MAX_WALLS && s->walls[index];
+}
+
+static bool endpoint_selected(const Editor* e, Vec2 p) {
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (!wall_selected(&e->selection, i)) continue;
+        const Wall* w = &e->level.walls[i];
+        if (v2_equal(w->a, p, 0.001f) || v2_equal(w->b, p, 0.001f)) return true;
+    }
+    return false;
+}
+
+static bool shape_selected(const Editor* e, ShapeId id) {
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (e->level.walls[i].shape == id && wall_selected(&e->selection, i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void add_vertex(Vec2* verts, int* count, Vec2 p) {
+    if (*count >= LEVEL_MAX_WALLS * 2) return;
+    for (int i = 0; i < *count; i++) {
+        if (v2_equal(verts[i], p, 0.001f)) return;
+    }
+    verts[(*count)++] = p;
+}
+
+static void draw_selected_edges(const Editor* e) {
+    ImDrawList* dl = igGetWindowDrawList();
+    ImU32 accent = col32(SELECT_COL);
+    ImU32 dim = col32a(SELECT_COL, 80);
+    ImU32 amber = col32(VERTEX_SELECT_COL);
+    for (int s = 0; s < e->level.shape_count; s++) {
+        const Shape* shape = &e->level.shapes[s];
+        if (!shape_selected(e, shape->id)) continue;
+
+        int indices[LEVEL_MAX_WALLS];
+        int n = level_shape_wall_indices(&e->level, shape->id, indices,
+                                         LEVEL_MAX_WALLS);
+        Vec2 verts[LEVEL_MAX_WALLS * 2];
+        int vertex_count = 0;
+        for (int k = 0; k < n; k++) {
+            int index = indices[k];
+            const Wall* w = &e->level.walls[index];
+            bool selected = wall_selected(&e->selection, index);
+            bool primary = selected && e->selection.primary.kind == SEL_WALL &&
+                           e->selection.primary.index == index;
+            float thickness = selected ? (primary ? 3.5f : 3.0f) : 1.5f;
+            ImDrawList_AddLineEx(dl, world_to_screen(e, w->a),
+                                 world_to_screen(e, w->b),
+                                 selected ? accent : dim, thickness, 0);
+            add_vertex(verts, &vertex_count, w->a);
+            add_vertex(verts, &vertex_count, w->b);
+        }
+        for (int k = 0; k < vertex_count; k++) {
+            bool selected = endpoint_selected(e, verts[k]);
+            ImDrawList_AddCircleFilled(dl, world_to_screen(e, verts[k]),
+                                       selected ? 3.6f : 2.4f,
+                                       selected ? amber : dim, 12);
+        }
+    }
+}
+
 static void draw_selection(Editor* e) {
     sel_prune(e);
+    draw_selected_edges(e);
     for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
         SelKind kind = (SelKind)k;
+        if (kind == SEL_WALL) continue;
         int cap = sel_cap(kind);
         for (int i = 0; i < cap; i++) {
             if (!sel_has(&e->selection, kind, i)) continue;
@@ -1274,7 +1448,7 @@ static void draw_selection(Editor* e) {
         }
     }
     SelRef primary = e->selection.primary;
-    if (sel_has(&e->selection, primary.kind, primary.index)) {
+    if (primary.kind != SEL_WALL && sel_has(&e->selection, primary.kind, primary.index)) {
         draw_selection_object(e, primary.kind, primary.index, true);
     }
 }
@@ -1421,7 +1595,16 @@ static int moved_objects(const Editor* e, int* left_behind) {
     const Selection* s = &e->selection;
     int moved = sel_count_kind(s, SEL_ROOM) + sel_count_kind(s, SEL_LABEL) +
                 sel_count_kind(s, SEL_STAIRS);
-    *left_behind = sel_count_kind(s, SEL_DOOR);
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (e->gesture.walls[i]) moved++;
+    }
+    *left_behind = 0;
+    for (int i = 0; i < e->level.door_count; i++) {
+        if (!s->doors[i]) continue;
+        int wall = level_find_wall_index(&e->level, e->level.doors[i].wall);
+        if (wall >= 0 && e->gesture.walls[wall]) moved++;
+        else (*left_behind)++;
+    }
     return moved;
 }
 
@@ -1445,21 +1628,44 @@ static void finish_move(Editor* e) {
 }
 
 static void begin_move(Editor* e, Vec2 world, Vec2 anchor) {
-    e->gesture.kind = GESTURE_MOVE;
-    e->gesture.press_world = world;
-    e->gesture.anchor = anchor;
-    e->gesture.move_applied = v2(0.0f, 0.0f);
-    e->gesture.moved = false;
+    Gesture* g = &e->gesture;
+    g->kind = GESTURE_MOVE;
+    g->press_world = world;
+    g->anchor = anchor;
+    g->move_applied = v2(0.0f, 0.0f);
+    g->moved = false;
+    memcpy(g->walls, e->selection.walls, sizeof g->walls);
 }
 
 static void begin_reshape(Editor* e, int wall_index, Vec2 world) {
+    Gesture* g = &e->gesture;
     const Wall* wall = &e->level.walls[wall_index];
-    e->gesture.kind = GESTURE_RESHAPE;
-    e->gesture.wall_index = wall_index;
-    e->gesture.start_coord = wall_is_vertical(wall) ? wall->a.x : wall->a.y;
-    e->gesture.press_world = world;
-    e->gesture.applied = 0.0f;
-    e->gesture.moved = false;
+    g->kind = GESTURE_RESHAPE;
+    g->press_world = world;
+    g->move_applied = v2(0.0f, 0.0f);
+    g->moved = false;
+    memcpy(g->walls, e->selection.walls, sizeof g->walls);
+    g->ref_wall_x = -1;
+    g->ref_wall_y = -1;
+    bool vertical = wall_is_vertical(wall);
+    if (vertical) {
+        g->ref_wall_x = wall_index;
+        g->ref_start_x = wall->a.x;
+    } else {
+        g->ref_wall_y = wall_index;
+        g->ref_start_y = wall->a.y;
+    }
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (!g->walls[i]) continue;
+        bool v = wall_is_vertical(&e->level.walls[i]);
+        if (v && g->ref_wall_x < 0) {
+            g->ref_wall_x = i;
+            g->ref_start_x = e->level.walls[i].a.x;
+        } else if (!v && g->ref_wall_y < 0) {
+            g->ref_wall_y = i;
+            g->ref_start_y = e->level.walls[i].a.y;
+        }
+    }
 }
 
 static void marquee_select(Editor* e, Rect rect, bool additive) {
@@ -1482,11 +1688,11 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
         }
     }
     for (int i = 0; i < e->level.wall_count; i++) {
-        if (!segment_intersects_rect(e->level.walls[i].a, e->level.walls[i].b, rect)) {
+        if (!segment_intersects_rect(e->level.walls[i].a, e->level.walls[i].b,
+                                     rect)) {
             continue;
         }
-        int shape = shape_index_of_wall(e, i);
-        if (shape >= 0) sel_add(e, SEL_SHAPE, shape);
+        sel_add(e, SEL_WALL, i);
     }
     for (int i = 0; i < e->level.room_count; i++) {
         const Room* room = &e->level.rooms[i];
@@ -1540,7 +1746,8 @@ static void update_drag(Editor* e, bool have_pointer) {
                 }
                 Vec2 step = v2_sub(delta, g->move_applied);
                 if (fabsf(step.x) > 0.0001f || fabsf(step.y) > 0.0001f) {
-                    bool moved_any = false;
+                    bool moved_any = level_move_walls(&e->level, g->walls,
+                                                      e->level.wall_count, step);
                     for (int i = 0; i < e->level.label_count; i++) {
                         if (!sel_has(&e->selection, SEL_LABEL, i)) continue;
                         if (level_move_label(&e->level, i,
@@ -1565,34 +1772,52 @@ static void update_drag(Editor* e, bool have_pointer) {
                     }
                 }
             }
-            if (!down) finish_move(e);
+            if (!down) {
+                collapse_click(e);
+                finish_move(e);
+            }
             break;
         }
         case GESTURE_RESHAPE: {
-            if (down && g->wall_index >= 0 && g->wall_index < e->level.wall_count) {
-                const Wall* wall = &e->level.walls[g->wall_index];
-                bool vertical = wall_is_vertical(wall);
-                float coord = vertical ? world.x : world.y;
-                float press = vertical ? g->press_world.x : g->press_world.y;
-                float raw = coord - press;
-                float total = raw;
+            if (down) {
+                Vec2 raw = v2_sub(world, g->press_world);
+                Vec2 total = raw;
                 if (e->snap) {
-                    total = snap_scalar(g->start_coord + raw, e->grid_size) -
-                            g->start_coord;
+                    total.x = g->ref_wall_x >= 0
+                                  ? snap_scalar(g->ref_start_x + raw.x,
+                                                e->grid_size) - g->ref_start_x
+                                  : 0.0f;
+                    total.y = g->ref_wall_y >= 0
+                                  ? snap_scalar(g->ref_start_y + raw.y,
+                                                e->grid_size) - g->ref_start_y
+                                  : 0.0f;
                 }
-                float step = total - g->applied;
-                if (fabsf(step) > 0.0001f) {
-                    float before = vertical ? wall->a.x : wall->a.y;
-                    if (level_slide_wall_edge(&e->level, g->wall_index, step, 4.0f)) {
-                        const Wall* moved = &e->level.walls[g->wall_index];
-                        float after = vertical ? moved->a.x : moved->a.y;
-                        g->applied += after - before;
+                Vec2 step = v2_sub(total, g->move_applied);
+                if (fabsf(step.x) > 0.0001f || fabsf(step.y) > 0.0001f) {
+                    float before_x = g->ref_wall_x >= 0
+                                         ? e->level.walls[g->ref_wall_x].a.x
+                                         : 0.0f;
+                    float before_y = g->ref_wall_y >= 0
+                                         ? e->level.walls[g->ref_wall_y].a.y
+                                         : 0.0f;
+                    if (level_slide_edges(&e->level, g->walls,
+                                          e->level.wall_count, step, 4.0f)) {
+                        float after_x = g->ref_wall_x >= 0
+                                            ? e->level.walls[g->ref_wall_x].a.x
+                                            : 0.0f;
+                        float after_y = g->ref_wall_y >= 0
+                                            ? e->level.walls[g->ref_wall_y].a.y
+                                            : 0.0f;
+                        g->move_applied = v2_add(g->move_applied,
+                                                 v2(after_x - before_x,
+                                                    after_y - before_y));
                         g->moved = true;
                     }
                 }
             }
             if (!down) {
                 if (g->moved) commit(e, "Reshaped");
+                else collapse_click(e);
                 cancel_gesture(e);
             }
             break;
@@ -1614,6 +1839,7 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             if (!down) {
                 if (g->moved) commit(e, "Door moved");
+                else collapse_click(e);
                 cancel_gesture(e);
             }
             break;
@@ -1646,6 +1872,7 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             if (!down) {
                 if (g->moved) commit(e, "Door resized");
+                else collapse_click(e);
                 cancel_gesture(e);
             }
             break;
@@ -1710,14 +1937,9 @@ static void close_wall_chain(Editor* e, bool via_enter) {
     }
     level_set_shape_fill(&e->level, g->shape, e->shape_fill);
 
-    int index = shape_index_of_id(e, g->shape);
+    ShapeId closed = g->shape;
     cancel_gesture(e);
-    if (index < 0) {
-        sel_clear(e);
-        set_status(e, true, "The closed shape disappeared");
-        return;
-    }
-    sel_only(e, SEL_SHAPE, index);
+    sel_only_shape_walls(e, closed);
     commit(e, "Shape closed");
 }
 
@@ -1758,7 +1980,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
     Hit hit = hit_test(e, world);
-    if (hit.kind == SEL_NONE) {
+    if (hit.kind == HIT_NONE) {
         cancel_gesture(e);
         if (!shift) sel_clear(e);
         Gesture* g = &e->gesture;
@@ -1772,55 +1994,68 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         return;
     }
 
-    SelKind sel_kind = hit.kind;
-    int sel_index = hit.index;
-    if (hit.kind == SEL_WALL) {
-        int shape = shape_index_of_wall(e, hit.index);
-        if (shape < 0) {
-            cancel_gesture(e);
-            set_status(e, true, "That wall has no shape");
-            return;
-        }
-        sel_kind = SEL_SHAPE;
-        sel_index = shape;
+    Target target;
+    target_from_hit(e, hit, &target);
+    if (target.kind == SEL_NONE ||
+        (target.kind == SEL_WALL && target.wall_count <= 0)) {
+        cancel_gesture(e);
+        set_status(e, true, "That object has no selectable contents");
+        return;
     }
 
+    bool already = target_selected(e, &target);
     if (ctrl) {
         cancel_gesture(e);
-        sel_toggle(e, sel_kind, sel_index);
+        target_toggle(e, &target);
+        if (target.index >= 0) sel_set_primary(e, target.kind, target.index);
         int n = sel_count(&e->selection);
         if (n == 0) set_status(e, false, "Selection cleared");
         else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
         return;
     }
-
     if (shift) {
         cancel_gesture(e);
-        sel_add(e, sel_kind, sel_index);
+        target_add(e, &target);
+        if (target.index >= 0) sel_set_primary(e, target.kind, target.index);
         int n = sel_count(&e->selection);
         set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
         return;
     }
 
-    bool in_group = sel_count(&e->selection) > 1 &&
-                    sel_has(&e->selection, sel_kind, sel_index);
-    if (in_group) sel_set_primary(e, sel_kind, sel_index);
-    else sel_only(e, sel_kind, sel_index);
+    bool in_group = sel_count(&e->selection) > 1 && already;
+    if (in_group) {
+        if (target.index >= 0) sel_set_primary(e, target.kind, target.index);
+    } else {
+        target_only(e, &target);
+        if (target.index >= 0) sel_set_primary(e, target.kind, target.index);
+    }
     cancel_gesture(e);
+    e->gesture.collapse = target;
+    e->gesture.collapse_on_release = in_group;
 
-    if (hit.kind == SEL_WALL) {
-        begin_reshape(e, hit.index, world);
-        int n = sel_count(&e->selection);
-        if (n > 1) {
-            set_status(e, false, "%d objects selected", n);
+    if (target.kind == SEL_WALL) {
+        int edges = sel_count_kind(&e->selection, SEL_WALL);
+        bool only_walls = edges == sel_count(&e->selection);
+        if (only_walls && !selection_walls_whole_shape(e)) {
+            begin_reshape(e, target.index, world);
+            if (edges == 1) set_status(e, false, "Edge selected");
+            else set_status(e, false, "%d edges selected", edges);
+            return;
+        }
+        Vec2 anchor;
+        if (!primary_anchor(e, &anchor)) return;
+        begin_move(e, world, anchor);
+        if (edges == sel_count(&e->selection)) {
+            set_status(e, false, "%d edges selected", edges);
         } else {
-            set_status(e, false, "Shape %u selected",
-                       (unsigned)e->level.shapes[sel_index].id);
+            set_status(e, false, "%d objects selected", sel_count(&e->selection));
         }
         return;
     }
-    if (hit.kind == SEL_DOOR) {
-        Door* d = &e->level.doors[hit.index];
+
+    if (target.kind == SEL_DOOR) {
+        int door_index = target.index;
+        Door* d = &e->level.doors[door_index];
         const Wall* w = level_wall_by_id_const(&e->level, d->wall);
         if (!w) return;
         float len = wall_length(w);
@@ -1845,9 +2080,9 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         } else {
             e->gesture.kind = GESTURE_DOOR_SLIDE;
         }
-        e->gesture.object_index = hit.index;
+        e->gesture.object_index = door_index;
         e->gesture.moved = false;
-        set_status(e, false, "Door %d selected", hit.index + 1);
+        set_status(e, false, "Door %d selected", door_index + 1);
         return;
     }
 
@@ -1855,8 +2090,8 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     if (!primary_anchor(e, &anchor)) return;
     begin_move(e, world, anchor);
     set_status(e, false, "%s selected",
-               hit.kind == SEL_ROOM ? "Room" :
-               hit.kind == SEL_LABEL ? "Label" : "Stairs");
+               target.kind == SEL_ROOM ? "Room" :
+               target.kind == SEL_LABEL ? "Label" : "Stairs");
 }
 
 static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse) {
@@ -2270,8 +2505,8 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_SELECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Click a wall to select its shape. Shift adds, Ctrl toggles.");
-            small_note("Drag a wall to reshape the shape. Drag empty canvas to marquee.");
+            small_note("Click an edge to select it. Shift adds, Ctrl toggles.");
+            small_note("Drag an edge to reshape; drag a group to move it. Drag empty canvas to marquee.");
             break;
         case TOOL_COUNT:
         default: break;
@@ -2288,11 +2523,21 @@ static void object_delete_button(Editor* e) {
     igPopStyleColorEx(3);
 }
 
-static void inspector_shape(Editor* e, int idx) {
-    Shape* shape = &e->level.shapes[idx];
+static void inspector_edge(Editor* e, int idx) {
+    if (idx < 0 || idx >= e->level.wall_count) return;
+    const Wall* wall = &e->level.walls[idx];
+    Shape* shape = level_shape_by_id(&e->level, wall->shape);
+    if (!shape) return;
     int indices[LEVEL_MAX_WALLS];
     int walls = level_shape_wall_indices(&e->level, shape->id, indices,
                                          LEVEL_MAX_WALLS);
+    int edge = 0;
+    for (int i = 0; i < walls; i++) {
+        if (indices[i] == idx) {
+            edge = i + 1;
+            break;
+        }
+    }
     heading("Wall shape");
     igText("Shape %u", (unsigned)shape->id);
     igText("%s", shape->closed ? "Closed" : "Open");
@@ -2316,6 +2561,7 @@ static void inspector_shape(Editor* e, int idx) {
         level_set_shape_fill(&e->level, shape->id, SHAPE_FILL_RED);
         commit(e, "Shape fill changed");
     }
+    igText("Edge %d of %d", edge, walls);
     igDummy((ImVec2){ 0.0f, 4.0f });
     object_delete_button(e);
 }
@@ -2466,13 +2712,13 @@ static void inspector_many(Editor* e) {
     heading("Selection");
     igText("%d objects selected", sel_count(s));
     igDummy((ImVec2){ 0.0f, 4.0f });
-    if (sel_count_kind(s, SEL_SHAPE)) igText("Shapes  %d", sel_count_kind(s, SEL_SHAPE));
+    if (sel_count_kind(s, SEL_WALL)) igText("Edges   %d", sel_count_kind(s, SEL_WALL));
     if (sel_count_kind(s, SEL_ROOM)) igText("Rooms   %d", sel_count_kind(s, SEL_ROOM));
     if (sel_count_kind(s, SEL_DOOR)) igText("Doors   %d", sel_count_kind(s, SEL_DOOR));
     if (sel_count_kind(s, SEL_LABEL)) igText("Labels  %d", sel_count_kind(s, SEL_LABEL));
     if (sel_count_kind(s, SEL_STAIRS)) igText("Stairs  %d", sel_count_kind(s, SEL_STAIRS));
     igDummy((ImVec2){ 0.0f, 6.0f });
-    small_note("Rooms, labels, and stairs move together. Shapes stay put; drag a shape wall to reshape it.");
+    small_note("Walls and doors move with the group. Drag an edge to reshape the selected edges.");
     igDummy((ImVec2){ 0.0f, 6.0f });
     object_delete_button(e);
 }
@@ -2493,12 +2739,11 @@ static void draw_inspector(Editor* e) {
     SelRef single;
     if (sel_single(&e->selection, &single)) {
         switch (single.kind) {
-            case SEL_SHAPE: inspector_shape(e, single.index); break;
+            case SEL_WALL: inspector_edge(e, single.index); break;
             case SEL_ROOM: inspector_room(e, single.index); break;
             case SEL_DOOR: inspector_door(e, single.index); break;
             case SEL_LABEL: inspector_label(e, single.index); break;
             case SEL_STAIRS: inspector_stairs(e, single.index); break;
-            case SEL_WALL:
             case SEL_NONE:
             default: break;
         }
@@ -2522,8 +2767,8 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("F fit level, G toggle grid");
         igTextDisabled("Shift-click adds; Ctrl-click toggles");
         igTextDisabled("Drag empty canvas to marquee");
-        igTextDisabled("Drag a wall shape's edge to reshape it");
-        igTextDisabled("Drag rooms, labels, or stairs together");
+        igTextDisabled("Drag selected edges to reshape them");
+        igTextDisabled("Drag a group to move walls, doors, rooms, labels, or stairs");
         igTextDisabled("Drag a door to slide; drag an end to resize");
         igTextDisabled("Delete removes every selected object");
         igTextDisabled("Esc deselects then cancels a draft");
@@ -2609,9 +2854,9 @@ static void draw_help_modal(Editor* e) {
     igBullet();
     igText("Drag empty canvas to marquee a group.");
     igBullet();
-    igText("Drag a wall of a shape to reshape it.");
+    igText("Drag selected edges to reshape them.");
     igBullet();
-    igText("Drag rooms, labels, or stairs to move the group.");
+    igText("Drag a group to move its walls, doors, rooms, labels, and stairs.");
     igBullet();
     igText("Drag a door to slide it; drag an end to resize.");
     igBullet();
