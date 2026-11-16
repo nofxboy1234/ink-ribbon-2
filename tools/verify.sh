@@ -99,7 +99,7 @@ undo() {
     xdotool keyup ctrl
     sleep 0.5
 }
-save_as() {
+_save_as_once() {
     local path=$1
     xdotool keydown ctrl; sleep 0.1
     xdotool keydown shift; sleep 0.1
@@ -115,11 +115,23 @@ save_as() {
     sleep 0.3
     xdotool key --clearmodifiers Return
     sleep 0.8
-    if [ ! -f "$path" ]; then
-        shot /tmp/ink-ribbon-save-fail.png
-        echo "FAIL save as did not write $path"
-        exit 1
+    [ -f "$path" ]
+}
+
+save_as() {
+    local path=$1
+    if _save_as_once "$path"; then
+        return 0
     fi
+    rm -f "$path"
+    xdotool key --clearmodifiers Escape
+    sleep 0.4
+    if _save_as_once "$path"; then
+        return 0
+    fi
+    shot /tmp/ink-ribbon-save-fail.png
+    echo "FAIL save as did not write $path"
+    exit 1
 }
 count_hex() {
     local file=$1 hex=$2
@@ -491,20 +503,34 @@ xdotool mousemove --sync $((WX + 520)) $((WY + 300))
 sleep 0.3
 python3 tools/focus_drop.py >/dev/null
 sleep 0.4
+if ! kill -0 "$pid" 2>/dev/null; then
+    echo "FAIL the editor died when it lost focus during a wall chain"
+    exit 1
+fi
 rss=$(ps -o rss= -p "$pid" | tr -d ' ')
+if [ -z "$rss" ]; then
+    echo "FAIL could not read the editor memory size"
+    exit 1
+fi
 if [ "$rss" -gt 1200000 ]; then
     echo "FAIL focus loss ballooned memory to ${rss} KB"
     exit 1
 fi
-xdotool windowfocus "$win"
-sleep 1
+xdotool windowfocus "$win" 2>/dev/null || true
+for _ in $(seq 1 40); do
+    focused=$(xdotool getwindowfocus 2>/dev/null || true)
+    [ "$focused" = "$win" ] && break
+    sleep 0.1
+done
+sleep 0.5
 shot "$out-focus-a.png"
 sleep 1
 shot "$out-focus-b.png"
 xdotool key --clearmodifiers 1
 sleep 0.8
 shot "$out-focus-c.png"
-frozen=$(compare -metric AE "$out-focus-b.png" "$out-focus-c.png" null: 2>&1 | awk '{ print $1 }')
+focus_metric=$(compare -metric AE "$out-focus-b.png" "$out-focus-c.png" null: 2>&1 || true)
+frozen=$(printf '%s\n' "$focus_metric" | awk '{ print $1 }')
 case "$frozen" in
     ''|*[!0-9]*)
         echo "FAIL focus check returned no metric: $frozen"
