@@ -483,6 +483,42 @@ if ! awk -v x="$glx" -v y="$gly" 'BEGIN { exit !(x % 32 == 0 && y % 32 == 0) }';
 fi
 echo "PASS a new object lands on the selected 32-unit lattice"
 
+echo "== losing focus during a wall chain must not freeze the editor =="
+xdotool key --clearmodifiers 2
+click 400 400
+click 500 400
+xdotool mousemove --sync $((WX + 520)) $((WY + 300))
+sleep 0.3
+python3 tools/focus_drop.py >/dev/null
+sleep 0.4
+rss=$(ps -o rss= -p "$pid" | tr -d ' ')
+if [ "$rss" -gt 1200000 ]; then
+    echo "FAIL focus loss ballooned memory to ${rss} KB"
+    exit 1
+fi
+xdotool windowfocus "$win"
+sleep 1
+shot "$out-focus-a.png"
+sleep 1
+shot "$out-focus-b.png"
+xdotool key --clearmodifiers 1
+sleep 0.8
+shot "$out-focus-c.png"
+frozen=$(compare -metric AE "$out-focus-b.png" "$out-focus-c.png" null: 2>&1 | awk '{ print $1 }')
+case "$frozen" in
+    ''|*[!0-9]*)
+        echo "FAIL focus check returned no metric: $frozen"
+        exit 1
+        ;;
+esac
+if [ "$frozen" -eq 0 ]; then
+    echo "FAIL editor did not redraw after focus returned (rss=${rss} KB)"
+    exit 1
+fi
+echo "PASS editor survived focus loss during a wall chain (rss=${rss} KB, ${frozen} px changed)"
+xdotool key --clearmodifiers Escape
+sleep 0.2
+
 echo "== no leftover test processes =="
 cleanup
 overflow=$(test_leftovers)
