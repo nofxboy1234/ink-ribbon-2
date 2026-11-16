@@ -43,7 +43,7 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 
 - The first click starts a chain at the grid-snapped point.
 - Each later click uses `snap_ortho(chain_last, cursor_world, grid)` so a segment is horizontal when `|dx| > |dy|`, vertical otherwise, and the free coordinate snaps to the grid.
-- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, then, when the fill prototype is `Auto`, add a room polygon from the chain points using the current fill color. End the chain. Select the new room.
+- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, then add a room polygon from the chain points using the current fill color. End the chain. Select the new room.
 - `Enter` also closes the chain when it has at least three points. `Esc` or right-click ends it open, keeping only the walls already added.
 - `Backspace` removes the last wall added in the current chain and moves the chain tip back. This is a live document mutation; commit history after it.
 - Show a preview segment from the last point to the constrained cursor, the first-point marker with a "close" highlight when near, and small vertex dots.
@@ -51,17 +51,15 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 
 ### Room
 
-Click points to draw a polygon fill directly, independent of walls. Points snap to the grid, no orthogonality constraint. Clicking the first point, `Enter`, or a double-click closes it. `Esc` cancels the draft. On close, require 3 points and call `level_add_room` with the current fill color. Select it. This is the manual fill path and stays available in both prototype modes.
+Click points to draw a polygon fill directly, independent of walls. Points snap to the grid, no orthogonality constraint. Clicking the first point, `Enter`, or a double-click closes it. `Esc` cancels the draft. On close, require 3 points and call `level_add_room` with the current fill color. Select it.
 
 ### Door
 
-Door placement follows the prototype switch.
+Click near a wall to add a door centered at the projected t with width `min(44, wall_length)`, current door color. The center snaps to the grid along the wall axis. Select the new door.
 
-- `Click` mode: click near a wall; add a door centered at the projected t with width `min(44, wall_length)`, current door color. Select it.
-- `Drag` mode: press near a wall, drag along it, release. Width is the dragged span length clamped to at least `DOOR_MIN_WIDTH` and at most the wall length, centered at the span midpoint. A press-release without movement behaves like click mode.
-- Hover highlights the nearest wall within tolerance and previews the door bar.
-- Door bar drawing follows the Door render prototype. `Cut` draws the wall in segments excluding each door span, then the bar, so the wall visually opens under the door. `Overlay` draws the full wall and the bar on top, then restrokes the wall through the bar so the difference is visible at normal zoom. Thickness is always `DOOR_THICKNESS`.
-- In Select, dragging a door body slides it along its wall. Dragging within 8 screen pixels of either end resizes it around the opposite end. Clamp through `level_set_door_span`.
+- Hover highlights the nearest wall within tolerance and previews the snapped door bar.
+- The wall is always drawn in segments that exclude each door span, then the bar. The wall visually opens under the door. Thickness is always `DOOR_THICKNESS`.
+- In Select, dragging a door body slides it along its wall. Dragging within 8 screen pixels of either end resizes it around the opposite end. Both snap with the grid and clamp through `level_set_door_span`.
 
 ### Label
 
@@ -75,11 +73,16 @@ Click places stairs at the snapped point using the current direction and step co
 
 Click hit-tests in this order: door, label, stairs, wall, room. Tolerance is 7 screen pixels for walls and doors. Labels use their measured text rect. Stairs use `level_stairs_rect`. Rooms use `level_room_at`.
 
-- Drag a label, stair, or room to move it. Rooms move all points. A drag mutates live and commits one history snapshot on release.
-- Drag a wall: select only. No wall endpoint editing in this version.
-- Click empty space clears the selection.
-- `Delete` or Edit > Delete removes the selection. Deleting a wall cascades its doors through `level_delete_wall`; clear the selection after.
-- `Esc` clears selection, then cancels chain or polygon draft.
+Selection is a bounded set per object kind plus a primary reference. The set is never serialized.
+
+- Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
+- Shift-click toggles the hit object in or out and does not start a drag.
+- Plain press on empty canvas clears the selection and starts a marquee. Shift-press starts an additive marquee. Travel under 4 screen pixels is a click.
+- On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap, rooms use polygon intersection.
+- Drag a selected label, stair, or room to move every selected label, stair, and room together. The group snaps from the primary object's anchor and commits one history snapshot on release. Walls stay fixed.
+- A selected door still slides or resizes on its own.
+- `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.
+- `Esc` clears selection, cancels a draft, or restores a live drag.
 
 ## Inspector
 
@@ -91,7 +94,7 @@ Show properties for the selected object, all edits through `level.*` and committ
 - Label: single-line text input, size slider 8 to 48, position, Delete.
 - Stairs: direction Horizontal/Vertical, step count slider `STAIR_MIN_STEPS` to `STAIR_MAX_STEPS`, position, Delete.
 
-When nothing is selected, show level counts and a short controls list.
+When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
 
 ## Tool options in the left panel
 
@@ -101,7 +104,7 @@ Below the tool buttons:
 - Fill color: Blue / Red swatches, used for new rooms and room recolor.
 - Door color: White / Red / Blue swatches.
 - Stairs: direction toggle and step count slider.
-- Prototype panel, either here or in the inspector: three radio groups for Door placement, Room fill, and Door render, with a one-line explanation and a "recommended" label on Click / Auto / Cut. These are comparison controls, not decorative.
+- Selection hints under a Selection heading: shift-click adds, drag empty canvas to marquee, and snap follows the grid size.
 
 ## File menu and persistence
 
@@ -115,11 +118,11 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Undo
 
-`History` stores whole-level snapshots. The UI commits after each completed mutation: add wall, close chain, add room, add door, add label, add stairs, delete, and a finished drag or inspector edit. Do not commit every mouse move. Undo/redo clears transient state and validates the selection.
+`History` stores whole-level snapshots. The UI commits after each completed mutation: add wall, close chain, add room, add door, add label, add stairs, delete, and a finished drag or inspector edit. Do not commit every mouse move. Undo/redo records the five pool counts. If any count changed, the selection clears. If counts are equal, it prunes invalid references.
 
 ## Keyboard summary
 
-1 to 6 tools, `Delete` delete, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Delete` delete the selection, `Shift` plus click toggle selection, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 
@@ -127,11 +130,13 @@ The UI owner must verify all of these on the real X11 window and report the comm
 
 1. `make` builds with no warnings from `src/`.
 2. Launch with the demo level. Screenshot shows blue and red fills, white/red/blue doors, labels, and hatched stairs. Sample pixels to prove the fill colors exist.
-3. Draw a closed four-click rectangle with the Wall tool. Screenshot shows the walls and, in Auto mode, a new fill. Verify with `level_stats` text or pixel sampling.
+3. Draw a closed four-click rectangle with the Wall tool. Screenshot shows the walls and a new fill. Verify with `level_stats` text or pixel sampling.
 4. Switch to Select, click the new fill, press Delete, screenshot or status confirms removal.
 5. Place a door on a wall, drag it along the wall, resize it, change its color in the inspector.
 6. Add a label, type in the inspector, move it. Add stairs, change step count and direction.
 7. Save to a temp path, New, Open the temp path, confirm the same object counts.
 8. Undo and redo at least one add and one delete.
+9. Shift-click two objects, drag them, confirm the group moves and snaps, then delete both in one step.
+10. Drag a marquee across the level, delete all, undo, and confirm the counts return.
 
 Screenshots go to `/tmp/ink-ribbon-verify-*.png`. Do not commit them.

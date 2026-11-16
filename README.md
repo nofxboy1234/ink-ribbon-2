@@ -45,6 +45,8 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Add text labels anywhere, edit the text in the inspector, resize and move them.
 - Add standard stairs with 2 to 48 steps. The step count sets the run length, and each run is horizontal or vertical.
 - Select, move, edit, and delete the placed objects. Deleting a wall also deletes the doors hosted by it.
+- Click to select, shift-click to add or remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step, and dragging selected labels, stairs, and rooms moves them together.
+- Snap to the grid on placement and movement. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
 ## Controls
@@ -53,12 +55,14 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | --- | --- |
 | 1 to 6 | Select, Wall, Room, Door, Label, Stairs |
 | Left click | Use the active tool |
+| Shift plus left click | Toggle an object in the selection |
+| Drag on empty canvas | Marquee select; Shift adds to the selection |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
 | Enter | Close a wall chain or room polygon |
-| Esc | Clear the selection, then cancel a draft |
+| Esc | Clear the selection, cancel a draft, or cancel a drag |
 | Backspace | Remove the last wall in the current chain |
-| Delete | Delete the selected object |
+| Delete | Delete every selected object |
 | F | Fit the level |
 | G | Toggle the grid |
 | Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z | Undo, redo |
@@ -74,41 +78,23 @@ Painted areas are explicit polygons. That keeps their color and identity when ne
 
 Labels store a position, a size, and a string. Stairs store a center, a direction, and a step count. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size.
 
+Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click toggles an object, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a selected label, stair, or room moves all selected labels, stairs, and rooms together. Doors keep their own slide and end-resize gestures. Walls stay selected but do not move.
+
+Snap-to-grid applies to wall and room points, labels, stairs, door centers, door spans, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
+
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. Closing a loop writes its closing walls and the fill together. The history keeps 64 levels.
 
-## Prototype options
+## Selection and snapping
 
-The Prototype panel switches three interaction choices at runtime. All six behaviors are implemented. These screenshots were taken from the running editor.
+![Marquee selection in progress](docs/screenshots/marquee.png)
 
-### Door placement
+A plain click selects one object. Shift-click adds or removes an object. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
 
-Click places a standard 44 unit door on the nearest wall and selects it. Drag sets the span in one press, drag, release gesture.
+![Two selected labels](docs/screenshots/selection.png)
 
-| Click, recommended | Drag |
-| --- | --- |
-| ![Click placement](docs/screenshots/proto-door-click.png) | ![Drag placement](docs/screenshots/proto-door-drag.png) |
+Dragging a selected label, stair, or room moves every selected label, stair, and room. A door in a multi-selection still slides along its wall or resizes from an end. Snap uses the grid size set in the left panel. The group snaps from the primary object's anchor, so the rest of the group keeps its offset.
 
-Click wins for the common loop of placing many doors quickly. The inspector changes length later when needed. Drag is better when the span is known before placing.
-
-### Room fill
-
-Auto creates a blue or red fill when a wall chain closes. Manual leaves the closed loop unfilled and the Room tool draws fills explicitly.
-
-| Auto, recommended | Manual |
-| --- | --- |
-| ![Automatic fill](docs/screenshots/proto-fill-auto.png) | ![Manual fill](docs/screenshots/proto-fill-manual.png) |
-
-Auto matches the requested workflow, where closing the lines creates the area to color. Manual is there for painted areas that do not follow the walls, which the reference also uses.
-
-### Door render
-
-Cut interrupts the wall behind the door. Overlay keeps the wall visible through the bar.
-
-| Cut, recommended | Overlay |
-| --- | --- |
-| ![Cut door render](docs/screenshots/proto-render-cut.png) | ![Overlay door render](docs/screenshots/proto-render-overlay.png) |
-
-Cut matches the reference image. Overlay is useful when checking that a door sits on a continuous wall.
+The recommended interaction settings are now the only behavior. Door placement is click only, closing a wall loop always creates a fill, and a door always opens the wall behind it. The Prototype panel and its unused variants were removed.
 
 ## Level format
 
@@ -134,7 +120,7 @@ Records are `wall`, `room`, `door`, `label`, and `stairs`. Walls carry their ids
 | `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
 | `src/level.c` | level document, edits, save, load, undo ring |
 | `src/geom.c` | vectors, snapping, segment and polygon math |
-| `tests/test_level.c` | 156 headless checks for the core |
+| `tests/test_level.c` | 163 headless checks for the core |
 | `tools/verify.sh` | end-to-end X11 check with pixel evidence |
 | `tools/shot.sh` | build, launch, drive, screenshot |
 | `tools/gen_demo_map.py` | regenerate the demo level |
@@ -153,17 +139,21 @@ make verify
 
 ```text
 PASS build without warnings
-PASS core tests
+PASS prototype settings removed
+PASS core tests (163 checks)
 PASS demo fills blue=28197 red=25854 white=440
 PASS closed loop added a fill (+9296 blue px)
 PASS delete removed the fill
 PASS undo restored the fill
-PASS click placement added a white door (+50 white px)
+PASS click placement added a white door (+52 white px)
 PASS label typed and deactivated
-PASS save wrote 46 walls, 11 doors, and the unmoved label
-PASS reload restored the level (blue=37760)
-PASS overlay render differs by 793 px
-PASS l-shaped close created a fill (+6800 blue px)
+PASS save wrote 46 walls, 11 doors, a grid label, and a grid door
+PASS reload restored the level (blue=37899)
+PASS marquee selected and deleted the whole level
+PASS undo restored the level after marquee delete
+PASS group drag moved both labels onto the grid
+PASS shift selection deleted both labels in one step
+PASS l-shaped close created a fill (+6884 blue px)
 PASS l-shaped close saved 4 new walls and a 4 point room
 ALL EDITOR CHECKS PASSED
 ```
@@ -175,9 +165,9 @@ The script assumes a 1280x800 window and the default panel widths. Screenshots l
 - Walls are horizontal or vertical only. Walls can be selected and deleted, but their endpoints do not drag. Deleting a wall cascades its doors.
 - Painted areas are independent polygons and do not follow wall edits.
 - Fixed capacities are 512 walls, 64 areas, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
-- One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste, no multi-select, and no native file dialog.
+- One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.
+- Group drag moves labels, stairs, and rooms. Walls and doors stay fixed, and a door slides or resizes on its own.
 - The editor was tested on Linux and X11 only.
-- The door prototype holds the wall stroke under the bar in Overlay mode so the difference from Cut is visible at normal zoom.
 
 ## Third party
 

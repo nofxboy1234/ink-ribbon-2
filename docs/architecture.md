@@ -20,17 +20,13 @@ Undo is a ring of `Level` snapshots in `History`. The UI commits one snapshot pe
 
 The core (`geom.*`, `level.*`) includes no sokol or ImGui header and builds with gcc alone, so it is tested headlessly. `main.c` owns the sokol lifecycle. `editor.*` owns UI state, gestures, and drawing. The split is enforced by the Makefile: `make test` links only the core.
 
-## Prototypes
+## Fixed interaction choices
 
-The editor ships an in-app Prototype panel with three switches, because the interaction feel is the part worth comparing in the real surface.
+The prototype comparison picked click door placement, automatic room fill on wall-loop close, and cut door rendering. Those are now the only behavior. The Prototype panel and the drag-placement, manual-fill, and overlay-render branches were removed. The Room tool still draws explicit fills for painted areas that do not follow walls.
 
-Door placement. `Click` places a standard door on the nearest wall and selects it. `Drag` sets the span in one press-drag-release gesture.
+Selection is UI state in `editor.c`, not part of `Level`. It is five bounded per-kind sets plus a primary reference. Shift-click toggles, a marquee replaces or adds, and Delete removes every selected object in one snapshot. Labels, stairs, and rooms move as a group. Doors keep door-only slide and resize gestures.
 
-Room fill. `Auto` creates a filled room when a wall chain closes. `Manual` leaves the loop unfilled and the Room tool draws a polygon explicitly.
-
-Door render. `Cut` interrupts the wall behind the door, as in the reference. `Overlay` draws the bar on top of a continuous wall.
-
-Each variant can be screenshotted from the running app. The README records the recommendation after the comparison.
+Snap applies to placement and to label, stair, room, door, and group drags. Group drags snap from the primary object's anchor so relative spacing is preserved. The Snap checkbox and grid size remain user controls.
 
 ## Alternatives rejected
 
@@ -43,7 +39,7 @@ Each variant can be screenshotted from the running app. The README records the r
 
 - Fixed capacities (512 walls, 64 rooms, 256 doors, 128 labels, 64 stairs) are enough for a floor plan and keep the format and snapshots simple. Capacity failure is reported in the status line.
 - Rooms are duplicated geometry rather than derived topology. A room can drift from its walls after wall deletion; that matches the reference, where fills are painted areas.
-- Selection is a kind plus index. Deleting an object clears the selection, and doors keep stable wall IDs, so no generational handles are needed.
+- Selection is a bounded set per object kind plus a primary reference. It is cleared when an undo changes pool counts, so indices never retarget silently. Doors keep stable wall IDs, so no generational handles are needed.
 - `make test` covers the pure core only. Canvas behavior is proven by driving the real window and screenshotting it.
 
 ## Synthesis decision
@@ -52,4 +48,4 @@ The base is the independent segment document above. Candidate A proposed a welde
 
 From candidate A we kept stable wall ids, the door host reference, the delete cascade, whole-document snapshots, the all-or-nothing load, and the fixed capacity constants. From candidate B we kept the typed pools, one gesture union, and the discovery that ImGui 1.93 has `ImDrawList_AddConcavePolyFilled`, which removes the triangulation A proposed. We rejected the vertex pool, generational handles, integer coordinates, and rooms as wall cycles.
 
-The prototype panel shipped all six variants. The recommendation is Click for door placement, Auto for room fill, and Cut for door render. The evidence and screenshots are in `README.md`.
+The prototype comparison picked Click for door placement, Auto for room fill, and Cut for door render. Those choices are now fixed, the panel is gone, and multi-selection plus grid snapping sit on top of the same document model. The evidence is in `README.md` and `tools/verify.sh`.
