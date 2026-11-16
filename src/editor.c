@@ -22,9 +22,6 @@
 #define CLOSE_TOL_PX 12.0f
 #define DRAG_END_PX 8.0f
 #define CANVAS_BG 0x0b0c0e
-#define GRID_FINE 0x111316
-#define GRID_COL 0x181b1f
-#define GRID_BRIGHT 0x232830
 #define WALL_COL 0x8b9097
 #define ROOM_BLUE_COL 0x2b3f50
 #define ROOM_RED_COL 0x4a2028

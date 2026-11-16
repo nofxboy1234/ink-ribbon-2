@@ -46,7 +46,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Add standard stairs with 2 to 48 steps. The step count sets the run length, and each run is horizontal or vertical.
 - Select, move, edit, and delete the placed objects. Deleting a wall also deletes the doors hosted by it.
 - Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step, and dragging anything selected moves the group together.
-- Snap to the grid on placement and movement. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
+- Snap to the grid on placement and movement. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
 ## Controls
