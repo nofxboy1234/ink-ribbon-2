@@ -7,14 +7,14 @@ LDFLAGS := -lGL -lX11 -lXi -lXcursor -ldl -lpthread -lm
 
 IMGUI_SRC := vendor/dcimgui/src/imgui.cpp vendor/dcimgui/src/imgui_draw.cpp vendor/dcimgui/src/imgui_tables.cpp vendor/dcimgui/src/imgui_widgets.cpp vendor/dcimgui/src/imgui_demo.cpp vendor/dcimgui/src/cimgui.cpp
 IMGUI_OBJ := $(patsubst vendor/dcimgui/src/%.cpp,$(BUILD)/%.o,$(IMGUI_SRC))
-APP_OBJ   := $(BUILD)/main.o
+APP_OBJ   := $(BUILD)/main.o $(BUILD)/editor.o
 CORE_OBJ  := $(BUILD)/geom.o $(BUILD)/level.o
 
-.PHONY: all run test clean
+.PHONY: all run test verify clean
 
 all: $(BUILD)/editor
 
-$(BUILD)/editor: $(APP_OBJ) $(IMGUI_OBJ)
+$(BUILD)/editor: $(APP_OBJ) $(CORE_OBJ) $(IMGUI_OBJ)
 	$(CXX) $^ $(LDFLAGS) -o $@
 
 $(BUILD)/%.o: vendor/dcimgui/src/%.cpp
@@ -37,6 +37,9 @@ $(BUILD)/test_level: $(BUILD)/test_level.o $(CORE_OBJ)
 
 test: $(BUILD)/test_level
 	./$(BUILD)/test_level
+
+verify: all
+	tools/verify.sh
 
 clean:
 	rm -rf $(BUILD)
