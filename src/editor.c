@@ -282,6 +282,17 @@ static bool primary_anchor(const Editor* e, Vec2* out) {
             if (e->level.rooms[ref.index].count <= 0) return false;
             *out = e->level.rooms[ref.index].pts[0];
             return true;
+        case SEL_WALL:
+            if (ref.index < 0 || ref.index >= e->level.wall_count) return false;
+            *out = e->level.walls[ref.index].a;
+            return true;
+        case SEL_DOOR:
+            if (ref.index < 0 || ref.index >= e->level.door_count) return false;
+            if (!level_wall_by_id_const(&e->level, e->level.doors[ref.index].wall)) {
+                return false;
+            }
+            *out = level_door_center(&e->level, &e->level.doors[ref.index]);
+            return true;
         default:
             return false;
     }
@@ -1289,7 +1300,7 @@ static void draw_status_strip(Editor* e) {
     if (e->status_error && e->status[0]) {
         snprintf(rest, sizeof rest, "  %s", e->status);
     } else if (e->status[0]) {
-        snprintf(rest, sizeof rest, "  %s   |   %s", TOOL_HINTS[e->tool], e->status);
+        snprintf(rest, sizeof rest, "  %s   |   %s", e->status, TOOL_HINTS[e->tool]);
     } else {
         snprintf(rest, sizeof rest, "  %s", TOOL_HINTS[e->tool]);
     }
@@ -1299,9 +1310,49 @@ static void draw_status_strip(Editor* e) {
     ImDrawList_PopClipRect(dl);
 }
 
+static int moved_objects(const Editor* e, int* left_behind) {
+    const Selection* s = &e->selection;
+    int moved = sel_count_kind(s, SEL_WALL) + sel_count_kind(s, SEL_ROOM) +
+                sel_count_kind(s, SEL_LABEL) + sel_count_kind(s, SEL_STAIRS);
+    int left = 0;
+    for (int i = 0; i < e->level.door_count; i++) {
+        int wall = level_find_wall_index(&e->level, e->level.doors[i].wall);
+        if (wall >= 0 && sel_has(s, SEL_WALL, wall)) {
+            moved++;
+        } else if (sel_has(s, SEL_DOOR, i)) {
+            left++;
+        }
+    }
+    *left_behind = left;
+    return moved;
+}
+
 static void finish_move(Editor* e) {
-    if (e->gesture.moved) commit(e, "Moved");
+    if (e->gesture.moved) {
+        int left = 0;
+        int moved = moved_objects(e, &left);
+        char message[256];
+        if (left > 0) {
+            snprintf(message, sizeof message,
+                     "Moved %d object%s; %d selected door%s left behind "
+                     "(host wall not selected)",
+                     moved, moved == 1 ? "" : "s",
+                     left, left == 1 ? "" : "s");
+        } else {
+            snprintf(message, sizeof message, "Moved %d object%s",
+                     moved, moved == 1 ? "" : "s");
+        }
+        commit(e, message);
+    }
     cancel_gesture(e);
+}
+
+static void begin_move(Editor* e, Vec2 world, Vec2 anchor) {
+    e->gesture.kind = GESTURE_MOVE;
+    e->gesture.press_world = world;
+    e->gesture.anchor = anchor;
+    e->gesture.applied = v2(0.0f, 0.0f);
+    e->gesture.moved = false;
 }
 
 static void marquee_select(Editor* e, Rect rect, bool additive) {
@@ -1376,22 +1427,33 @@ static void update_drag(Editor* e) {
                 }
                 Vec2 step = v2_sub(delta, g->applied);
                 if (fabsf(step.x) > 0.0001f || fabsf(step.y) > 0.0001f) {
+                    bool moved_any = false;
+                    for (int i = 0; i < e->level.wall_count; i++) {
+                        if (!sel_has(&e->selection, SEL_WALL, i)) continue;
+                        if (level_move_wall(&e->level, i, step)) moved_any = true;
+                    }
                     for (int i = 0; i < e->level.label_count; i++) {
                         if (!sel_has(&e->selection, SEL_LABEL, i)) continue;
-                        level_move_label(&e->level, i,
-                                         v2_add(e->level.labels[i].pos, step));
+                        if (level_move_label(&e->level, i,
+                                             v2_add(e->level.labels[i].pos, step))) {
+                            moved_any = true;
+                        }
                     }
                     for (int i = 0; i < e->level.stairs_count; i++) {
                         if (!sel_has(&e->selection, SEL_STAIRS, i)) continue;
-                        level_move_stairs(&e->level, i,
-                                          v2_add(e->level.stairs[i].pos, step));
+                        if (level_move_stairs(&e->level, i,
+                                              v2_add(e->level.stairs[i].pos, step))) {
+                            moved_any = true;
+                        }
                     }
                     for (int i = 0; i < e->level.room_count; i++) {
                         if (!sel_has(&e->selection, SEL_ROOM, i)) continue;
-                        level_move_room(&e->level, i, step);
+                        if (level_move_room(&e->level, i, step)) moved_any = true;
                     }
-                    g->applied = delta;
-                    g->moved = true;
+                    if (moved_any) {
+                        g->applied = delta;
+                        g->moved = true;
+                    }
                 }
             }
             if (!down) finish_move(e);
@@ -1593,7 +1655,16 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     cancel_gesture(e);
 
     if (hit.kind == SEL_WALL) {
-        set_status(e, false, "Wall %u selected", (unsigned)e->level.walls[hit.index].id);
+        Vec2 anchor;
+        if (!primary_anchor(e, &anchor)) return;
+        begin_move(e, world, anchor);
+        int n = sel_count(&e->selection);
+        if (n > 1) {
+            set_status(e, false, "%d objects selected", n);
+        } else {
+            set_status(e, false, "Wall %u selected",
+                       (unsigned)e->level.walls[hit.index].id);
+        }
         return;
     }
     if (hit.kind == SEL_DOOR) {
@@ -1613,6 +1684,12 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         } else if (db <= DRAG_END_PX) {
             e->gesture.kind = GESTURE_DOOR_RESIZE;
             e->gesture.fixed_t = d->t - half;
+        } else if (sel_count(&e->selection) > 1) {
+            Vec2 anchor;
+            if (!primary_anchor(e, &anchor)) return;
+            begin_move(e, world, anchor);
+            set_status(e, false, "%d objects selected", sel_count(&e->selection));
+            return;
         } else {
             e->gesture.kind = GESTURE_DOOR_SLIDE;
         }
@@ -1624,11 +1701,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
 
     Vec2 anchor;
     if (!primary_anchor(e, &anchor)) return;
-    e->gesture.kind = GESTURE_MOVE;
-    e->gesture.press_world = world;
-    e->gesture.anchor = anchor;
-    e->gesture.applied = v2(0.0f, 0.0f);
-    e->gesture.moved = false;
+    begin_move(e, world, anchor);
     set_status(e, false, "%s selected",
                hit.kind == SEL_ROOM ? "Room" :
                hit.kind == SEL_LABEL ? "Label" : "Stairs");

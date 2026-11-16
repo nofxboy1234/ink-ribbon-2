@@ -114,6 +114,7 @@ bool level_delete_room(Level* level, int room_index);
 int level_room_at(const Level* level, Vec2 p);
 bool level_set_room_color(Level* level, int room_index, RoomColor color);
 bool level_move_room(Level* level, int room_index, Vec2 delta);
+bool level_move_wall(Level* level, int wall_index, Vec2 delta);
 
 int level_add_door(Level* level, WallId wall, float t, float width, DoorColor color);
 bool level_delete_door(Level* level, int door_index);

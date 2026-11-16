@@ -247,6 +247,57 @@ static void test_doors(void) {
           "delete the last wall leaves no orphan doors");
 }
 
+static void test_wall_moves(void) {
+    Level level;
+    level_init(&level);
+    level_add_wall(&level, v2(0, 0), v2(100, 0));
+    level_add_door(&level, level.walls[0].id, 0.5f, 20, DOOR_RED);
+
+    Vec2 old_a = level.walls[0].a;
+    Vec2 old_b = level.walls[0].b;
+    WallId old_id = level.walls[0].id;
+    Vec2 old_span_a, old_span_b, old_center;
+    level_door_span(&level, &level.doors[0], &old_span_a, &old_span_b);
+    old_center = level_door_center(&level, &level.doors[0]);
+    Rect old_bounds = level_bounds(&level);
+
+    Vec2 delta = v2(16, 24);
+    check(level_move_wall(&level, 0, delta), "move a wall");
+    check(nearv(level.walls[0].a, v2_add(old_a, delta)) &&
+              nearv(level.walls[0].b, v2_add(old_b, delta)) &&
+              level.walls[0].id == old_id,
+          "moved wall shifts both endpoints and keeps its id");
+
+    Vec2 span_a, span_b;
+    level_door_span(&level, &level.doors[0], &span_a, &span_b);
+    check(nearv(span_a, v2_add(old_span_a, delta)) &&
+              nearv(span_b, v2_add(old_span_b, delta)),
+          "door span shifts by the wall delta");
+    check(nearv(level_door_center(&level, &level.doors[0]),
+                v2_add(old_center, delta)),
+          "door center shifts by the wall delta");
+
+    Rect new_bounds = level_bounds(&level);
+    check(nearv(new_bounds.min, v2_add(old_bounds.min, delta)) &&
+              nearv(new_bounds.max, v2_add(old_bounds.max, delta)),
+          "level bounds follow the moved wall");
+
+    Level unchanged = level;
+    check(!level_move_wall(&level, -1, delta) &&
+              !level_move_wall(&level, level.wall_count, delta) &&
+              memcmp(&level, &unchanged, sizeof level) == 0,
+          "move wall rejects a bad index and leaves the level unchanged");
+
+    Level finite = level;
+    check(!level_move_wall(&level, 0, v2(INFINITY, 0)) &&
+              !level_move_wall(&level, 0, v2(0, NAN)) &&
+              memcmp(&level, &finite, sizeof level) == 0,
+          "move wall rejects a non-finite delta and leaves the level unchanged");
+    check(!level_move_wall(&level, 0, v2(0, 0)) &&
+              memcmp(&level, &finite, sizeof level) == 0,
+          "move wall reports no movement for a zero delta");
+}
+
 static void test_labels(void) {
     Level level;
     level_init(&level);
@@ -593,6 +644,7 @@ int main(void) {
     test_walls();
     test_rooms();
     test_doors();
+    test_wall_moves();
     test_labels();
     test_stairs();
     test_save_load();

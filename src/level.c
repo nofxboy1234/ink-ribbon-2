@@ -280,6 +280,17 @@ bool level_move_room(Level* level, int room_index, Vec2 delta) {
     return true;
 }
 
+bool level_move_wall(Level* level, int wall_index, Vec2 delta) {
+    if (wall_index < 0 || wall_index >= level->wall_count) return false;
+    if (!isfinite(delta.x) || !isfinite(delta.y)) return false;
+    if (delta.x == 0.0f && delta.y == 0.0f) return false;
+
+    Wall* wall = &level->walls[wall_index];
+    wall->a = v2_add(wall->a, delta);
+    wall->b = v2_add(wall->b, delta);
+    return true;
+}
+
 int level_add_door(Level* level, WallId wall, float t, float width, DoorColor color) {
     if (level->door_count >= LEVEL_MAX_DOORS) return -1;
     if (!level_wall_by_id_const(level, wall)) return -1;
