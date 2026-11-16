@@ -80,7 +80,7 @@ Labels store a position, a size, and a string. Stairs store a center, a directio
 
 Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click toggles an object, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a selected label, stair, or room moves all selected labels, stairs, and rooms together. Doors keep their own slide and end-resize gestures. Walls stay selected but do not move.
 
-Snap-to-grid applies to wall and room points, labels, stairs, door centers, door spans, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
+Snap-to-grid applies to wall and room points, labels, stairs, door centers, door resize spans, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. Closing a loop writes its closing walls and the fill together. The history keeps 64 levels.
 
@@ -88,7 +88,7 @@ Undo stores whole level snapshots. Each completed change writes one snapshot. A 
 
 ![Marquee selection in progress](docs/screenshots/marquee.png)
 
-A plain click selects one object. Shift-click adds or removes an object. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
+A plain click on an unselected object selects only it. Clicking an object already in a multi-selection keeps the group and makes it primary, so the group can be dragged. Shift-click adds or removes an object. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
 
 ![Two selected labels](docs/screenshots/selection.png)
 
