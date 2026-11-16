@@ -167,6 +167,12 @@ ALL EDITOR CHECKS PASSED
 
 The script assumes a 1280x800 window and the default panel widths, and it uses its own Xvfb display. Screenshots land in `/tmp/ink-ribbon-verify-*.png`.
 
+## Focus and the pointer
+
+ImGui reports the pointer position as a sentinel when the window has none, which is what happens when you alt+tab away. The editor treats that as "no pointer": it draws no preview, ends any drag at its last applied position, and leaves an open wall chain alone. When focus returns and you move the mouse, the chain preview comes back and drawing continues.
+
+Before this was handled, leaving the window mid-chain made the preview build a dashed line of astronomically large length, which pinned a core and grew memory until the machine froze. `make verify` now covers that case.
+
 ## Limits
 
 - Walls are horizontal or vertical only. Walls can be selected and deleted, but their endpoints do not drag. Deleting a wall cascades its doors.

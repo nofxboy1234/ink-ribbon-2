@@ -28,6 +28,8 @@ The embedded scalable ImGui default font at 15 px is fine. Do not depend on syst
 
 Camera stores a world-space center and a zoom in screen pixels per world unit. World y grows down. `screen_to_world` and `world_to_screen` are the only transforms.
 
+ImGui clears the pointer position to `-FLT_MAX` when the window loses focus. Never feed that value into `screen_to_world` or into a preview. Check `mouse_available` first, draw no preview without a pointer, and release any drag at its last applied position.
+
 - Mouse wheel zooms around the cursor, clamped 0.15 to 6.
 - Middle-drag pans. Space plus left-drag pans.
 - `F` or View > Fit frames the level bounds with margin. If the level is empty, center 0,0 at zoom 1.
