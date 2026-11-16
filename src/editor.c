@@ -61,22 +61,8 @@ typedef enum {
     SEL_DOOR,
     SEL_LABEL,
     SEL_STAIRS,
+    SEL_KIND_COUNT,
 } SelKind;
-
-typedef enum {
-    FILL_AUTO = 0,
-    FILL_MANUAL = 1,
-} FillMode;
-
-typedef enum {
-    PLACE_CLICK = 0,
-    PLACE_DRAG = 1,
-} PlaceMode;
-
-typedef enum {
-    RENDER_CUT = 0,
-    RENDER_OVERLAY = 1,
-} RenderMode;
 
 typedef enum {
     MODAL_NONE = 0,
@@ -89,7 +75,7 @@ typedef enum {
     GESTURE_NONE = 0,
     GESTURE_CHAIN,
     GESTURE_POLYGON,
-    GESTURE_PLACE_DRAG,
+    GESTURE_MARQUEE,
     GESTURE_MOVE,
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
@@ -101,14 +87,14 @@ typedef struct {
     int point_count;
     int wall_count;
     bool truncated;
-    WallId place_wall;
-    float press_t;
-    float cur_t;
     Vec2 press_screen;
+    Vec2 press_world;
+    Vec2 cur_world;
+    Vec2 anchor;
+    Vec2 applied;
     int object_index;
-    Vec2 last_world;
+    bool additive;
     bool moved;
-    int drag_end;
     float fixed_t;
 } Gesture;
 
@@ -120,6 +106,15 @@ typedef struct {
 typedef struct {
     SelKind kind;
     int index;
+} SelRef;
+
+typedef struct {
+    bool walls[LEVEL_MAX_WALLS];
+    bool rooms[LEVEL_MAX_ROOMS];
+    bool doors[LEVEL_MAX_DOORS];
+    bool labels[LEVEL_MAX_LABELS];
+    bool stairs[LEVEL_MAX_STAIRS];
+    SelRef primary;
 } Selection;
 
 typedef struct {
@@ -150,10 +145,6 @@ struct Editor {
     StairsDir stairs_dir;
     int stairs_steps;
 
-    PlaceMode place_mode;
-    FillMode fill_mode;
-    RenderMode render_mode;
-
     char current_path[512];
     char path_buf[512];
     char status[512];
@@ -180,10 +171,10 @@ static const char* TOOL_NAMES[TOOL_COUNT] = {
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click to select, drag to move, Delete removes",
+    "click to select, shift-click adds, drag empty canvas to marquee",
     "click to add walls, click first point or Enter closes",
     "click to draw a fill, Enter or double-click closes",
-    "click or drag a wall to place a door",
+    "click a wall to place a door",
     "click to place a room label",
     "click to place stairs",
 };
@@ -264,6 +255,38 @@ static Vec2 constrained(const Editor* e, Vec2 anchor, Vec2 cursor) {
     return v2(anchor.x, cursor.y);
 }
 
+static float snap_scalar(float value, float grid) {
+    return snap_grid(v2(value, 0.0f), grid).x;
+}
+
+static float snap_wall_t(const Wall* wall, float t, float grid) {
+    Vec2 p = segment_point(wall->a, wall->b, t);
+    if (wall_is_vertical(wall)) p.y = snap_scalar(p.y, grid);
+    else p.x = snap_scalar(p.x, grid);
+    return point_segment_t(p, wall->a, wall->b);
+}
+
+static bool primary_anchor(const Editor* e, Vec2* out) {
+    SelRef ref = e->selection.primary;
+    switch (ref.kind) {
+        case SEL_LABEL:
+            if (ref.index < 0 || ref.index >= e->level.label_count) return false;
+            *out = e->level.labels[ref.index].pos;
+            return true;
+        case SEL_STAIRS:
+            if (ref.index < 0 || ref.index >= e->level.stairs_count) return false;
+            *out = e->level.stairs[ref.index].pos;
+            return true;
+        case SEL_ROOM:
+            if (ref.index < 0 || ref.index >= e->level.room_count) return false;
+            if (e->level.rooms[ref.index].count <= 0) return false;
+            *out = e->level.rooms[ref.index].pts[0];
+            return true;
+        default:
+            return false;
+    }
+}
+
 static float screen_dist(ImVec2 a, ImVec2 b) {
     float dx = a.x - b.x;
     float dy = a.y - b.y;
@@ -280,48 +303,214 @@ static bool gesture_active(const Editor* e) {
 
 static bool gesture_is_drag(const Editor* e) {
     return e->gesture.kind == GESTURE_MOVE || e->gesture.kind == GESTURE_DOOR_SLIDE ||
-           e->gesture.kind == GESTURE_DOOR_RESIZE || e->gesture.kind == GESTURE_PLACE_DRAG;
+           e->gesture.kind == GESTURE_DOOR_RESIZE || e->gesture.kind == GESTURE_MARQUEE;
 }
 
 static void cancel_gesture(Editor* e) {
     memset(&e->gesture, 0, sizeof e->gesture);
 }
 
-static void clear_selection(Editor* e) {
-    e->selection.kind = SEL_NONE;
-    e->selection.index = -1;
-    e->label_buf_ready = false;
-}
-
-static void set_selection(Editor* e, SelKind kind, int index) {
-    e->selection.kind = kind;
-    e->selection.index = index;
-    e->label_buf_ready = false;
-}
-
-static void validate_selection(Editor* e) {
-    Selection* s = &e->selection;
-    bool ok = false;
-    switch (s->kind) {
-        case SEL_WALL: ok = s->index >= 0 && s->index < e->level.wall_count; break;
-        case SEL_ROOM: ok = s->index >= 0 && s->index < e->level.room_count; break;
-        case SEL_DOOR:
-            ok = s->index >= 0 && s->index < e->level.door_count &&
-                 level_wall_by_id_const(&e->level, e->level.doors[s->index].wall) != NULL;
-            break;
-        case SEL_LABEL: ok = s->index >= 0 && s->index < e->level.label_count; break;
-        case SEL_STAIRS: ok = s->index >= 0 && s->index < e->level.stairs_count; break;
+static bool* sel_pool(Selection* s, SelKind kind) {
+    switch (kind) {
+        case SEL_WALL: return s->walls;
+        case SEL_ROOM: return s->rooms;
+        case SEL_DOOR: return s->doors;
+        case SEL_LABEL: return s->labels;
+        case SEL_STAIRS: return s->stairs;
         case SEL_NONE:
-        default: ok = false; break;
+        default: return NULL;
     }
-    if (!ok) clear_selection(e);
+}
+
+static const bool* sel_pool_const(const Selection* s, SelKind kind) {
+    switch (kind) {
+        case SEL_WALL: return s->walls;
+        case SEL_ROOM: return s->rooms;
+        case SEL_DOOR: return s->doors;
+        case SEL_LABEL: return s->labels;
+        case SEL_STAIRS: return s->stairs;
+        case SEL_NONE:
+        default: return NULL;
+    }
+}
+
+static int sel_cap(SelKind kind) {
+    switch (kind) {
+        case SEL_WALL: return LEVEL_MAX_WALLS;
+        case SEL_ROOM: return LEVEL_MAX_ROOMS;
+        case SEL_DOOR: return LEVEL_MAX_DOORS;
+        case SEL_LABEL: return LEVEL_MAX_LABELS;
+        case SEL_STAIRS: return LEVEL_MAX_STAIRS;
+        case SEL_NONE:
+        default: return 0;
+    }
+}
+
+static bool sel_has(const Selection* s, SelKind kind, int index) {
+    const bool* bits = sel_pool_const(s, kind);
+    if (!bits || index < 0 || index >= sel_cap(kind)) return false;
+    return bits[index];
+}
+
+static int sel_count_kind(const Selection* s, SelKind kind) {
+    const bool* bits = sel_pool_const(s, kind);
+    int cap = sel_cap(kind);
+    int n = 0;
+    for (int i = 0; i < cap; i++) {
+        if (bits[i]) n++;
+    }
+    return n;
+}
+
+static int sel_count(const Selection* s) {
+    int n = 0;
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        n += sel_count_kind(s, (SelKind)k);
+    }
+    return n;
+}
+
+static void sel_clear(Editor* e) {
+    memset(&e->selection, 0, sizeof e->selection);
+    e->selection.primary.kind = SEL_NONE;
+    e->selection.primary.index = -1;
+    e->label_buf_ready = false;
+}
+
+static void sel_promote(Editor* e) {
+    Selection* s = &e->selection;
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        SelKind kind = (SelKind)k;
+        const bool* bits = sel_pool_const(s, kind);
+        int cap = sel_cap(kind);
+        for (int i = 0; i < cap; i++) {
+            if (!bits[i]) continue;
+            if (s->primary.kind != kind || s->primary.index != i) {
+                s->primary = (SelRef){ kind, i };
+                e->label_buf_ready = false;
+            }
+            return;
+        }
+    }
+    if (s->primary.kind != SEL_NONE || s->primary.index != -1) {
+        s->primary = (SelRef){ SEL_NONE, -1 };
+        e->label_buf_ready = false;
+    }
+}
+
+static bool sel_valid(const Editor* e, SelRef ref) {
+    switch (ref.kind) {
+        case SEL_WALL:
+            return ref.index >= 0 && ref.index < e->level.wall_count;
+        case SEL_ROOM:
+            return ref.index >= 0 && ref.index < e->level.room_count;
+        case SEL_DOOR:
+            return ref.index >= 0 && ref.index < e->level.door_count &&
+                   level_wall_by_id_const(&e->level, e->level.doors[ref.index].wall) != NULL;
+        case SEL_LABEL:
+            return ref.index >= 0 && ref.index < e->level.label_count;
+        case SEL_STAIRS:
+            return ref.index >= 0 && ref.index < e->level.stairs_count;
+        case SEL_NONE:
+        default:
+            return false;
+    }
+}
+
+static void sel_prune(Editor* e) {
+    Selection* s = &e->selection;
+    bool changed = false;
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        SelKind kind = (SelKind)k;
+        bool* bits = sel_pool(s, kind);
+        int cap = sel_cap(kind);
+        for (int i = 0; i < cap; i++) {
+            if (!bits[i]) continue;
+            if (!sel_valid(e, (SelRef){ kind, i })) {
+                bits[i] = false;
+                changed = true;
+            }
+        }
+    }
+    if (sel_count(s) == 0) {
+        if (s->primary.kind != SEL_NONE || s->primary.index != -1) {
+            s->primary = (SelRef){ SEL_NONE, -1 };
+            changed = true;
+        }
+    } else if (!sel_valid(e, s->primary) || !sel_has(s, s->primary.kind, s->primary.index)) {
+        sel_promote(e);
+        return;
+    }
+    if (changed) e->label_buf_ready = false;
+}
+
+static bool sel_single(const Selection* s, SelRef* out) {
+    if (sel_count(s) != 1) return false;
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        SelKind kind = (SelKind)k;
+        const bool* bits = sel_pool_const(s, kind);
+        int cap = sel_cap(kind);
+        for (int i = 0; i < cap; i++) {
+            if (!bits[i]) continue;
+            if (out) *out = (SelRef){ kind, i };
+            return true;
+        }
+    }
+    return false;
+}
+
+static void sel_set_primary(Editor* e, SelKind kind, int index) {
+    if (!sel_has(&e->selection, kind, index)) return;
+    if (e->selection.primary.kind == kind && e->selection.primary.index == index) return;
+    e->selection.primary = (SelRef){ kind, index };
+    e->label_buf_ready = false;
+}
+
+static bool sel_add(Editor* e, SelKind kind, int index) {
+    bool* bits = sel_pool(&e->selection, kind);
+    if (!bits || index < 0 || index >= sel_cap(kind) || bits[index]) return false;
+    bits[index] = true;
+    if (!sel_has(&e->selection, e->selection.primary.kind, e->selection.primary.index)) {
+        e->selection.primary = (SelRef){ kind, index };
+    }
+    e->label_buf_ready = false;
+    return true;
+}
+
+static bool sel_remove(Editor* e, SelKind kind, int index) {
+    bool* bits = sel_pool(&e->selection, kind);
+    if (!bits || index < 0 || index >= sel_cap(kind) || !bits[index]) return false;
+    bits[index] = false;
+    e->label_buf_ready = false;
+    if (e->selection.primary.kind == kind && e->selection.primary.index == index) {
+        sel_promote(e);
+    }
+    return true;
+}
+
+static void sel_only(Editor* e, SelKind kind, int index) {
+    sel_clear(e);
+    bool* bits = sel_pool(&e->selection, kind);
+    if (!bits || index < 0 || index >= sel_cap(kind)) return;
+    bits[index] = true;
+    e->selection.primary = (SelRef){ kind, index };
+}
+
+static void sel_toggle(Editor* e, SelKind kind, int index) {
+    if (sel_has(&e->selection, kind, index)) {
+        sel_remove(e, kind, index);
+        return;
+    }
+    if (sel_add(e, kind, index)) {
+        sel_set_primary(e, kind, index);
+    }
 }
 
 static void switch_tool(Editor* e, Tool tool) {
     if (e->tool == tool) return;
-    if (gesture_is_drag(e) && e->gesture.kind != GESTURE_PLACE_DRAG) {
+    if (gesture_is_drag(e) && e->gesture.kind != GESTURE_MARQUEE) {
         history_restore_current(&e->history, &e->level);
-        validate_selection(e);
+        sel_prune(e);
     }
     cancel_gesture(e);
     e->tool = tool;
@@ -412,56 +601,79 @@ static void add_door_to_wall(Editor* e, WallId wall_id, float t, float width) {
         set_status(e, true, "Door needs a wall");
         return;
     }
+    if (e->snap) t = snap_wall_t(w, t, e->grid_size);
     int idx = level_add_door(&e->level, wall_id, t, width, e->door_color);
     if (idx < 0) {
         set_status(e, true, "Could not add door: level is full or wall is invalid");
         return;
     }
-    set_selection(e, SEL_DOOR, idx);
+    sel_only(e, SEL_DOOR, idx);
     commit(e, "Door added");
 }
 
 static void delete_selection(Editor* e) {
-    if (e->selection.kind == SEL_NONE) return;
-    bool ok = false;
-    const char* what = "Object";
-    switch (e->selection.kind) {
-        case SEL_WALL:
-            ok = level_delete_wall(&e->level, e->selection.index);
-            what = "Wall";
-            break;
-        case SEL_ROOM:
-            ok = level_delete_room(&e->level, e->selection.index);
-            what = "Room";
-            break;
-        case SEL_DOOR:
-            ok = level_delete_door(&e->level, e->selection.index);
-            what = "Door";
-            break;
-        case SEL_LABEL:
-            ok = level_delete_label(&e->level, e->selection.index);
-            what = "Label";
-            break;
-        case SEL_STAIRS:
-            ok = level_delete_stairs(&e->level, e->selection.index);
-            what = "Stairs";
-            break;
-        case SEL_NONE:
-        default:
-            return;
+    sel_prune(e);
+    if (sel_count(&e->selection) == 0) return;
+    Selection* s = &e->selection;
+    int deleted = 0;
+    for (int i = e->level.door_count - 1; i >= 0; i--) {
+        if (s->doors[i] && level_delete_door(&e->level, i)) deleted++;
     }
-    clear_selection(e);
+    for (int i = e->level.label_count - 1; i >= 0; i--) {
+        if (s->labels[i] && level_delete_label(&e->level, i)) deleted++;
+    }
+    for (int i = e->level.stairs_count - 1; i >= 0; i--) {
+        if (s->stairs[i] && level_delete_stairs(&e->level, i)) deleted++;
+    }
+    for (int i = e->level.room_count - 1; i >= 0; i--) {
+        if (s->rooms[i] && level_delete_room(&e->level, i)) deleted++;
+    }
+    for (int i = e->level.wall_count - 1; i >= 0; i--) {
+        if (s->walls[i] && level_delete_wall(&e->level, i)) deleted++;
+    }
+    sel_clear(e);
     cancel_gesture(e);
-    if (ok) commit(e, "Deleted");
-    else set_status(e, true, "Could not delete %s", what);
+    if (deleted > 0) {
+        char message[64];
+        snprintf(message, sizeof message, "Deleted %d object%s", deleted,
+                 deleted == 1 ? "" : "s");
+        commit(e, message);
+    } else {
+        set_status(e, true, "Could not delete the selection");
+    }
+}
+
+typedef struct {
+    int walls, rooms, doors, labels, stairs;
+} LevelCounts;
+
+static LevelCounts level_counts(const Level* level) {
+    return (LevelCounts){
+        level->wall_count,
+        level->room_count,
+        level->door_count,
+        level->label_count,
+        level->stairs_count,
+    };
+}
+
+static bool counts_equal(LevelCounts a, LevelCounts b) {
+    return a.walls == b.walls && a.rooms == b.rooms && a.doors == b.doors &&
+           a.labels == b.labels && a.stairs == b.stairs;
+}
+
+static void sel_after_history(Editor* e, LevelCounts before) {
+    if (!counts_equal(before, level_counts(&e->level))) sel_clear(e);
+    else sel_prune(e);
 }
 
 static void do_undo(Editor* e) {
     if (gesture_is_drag(e)) { set_status(e, false, "Finish the drag before undoing"); return; }
     if (!history_can_undo(&e->history)) { set_status(e, false, "Nothing to undo"); return; }
+    LevelCounts before = level_counts(&e->level);
     cancel_gesture(e);
     history_undo(&e->history, &e->level);
-    validate_selection(e);
+    sel_after_history(e, before);
     e->label_buf_ready = false;
     set_status(e, false, "Undo");
 }
@@ -469,9 +681,10 @@ static void do_undo(Editor* e) {
 static void do_redo(Editor* e) {
     if (gesture_is_drag(e)) { set_status(e, false, "Finish the drag before redoing"); return; }
     if (!history_can_redo(&e->history)) { set_status(e, false, "Nothing to redo"); return; }
+    LevelCounts before = level_counts(&e->level);
     cancel_gesture(e);
     history_redo(&e->history, &e->level);
-    validate_selection(e);
+    sel_after_history(e, before);
     e->label_buf_ready = false;
     set_status(e, false, "Redo");
 }
@@ -479,7 +692,7 @@ static void do_redo(Editor* e) {
 static void new_level(Editor* e) {
     level_init(&e->level);
     history_reset(&e->history, &e->level);
-    clear_selection(e);
+    sel_clear(e);
     cancel_gesture(e);
     snprintf(e->current_path, sizeof e->current_path, "%s", "levels/untitled.lvl");
     e->fit_pending = true;
@@ -507,7 +720,7 @@ static bool open_level(Editor* e, const char* path) {
         return false;
     }
     history_reset(&e->history, &e->level);
-    clear_selection(e);
+    sel_clear(e);
     cancel_gesture(e);
     snprintf(e->current_path, sizeof e->current_path, "%s", path);
     e->fit_pending = true;
@@ -781,21 +994,17 @@ static void draw_walls(const Editor* e) {
     float wall_px = 2.0f;
     for (int i = 0; i < e->level.wall_count; i++) {
         const Wall* w = &e->level.walls[i];
-        if (e->render_mode == RENDER_CUT) {
-            Span spans[LEVEL_MAX_DOORS];
-            int n = wall_door_spans(e, w, spans);
-            float cursor = 0.0f;
-            for (int k = 0; k < n; k++) {
-                if (spans[k].a > cursor) {
-                    draw_wall_segment(e, dl, w, cursor, spans[k].a, col32(WALL_COL), wall_px);
-                }
-                if (spans[k].b > cursor) cursor = spans[k].b;
+        Span spans[LEVEL_MAX_DOORS];
+        int n = wall_door_spans(e, w, spans);
+        float cursor = 0.0f;
+        for (int k = 0; k < n; k++) {
+            if (spans[k].a > cursor) {
+                draw_wall_segment(e, dl, w, cursor, spans[k].a, col32(WALL_COL), wall_px);
             }
-            if (cursor < 1.0f) {
-                draw_wall_segment(e, dl, w, cursor, 1.0f, col32(WALL_COL), wall_px);
-            }
-        } else {
-            draw_wall_segment(e, dl, w, 0.0f, 1.0f, col32(WALL_COL), wall_px);
+            if (spans[k].b > cursor) cursor = spans[k].b;
+        }
+        if (cursor < 1.0f) {
+            draw_wall_segment(e, dl, w, cursor, 1.0f, col32(WALL_COL), wall_px);
         }
     }
 }
@@ -809,13 +1018,6 @@ static void draw_doors(const Editor* e) {
         Vec2 a, b;
         level_door_span(&e->level, d, &a, &b);
         draw_door_bar(dl, e, w, a, b, door_color(d->color), 0.0f);
-        if (e->render_mode == RENDER_OVERLAY) {
-            /* An opaque 6 unit bar is thicker than a 2 px wall, so the
-               continuous wall would be hidden. Restroke it to show the
-               overlay behavior the prototype is comparing. */
-            ImDrawList_AddLineEx(dl, world_to_screen(e, a), world_to_screen(e, b),
-                                 col32(WALL_COL), 2.0f, 0);
-        }
     }
 }
 
@@ -847,37 +1049,41 @@ static void draw_selection_handles(ImDrawList* dl, ImVec2 pmin, ImVec2 pmax) {
     }
 }
 
-static void draw_selection(const Editor* e) {
+static void draw_selection_object(const Editor* e, SelKind kind, int index, bool primary) {
     ImDrawList* dl = igGetWindowDrawList();
     ImU32 col = col32(SELECT_COL);
-    switch (e->selection.kind) {
+    switch (kind) {
         case SEL_WALL: {
-            const Wall* w = &e->level.walls[e->selection.index];
+            const Wall* w = &e->level.walls[index];
             ImVec2 a = world_to_screen(e, w->a);
             ImVec2 b = world_to_screen(e, w->b);
             ImDrawList_AddLineEx(dl, a, b, col, 3.0f, 0);
-            ImDrawList_AddCircleFilled(dl, a, 3.5f, col, 12);
-            ImDrawList_AddCircleFilled(dl, b, 3.5f, col, 12);
+            if (primary) {
+                ImDrawList_AddCircleFilled(dl, a, 3.5f, col, 12);
+                ImDrawList_AddCircleFilled(dl, b, 3.5f, col, 12);
+            }
             break;
         }
         case SEL_ROOM: {
-            const Room* room = &e->level.rooms[e->selection.index];
+            const Room* room = &e->level.rooms[index];
             ImVec2 pts[LEVEL_MAX_ROOM_PTS + 1];
             for (int i = 0; i < room->count; i++) pts[i] = world_to_screen(e, room->pts[i]);
             pts[room->count] = pts[0];
             ImDrawList_AddPolyline(dl, pts, room->count + 1, col, 2.0f, 0);
-            ImVec2 pmin = pts[0], pmax = pts[0];
-            for (int i = 1; i < room->count; i++) {
-                if (pts[i].x < pmin.x) pmin.x = pts[i].x;
-                if (pts[i].y < pmin.y) pmin.y = pts[i].y;
-                if (pts[i].x > pmax.x) pmax.x = pts[i].x;
-                if (pts[i].y > pmax.y) pmax.y = pts[i].y;
+            if (primary) {
+                ImVec2 pmin = pts[0], pmax = pts[0];
+                for (int i = 1; i < room->count; i++) {
+                    if (pts[i].x < pmin.x) pmin.x = pts[i].x;
+                    if (pts[i].y < pmin.y) pmin.y = pts[i].y;
+                    if (pts[i].x > pmax.x) pmax.x = pts[i].x;
+                    if (pts[i].y > pmax.y) pmax.y = pts[i].y;
+                }
+                draw_selection_handles(dl, pmin, pmax);
             }
-            draw_selection_handles(dl, pmin, pmax);
             break;
         }
         case SEL_DOOR: {
-            const Door* d = &e->level.doors[e->selection.index];
+            const Door* d = &e->level.doors[index];
             const Wall* w = level_wall_by_id_const(&e->level, d->wall);
             if (!w) break;
             Vec2 a, b;
@@ -898,34 +1104,64 @@ static void draw_selection(const Editor* e) {
                 pmin = (ImVec2){ pmin.x, y - pad - 2.0f };
                 pmax = (ImVec2){ pmax.x, y + pad + 2.0f };
             }
-            draw_selection_handles(dl, pmin, pmax);
+            if (primary) draw_selection_handles(dl, pmin, pmax);
+            else ImDrawList_AddRectEx(dl, pmin, pmax, col, 0.0f, 2.0f, 0);
             break;
         }
         case SEL_LABEL: {
-            const Label* l = &e->level.labels[e->selection.index];
-            Rect r = label_world_rect(e, l);
+            Rect r = label_world_rect(e, &e->level.labels[index]);
             ImVec2 pmin = world_to_screen(e, r.min);
             ImVec2 pmax = world_to_screen(e, r.max);
             pmin.x -= 3.0f;
             pmin.y -= 3.0f;
             pmax.x += 3.0f;
             pmax.y += 3.0f;
-            draw_selection_handles(dl, pmin, pmax);
+            if (primary) draw_selection_handles(dl, pmin, pmax);
+            else ImDrawList_AddRectEx(dl, pmin, pmax, col, 0.0f, 2.0f, 0);
             break;
         }
         case SEL_STAIRS: {
-            Rect r = level_stairs_rect(&e->level.stairs[e->selection.index]);
+            Rect r = level_stairs_rect(&e->level.stairs[index]);
             ImVec2 pmin = world_to_screen(e, r.min);
             ImVec2 pmax = world_to_screen(e, r.max);
             pmin.x -= 3.0f;
             pmin.y -= 3.0f;
             pmax.x += 3.0f;
             pmax.y += 3.0f;
-            draw_selection_handles(dl, pmin, pmax);
+            if (primary) draw_selection_handles(dl, pmin, pmax);
+            else ImDrawList_AddRectEx(dl, pmin, pmax, col, 0.0f, 2.0f, 0);
             break;
         }
         case SEL_NONE:
         default: break;
+    }
+}
+
+static void draw_marquee(const Editor* e) {
+    if (e->gesture.kind != GESTURE_MARQUEE || !e->gesture.moved) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    ImVec2 a = world_to_screen(e, e->gesture.press_world);
+    ImVec2 b = world_to_screen(e, e->gesture.cur_world);
+    ImVec2 pmin = { fminf(a.x, b.x), fminf(a.y, b.y) };
+    ImVec2 pmax = { fmaxf(a.x, b.x), fmaxf(a.y, b.y) };
+    ImDrawList_AddRectFilledEx(dl, pmin, pmax, col32a(ACCENT_COL, 36), 0.0f, 0);
+    ImDrawList_AddRectEx(dl, pmin, pmax, col32a(ACCENT_COL, 220), 0.0f, 1.5f, 0);
+}
+
+static void draw_selection(Editor* e) {
+    sel_prune(e);
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        SelKind kind = (SelKind)k;
+        int cap = sel_cap(kind);
+        for (int i = 0; i < cap; i++) {
+            if (!sel_has(&e->selection, kind, i)) continue;
+            if (e->selection.primary.kind == kind && e->selection.primary.index == i) continue;
+            draw_selection_object(e, kind, i, false);
+        }
+    }
+    SelRef primary = e->selection.primary;
+    if (sel_has(&e->selection, primary.kind, primary.index)) {
+        draw_selection_object(e, primary.kind, primary.index, true);
     }
 }
 
@@ -1002,38 +1238,16 @@ static void draw_polygon_preview(Editor* e, ImVec2 mouse) {
 
 static void draw_door_preview(Editor* e, int hover_wall, float hover_t) {
     if (e->tool != TOOL_DOOR) return;
-    ImDrawList* dl = igGetWindowDrawList();
-    if (e->gesture.kind == GESTURE_PLACE_DRAG) {
-        const Wall* w = level_wall_by_id_const(&e->level, e->gesture.place_wall);
-        if (!w) return;
-        float len = wall_length(w);
-        float t1 = e->gesture.press_t;
-        float t2 = e->gesture.cur_t;
-        float width = fabsf(t2 - t1) * len;
-        float t = (t1 + t2) * 0.5f;
-        ImVec2 mouse = igGetIO()->MousePos;
-        bool still = screen_dist(mouse, (ImVec2){ e->gesture.press_screen.x,
-                                                 e->gesture.press_screen.y }) < 3.0f;
-        if (still) {
-            width = fminf(44.0f, len);
-            t = t1;
-        } else {
-            width = clampf(width, DOOR_MIN_WIDTH, len);
-        }
-        float half = width / (2.0f * fmaxf(len, 0.0001f));
-        Vec2 a = segment_point(w->a, w->b, clampf(t - half, 0.0f, 1.0f));
-        Vec2 b = segment_point(w->a, w->b, clampf(t + half, 0.0f, 1.0f));
-        draw_door_bar(dl, e, w, a, b, col32a(SELECT_COL, 170), 2.0f);
-        return;
-    }
     if (hover_wall < 0) return;
+    ImDrawList* dl = igGetWindowDrawList();
     const Wall* w = &e->level.walls[hover_wall];
     float len = wall_length(w);
     if (len <= 0.0001f) return;
+    float t = e->snap ? snap_wall_t(w, hover_t, e->grid_size) : hover_t;
     float width = fminf(44.0f, len);
     float half = width / (2.0f * len);
-    Vec2 a = segment_point(w->a, w->b, clampf(hover_t - half, 0.0f, 1.0f));
-    Vec2 b = segment_point(w->a, w->b, clampf(hover_t + half, 0.0f, 1.0f));
+    Vec2 a = segment_point(w->a, w->b, clampf(t - half, 0.0f, 1.0f));
+    Vec2 b = segment_point(w->a, w->b, clampf(t + half, 0.0f, 1.0f));
     draw_door_bar(dl, e, w, a, b, col32a(SELECT_COL, 130), 2.0f);
 }
 
@@ -1090,6 +1304,43 @@ static void finish_move(Editor* e) {
     cancel_gesture(e);
 }
 
+static void marquee_select(Editor* e, Rect rect, bool additive) {
+    if (!additive) sel_clear(e);
+    for (int i = 0; i < e->level.door_count; i++) {
+        const Door* door = &e->level.doors[i];
+        if (!level_wall_by_id_const(&e->level, door->wall)) continue;
+        Vec2 a, b;
+        level_door_span(&e->level, door, &a, &b);
+        if (segment_intersects_rect(a, b, rect)) sel_add(e, SEL_DOOR, i);
+    }
+    for (int i = 0; i < e->level.label_count; i++) {
+        if (rect_overlaps(label_world_rect(e, &e->level.labels[i]), rect)) {
+            sel_add(e, SEL_LABEL, i);
+        }
+    }
+    for (int i = 0; i < e->level.stairs_count; i++) {
+        if (rect_overlaps(level_stairs_rect(&e->level.stairs[i]), rect)) {
+            sel_add(e, SEL_STAIRS, i);
+        }
+    }
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (segment_intersects_rect(e->level.walls[i].a, e->level.walls[i].b, rect)) {
+            sel_add(e, SEL_WALL, i);
+        }
+    }
+    for (int i = 0; i < e->level.room_count; i++) {
+        const Room* room = &e->level.rooms[i];
+        if (polygon_intersects_rect(room->pts, room->count, rect)) {
+            sel_add(e, SEL_ROOM, i);
+        }
+    }
+    if (!sel_has(&e->selection, e->selection.primary.kind, e->selection.primary.index)) {
+        sel_promote(e);
+    }
+    int n = sel_count(&e->selection);
+    set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
+}
+
 static void update_drag(Editor* e) {
     ImGuiIO* io = igGetIO();
     Gesture* g = &e->gesture;
@@ -1098,26 +1349,49 @@ static void update_drag(Editor* e) {
     bool down = io->MouseDown[0];
 
     switch (g->kind) {
+        case GESTURE_MARQUEE: {
+            g->cur_world = world;
+            if (screen_dist(io->MousePos, v2_to_im(g->press_screen)) >= 4.0f) {
+                g->moved = true;
+            }
+            if (down) break;
+            if (g->moved) {
+                marquee_select(e, rect_from_points(g->press_world, g->cur_world),
+                               g->additive);
+            } else {
+                int n = sel_count(&e->selection);
+                if (n == 0) set_status(e, false, "Selection cleared");
+                else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
+            }
+            cancel_gesture(e);
+            break;
+        }
         case GESTURE_MOVE: {
             if (down) {
-                Vec2 delta = v2_sub(world, g->last_world);
-                if (fabsf(delta.x) > 0.0001f || fabsf(delta.y) > 0.0001f) {
-                    if (e->selection.kind == SEL_LABEL && e->selection.index >= 0 &&
-                        e->selection.index < e->level.label_count) {
-                        Label* l = &e->level.labels[e->selection.index];
-                        level_move_label(&e->level, e->selection.index, v2_add(l->pos, delta));
-                        g->moved = true;
-                    } else if (e->selection.kind == SEL_STAIRS && e->selection.index >= 0 &&
-                               e->selection.index < e->level.stairs_count) {
-                        Stairs* s = &e->level.stairs[e->selection.index];
-                        level_move_stairs(&e->level, e->selection.index, v2_add(s->pos, delta));
-                        g->moved = true;
-                    } else if (e->selection.kind == SEL_ROOM && e->selection.index >= 0 &&
-                               e->selection.index < e->level.room_count) {
-                        level_move_room(&e->level, e->selection.index, delta);
-                        g->moved = true;
+                Vec2 raw = v2_sub(world, g->press_world);
+                Vec2 delta = raw;
+                if (e->snap) {
+                    Vec2 goal = snap_grid(v2_add(g->anchor, raw), e->grid_size);
+                    delta = v2_sub(goal, g->anchor);
+                }
+                Vec2 step = v2_sub(delta, g->applied);
+                if (fabsf(step.x) > 0.0001f || fabsf(step.y) > 0.0001f) {
+                    for (int i = 0; i < e->level.label_count; i++) {
+                        if (!sel_has(&e->selection, SEL_LABEL, i)) continue;
+                        level_move_label(&e->level, i,
+                                         v2_add(e->level.labels[i].pos, step));
                     }
-                    g->last_world = world;
+                    for (int i = 0; i < e->level.stairs_count; i++) {
+                        if (!sel_has(&e->selection, SEL_STAIRS, i)) continue;
+                        level_move_stairs(&e->level, i,
+                                          v2_add(e->level.stairs[i].pos, step));
+                    }
+                    for (int i = 0; i < e->level.room_count; i++) {
+                        if (!sel_has(&e->selection, SEL_ROOM, i)) continue;
+                        level_move_room(&e->level, i, step);
+                    }
+                    g->applied = delta;
+                    g->moved = true;
                 }
             }
             if (!down) finish_move(e);
@@ -1130,6 +1404,7 @@ static void update_drag(Editor* e) {
                 const Wall* w = level_wall_by_id_const(&e->level, d->wall);
                 if (w) {
                     float t = point_segment_t(world, w->a, w->b);
+                    if (e->snap) t = snap_wall_t(w, t, e->grid_size);
                     float old_t = d->t;
                     if (down) {
                         level_set_door_span(&e->level, idx, t, d->width);
@@ -1153,7 +1428,10 @@ static void update_drag(Editor* e) {
                     if (len > 0.0001f) {
                         float tc = clampf(point_segment_t(world, w->a, w->b), 0.0f, 1.0f);
                         float width = fabsf(tc - g->fixed_t) * len;
-                        float t = (tc + g->fixed_t) * 0.5f;
+                        if (e->snap) width = snap_scalar(width, e->grid_size);
+                        width = clampf(width, DOOR_MIN_WIDTH, len);
+                        float half = width / (2.0f * len);
+                        float t = g->fixed_t + (tc >= g->fixed_t ? half : -half);
                         float old_t = d->t;
                         float old_w = d->width;
                         if (down) {
@@ -1169,34 +1447,6 @@ static void update_drag(Editor* e) {
             if (!down) {
                 if (g->moved) commit(e, "Door resized");
                 cancel_gesture(e);
-            }
-            break;
-        }
-        case GESTURE_PLACE_DRAG: {
-            const Wall* w = level_wall_by_id_const(&e->level, g->place_wall);
-            if (w) g->cur_t = point_segment_t(world, w->a, w->b);
-            if (!down) {
-                if (!w) {
-                    cancel_gesture(e);
-                    break;
-                }
-                float len = wall_length(w);
-                ImVec2 rel = world_to_screen(e, segment_point(w->a, w->b, g->cur_t));
-                bool still = screen_dist(io->MousePos, (ImVec2){ g->press_screen.x, g->press_screen.y }) < 3.0f;
-                float width;
-                float t;
-                if (still) {
-                    t = g->press_t;
-                    width = fminf(44.0f, len);
-                } else {
-                    width = fabsf(g->cur_t - g->press_t) * len;
-                    t = (g->cur_t + g->press_t) * 0.5f;
-                    if (width < DOOR_MIN_WIDTH) width = DOOR_MIN_WIDTH;
-                    if (width > len) width = len;
-                }
-                (void)rel;
-                cancel_gesture(e);
-                add_door_to_wall(e, w->id, t, width);
             }
             break;
         }
@@ -1253,21 +1503,18 @@ static void close_wall_chain(Editor* e, bool via_enter) {
     }
 
     bool made_room = false;
-    if (e->fill_mode == FILL_AUTO && !g->truncated && poly_count >= 3 &&
-        poly_count <= LEVEL_MAX_ROOM_PTS) {
+    if (!g->truncated && poly_count >= 3 && poly_count <= LEVEL_MAX_ROOM_PTS) {
         int room = level_add_room(&e->level, poly, poly_count, e->fill_color);
         if (room >= 0) {
             made_room = true;
-            set_selection(e, SEL_ROOM, room);
+            sel_only(e, SEL_ROOM, room);
         } else {
             set_status(e, true, "Walls closed, but the fill could not be created");
         }
     } else if (g->truncated) {
         set_status(e, true, "Point limit reached: walls closed without a fill");
-    } else if (e->fill_mode == FILL_MANUAL) {
-        set_status(e, false, "Walls closed (manual fill mode)");
     }
-    if (!made_room) clear_selection(e);
+    if (!made_room) sel_clear(e);
     cancel_gesture(e);
     commit(e, made_room ? "Room fill added" : "Walls closed");
 }
@@ -1284,31 +1531,57 @@ static void close_polygon(Editor* e) {
         set_status(e, true, "Could not create room: level is full or polygon is degenerate");
         return;
     }
-    set_selection(e, SEL_ROOM, room);
+    sel_only(e, SEL_ROOM, room);
     commit(e, "Room added");
 }
 
 static void cancel_transient(Editor* e) {
-    if (e->gesture.kind == GESTURE_CHAIN || e->gesture.kind == GESTURE_POLYGON ||
-        e->gesture.kind == GESTURE_PLACE_DRAG) {
+    if (e->gesture.kind == GESTURE_MARQUEE) {
+        cancel_gesture(e);
+        set_status(e, false, "Marquee cancelled");
+    } else if (e->gesture.kind == GESTURE_CHAIN || e->gesture.kind == GESTURE_POLYGON) {
         cancel_gesture(e);
         set_status(e, false, "Draft cancelled");
     } else if (gesture_is_drag(e)) {
         bool restored = history_restore_current(&e->history, &e->level);
-        validate_selection(e);
+        sel_prune(e);
         cancel_gesture(e);
         set_status(e, false, restored ? "Drag cancelled" : "Drag cancelled, no history");
     }
 }
 
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
+    bool shift = igGetIO()->KeyShift;
     Hit hit = hit_test(e, world);
     if (hit.kind == SEL_NONE) {
-        clear_selection(e);
         cancel_gesture(e);
+        if (!shift) sel_clear(e);
+        Gesture* g = &e->gesture;
+        g->kind = GESTURE_MARQUEE;
+        g->press_world = world;
+        g->cur_world = world;
+        g->press_screen = v2(mouse.x, mouse.y);
+        g->additive = shift;
+        g->moved = false;
+        set_status(e, false, shift ? "Additive marquee" : "Marquee");
         return;
     }
-    set_selection(e, hit.kind, hit.index);
+
+    if (shift) {
+        cancel_gesture(e);
+        sel_toggle(e, hit.kind, hit.index);
+        int n = sel_count(&e->selection);
+        if (n == 0) set_status(e, false, "Selection cleared");
+        else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
+        return;
+    }
+
+    bool in_group = sel_count(&e->selection) > 1 &&
+                    sel_has(&e->selection, hit.kind, hit.index);
+    if (in_group) sel_set_primary(e, hit.kind, hit.index);
+    else sel_only(e, hit.kind, hit.index);
+    cancel_gesture(e);
+
     if (hit.kind == SEL_WALL) {
         set_status(e, false, "Wall %u selected", (unsigned)e->level.walls[hit.index].id);
         return;
@@ -1327,24 +1600,24 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         if (da <= DRAG_END_PX) {
             e->gesture.kind = GESTURE_DOOR_RESIZE;
             e->gesture.fixed_t = d->t + half;
-            e->gesture.drag_end = 0;
         } else if (db <= DRAG_END_PX) {
             e->gesture.kind = GESTURE_DOOR_RESIZE;
             e->gesture.fixed_t = d->t - half;
-            e->gesture.drag_end = 1;
         } else {
             e->gesture.kind = GESTURE_DOOR_SLIDE;
-            e->gesture.drag_end = -1;
         }
         e->gesture.object_index = hit.index;
         e->gesture.moved = false;
-        e->gesture.last_world = world;
         set_status(e, false, "Door %d selected", hit.index + 1);
         return;
     }
+
+    Vec2 anchor;
+    if (!primary_anchor(e, &anchor)) return;
     e->gesture.kind = GESTURE_MOVE;
-    e->gesture.object_index = hit.index;
-    e->gesture.last_world = world;
+    e->gesture.press_world = world;
+    e->gesture.anchor = anchor;
+    e->gesture.applied = v2(0.0f, 0.0f);
     e->gesture.moved = false;
     set_status(e, false, "%s selected",
                hit.kind == SEL_ROOM ? "Room" :
@@ -1355,7 +1628,7 @@ static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse) {
     Gesture* g = &e->gesture;
     if (g->kind != GESTURE_CHAIN) {
         cancel_gesture(e);
-        clear_selection(e);
+        sel_clear(e);
         g = &e->gesture;
         g->kind = GESTURE_CHAIN;
         g->point_count = 1;
@@ -1395,7 +1668,7 @@ static void begin_room_click(Editor* e, Vec2 world, ImVec2 mouse) {
     Gesture* g = &e->gesture;
     if (g->kind != GESTURE_POLYGON) {
         cancel_gesture(e);
-        clear_selection(e);
+        sel_clear(e);
         g = &e->gesture;
         g->kind = GESTURE_POLYGON;
         g->point_count = 1;
@@ -1422,26 +1695,14 @@ static void begin_room_click(Editor* e, Vec2 world, ImVec2 mouse) {
     g->pts[g->point_count++] = p;
 }
 
-static void begin_door_click(Editor* e, int hover_wall, float hover_t, ImVec2 mouse) {
+static void begin_door_click(Editor* e, int hover_wall, float hover_t) {
     if (hover_wall < 0) {
         set_status(e, true, "Click near a wall to place a door");
         return;
     }
     const Wall* w = &e->level.walls[hover_wall];
     float len = wall_length(w);
-    if (e->place_mode == PLACE_CLICK) {
-        add_door_to_wall(e, w->id, hover_t, fminf(44.0f, len));
-        return;
-    }
-    cancel_gesture(e);
-    Gesture* g = &e->gesture;
-    g->kind = GESTURE_PLACE_DRAG;
-    g->place_wall = w->id;
-    g->press_t = hover_t;
-    g->cur_t = hover_t;
-    g->press_screen = v2(mouse.x, mouse.y);
-    g->moved = false;
-    set_status(e, false, "Drag along the wall to size the door");
+    add_door_to_wall(e, w->id, hover_t, fminf(44.0f, len));
 }
 
 static void begin_label_click(Editor* e, Vec2 world) {
@@ -1451,7 +1712,7 @@ static void begin_label_click(Editor* e, Vec2 world) {
         set_status(e, true, "Could not add label: level is full");
         return;
     }
-    set_selection(e, SEL_LABEL, idx);
+    sel_only(e, SEL_LABEL, idx);
     e->focus_label_input = true;
     commit(e, "Label added");
 }
@@ -1463,7 +1724,7 @@ static void begin_stairs_click(Editor* e, Vec2 world) {
         set_status(e, true, "Could not add stairs: level is full");
         return;
     }
-    set_selection(e, SEL_STAIRS, idx);
+    sel_only(e, SEL_STAIRS, idx);
     commit(e, "Stairs added");
 }
 
@@ -1473,7 +1734,7 @@ static void handle_canvas_click(Editor* e, Vec2 world, ImVec2 mouse, int hover_w
         case TOOL_SELECT: begin_select(e, world, mouse); break;
         case TOOL_WALL: begin_wall_click(e, world, mouse); break;
         case TOOL_ROOM: begin_room_click(e, world, mouse); break;
-        case TOOL_DOOR: begin_door_click(e, hover_wall, hover_t, mouse); break;
+        case TOOL_DOOR: begin_door_click(e, hover_wall, hover_t); break;
         case TOOL_LABEL: begin_label_click(e, world); break;
         case TOOL_STAIRS: begin_stairs_click(e, world); break;
         default: break;
@@ -1580,7 +1841,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse) {
 
     int hover_wall = -1;
     float hover_t = 0.0f;
-    if (e->tool == TOOL_DOOR && hovered && e->gesture.kind != GESTURE_PLACE_DRAG) {
+    if (e->tool == TOOL_DOOR && hovered) {
         Vec2 world = screen_to_world(e, mouse);
         hover_wall = level_nearest_wall(&e->level, world,
                                         DOOR_TOL_PX / e->camera.zoom, &hover_t);
@@ -1590,6 +1851,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse) {
     if (e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
     if (e->gesture.kind == GESTURE_POLYGON) draw_polygon_preview(e, mouse);
     draw_selection(e);
+    draw_marquee(e);
     draw_status_strip(e);
 
     igEnd();
@@ -1623,10 +1885,10 @@ static void draw_menu(Editor* e) {
             if (igMenuItemEx("Undo", "Ctrl+Z", false, undo_ok)) do_undo(e);
             if (igMenuItemEx("Redo", "Ctrl+Shift+Z", false, redo_ok)) do_redo(e);
             igSeparator();
-            if (igMenuItemEx("Delete", "Del", false, e->selection.kind != SEL_NONE))
+            if (igMenuItemEx("Delete", "Del", false, sel_count(&e->selection) > 0))
                 delete_selection(e);
-            if (igMenuItemEx("Deselect", "Esc", false, e->selection.kind != SEL_NONE))
-                clear_selection(e);
+            if (igMenuItemEx("Deselect", "Esc", false, sel_count(&e->selection) > 0))
+                sel_clear(e);
             igEndMenu();
         }
         if (igBeginMenu("View")) {
@@ -1735,43 +1997,9 @@ static void draw_left_panel(Editor* e) {
     igSliderInt("Steps", &e->stairs_steps, STAIR_MIN_STEPS, STAIR_MAX_STEPS);
 
     igDummy((ImVec2){ 0.0f, 2.0f });
-    heading("Prototype");
-
-    igTextDisabled("Door placement");
-    {
-        int v = (int)e->place_mode;
-        if (igRadioButtonIntPtr("Click", &v, 0)) e->place_mode = PLACE_CLICK;
-        igSameLineEx(0.0f, 6.0f);
-        igPushFontFloat(igGetFont(), 11.0f);
-        igTextColored(v4c(ACCENT_COL, 1.0f), "recommended");
-        igPopFont();
-        if (igRadioButtonIntPtr("Drag", &v, 1)) e->place_mode = PLACE_DRAG;
-        if (e->place_mode == PLACE_DRAG) small_note("Drag a span to size the door.");
-    }
-
-    igTextDisabled("Room fill");
-    {
-        int v = (int)e->fill_mode;
-        if (igRadioButtonIntPtr("Auto", &v, 0)) e->fill_mode = FILL_AUTO;
-        igSameLineEx(0.0f, 6.0f);
-        igPushFontFloat(igGetFont(), 11.0f);
-        igTextColored(v4c(ACCENT_COL, 1.0f), "recommended");
-        igPopFont();
-        if (igRadioButtonIntPtr("Manual", &v, 1)) e->fill_mode = FILL_MANUAL;
-        if (e->fill_mode == FILL_MANUAL) small_note("Closed loops stay unfilled.");
-    }
-
-    igTextDisabled("Door render");
-    {
-        int v = (int)e->render_mode;
-        if (igRadioButtonIntPtr("Cut", &v, 0)) e->render_mode = RENDER_CUT;
-        igSameLineEx(0.0f, 6.0f);
-        igPushFontFloat(igGetFont(), 11.0f);
-        igTextColored(v4c(ACCENT_COL, 1.0f), "recommended");
-        igPopFont();
-        if (igRadioButtonIntPtr("Overlay", &v, 1)) e->render_mode = RENDER_OVERLAY;
-        if (e->render_mode == RENDER_OVERLAY) small_note("Wall stays under the bar.");
-    }
+    heading("Selection");
+    small_note("Shift-click adds. Drag empty canvas to marquee.");
+    small_note("Labels, stairs, and rooms move together; snap follows the grid.");
 
     igEnd();
 }
@@ -1784,8 +2012,7 @@ static void object_delete_button(Editor* e) {
     igPopStyleColorEx(3);
 }
 
-static void inspector_wall(Editor* e) {
-    int idx = e->selection.index;
+static void inspector_wall(Editor* e, int idx) {
     Wall* w = &e->level.walls[idx];
     heading("Wall");
     igText("Wall id %u", (unsigned)w->id);
@@ -1801,8 +2028,7 @@ static void inspector_wall(Editor* e) {
     object_delete_button(e);
 }
 
-static void inspector_room(Editor* e) {
-    int idx = e->selection.index;
+static void inspector_room(Editor* e, int idx) {
     Room* room = &e->level.rooms[idx];
     heading("Room");
     igText("Room %d of %d", idx + 1, e->level.room_count);
@@ -1822,8 +2048,7 @@ static void inspector_room(Editor* e) {
     object_delete_button(e);
 }
 
-static void inspector_door(Editor* e) {
-    int idx = e->selection.index;
+static void inspector_door(Editor* e, int idx) {
     Door* d = &e->level.doors[idx];
     const Wall* w = level_wall_by_id_const(&e->level, d->wall);
     if (!w) return;
@@ -1873,8 +2098,7 @@ static void inspector_door(Editor* e) {
     object_delete_button(e);
 }
 
-static void inspector_label(Editor* e) {
-    int idx = e->selection.index;
+static void inspector_label(Editor* e, int idx) {
     Label* label = &e->level.labels[idx];
     heading("Label");
     igText("Label %d of %d", idx + 1, e->level.label_count);
@@ -1906,8 +2130,7 @@ static void inspector_label(Editor* e) {
     object_delete_button(e);
 }
 
-static void inspector_stairs(Editor* e) {
-    int idx = e->selection.index;
+static void inspector_stairs(Editor* e, int idx) {
     Stairs* s = &e->level.stairs[idx];
     heading("Stairs");
     igText("Stairs %d of %d", idx + 1, e->level.stairs_count);
@@ -1946,6 +2169,22 @@ static void inspector_stairs(Editor* e) {
     object_delete_button(e);
 }
 
+static void inspector_many(Editor* e) {
+    Selection* s = &e->selection;
+    heading("Selection");
+    igText("%d objects selected", sel_count(s));
+    igDummy((ImVec2){ 0.0f, 4.0f });
+    if (sel_count_kind(s, SEL_WALL)) igText("Walls   %d", sel_count_kind(s, SEL_WALL));
+    if (sel_count_kind(s, SEL_ROOM)) igText("Rooms   %d", sel_count_kind(s, SEL_ROOM));
+    if (sel_count_kind(s, SEL_DOOR)) igText("Doors   %d", sel_count_kind(s, SEL_DOOR));
+    if (sel_count_kind(s, SEL_LABEL)) igText("Labels  %d", sel_count_kind(s, SEL_LABEL));
+    if (sel_count_kind(s, SEL_STAIRS)) igText("Stairs  %d", sel_count_kind(s, SEL_STAIRS));
+    igDummy((ImVec2){ 0.0f, 6.0f });
+    small_note("Labels, stairs, and rooms move together. Doors slide individually.");
+    igDummy((ImVec2){ 0.0f, 6.0f });
+    object_delete_button(e);
+}
+
 static void draw_inspector(Editor* e) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -1958,40 +2197,48 @@ static void draw_inspector(Editor* e) {
     igBegin("##inspector", NULL, flags);
     igPopStyleColorEx(1);
 
-    validate_selection(e);
-    switch (e->selection.kind) {
-        case SEL_WALL: inspector_wall(e); break;
-        case SEL_ROOM: inspector_room(e); break;
-        case SEL_DOOR: inspector_door(e); break;
-        case SEL_LABEL: inspector_label(e); break;
-        case SEL_STAIRS: inspector_stairs(e); break;
-        case SEL_NONE:
-        default: {
-            heading("Inspector");
-            igTextDisabled("Nothing selected");
-            igDummy((ImVec2){ 0.0f, 4.0f });
-            heading("Level");
-            igText("Walls   %d", e->level.wall_count);
-            igText("Rooms   %d", e->level.room_count);
-            igText("Doors   %d", e->level.door_count);
-            igText("Labels  %d", e->level.label_count);
-            igText("Stairs  %d", e->level.stairs_count);
-            igDummy((ImVec2){ 0.0f, 4.0f });
-            heading("Controls");
-            igPushFontFloat(igGetFont(), 12.0f);
-            igTextDisabled("1-6 switch tools");
-            igTextDisabled("F fit level, G toggle grid");
-            igTextDisabled("Delete removes the selection");
-            igTextDisabled("Esc deselects then cancels a draft");
-            igTextDisabled("Ctrl+Z undo, Ctrl+Shift+Z redo");
-            igTextDisabled("Ctrl+S save, Ctrl+O open");
-            igTextDisabled("Middle-drag or Space+drag pans");
-            igTextDisabled("Wheel zooms around the cursor");
-            igPopFont();
-            igDummy((ImVec2){ 0.0f, 6.0f });
-            igTextDisabled("%s", e->current_path);
-            break;
+    sel_prune(e);
+    SelRef single;
+    if (sel_single(&e->selection, &single)) {
+        switch (single.kind) {
+            case SEL_WALL: inspector_wall(e, single.index); break;
+            case SEL_ROOM: inspector_room(e, single.index); break;
+            case SEL_DOOR: inspector_door(e, single.index); break;
+            case SEL_LABEL: inspector_label(e, single.index); break;
+            case SEL_STAIRS: inspector_stairs(e, single.index); break;
+            case SEL_NONE:
+            default: break;
         }
+    } else if (sel_count(&e->selection) > 1) {
+        inspector_many(e);
+    } else {
+        heading("Inspector");
+        igTextDisabled("Nothing selected");
+        igDummy((ImVec2){ 0.0f, 4.0f });
+        heading("Level");
+        igText("Walls   %d", e->level.wall_count);
+        igText("Rooms   %d", e->level.room_count);
+        igText("Doors   %d", e->level.door_count);
+        igText("Labels  %d", e->level.label_count);
+        igText("Stairs  %d", e->level.stairs_count);
+        igDummy((ImVec2){ 0.0f, 4.0f });
+        heading("Controls");
+        igPushFontFloat(igGetFont(), 12.0f);
+        igTextDisabled("1-6 switch tools");
+        igTextDisabled("F fit level, G toggle grid");
+        igTextDisabled("Shift-click toggles the selection");
+        igTextDisabled("Drag empty canvas to marquee");
+        igTextDisabled("Drag labels, stairs, or rooms together");
+        igTextDisabled("Drag a door to slide; drag an end to resize");
+        igTextDisabled("Delete removes every selected object");
+        igTextDisabled("Esc deselects then cancels a draft");
+        igTextDisabled("Ctrl+Z undo, Ctrl+Shift+Z redo");
+        igTextDisabled("Ctrl+S save, Ctrl+O open");
+        igTextDisabled("Middle-drag or Space+drag pans");
+        igTextDisabled("Wheel zooms around the cursor");
+        igPopFont();
+        igDummy((ImVec2){ 0.0f, 6.0f });
+        igTextDisabled("%s", e->current_path);
     }
     igEnd();
 }
@@ -2061,7 +2308,15 @@ static void draw_help_modal(Editor* e) {
     igText("F fits the level, G toggles the grid.");
     igText("Editing");
     igBullet();
-    igText("Delete removes the selection.");
+    igText("Delete removes every selected object.");
+    igBullet();
+    igText("Shift-click toggles an object in the selection.");
+    igBullet();
+    igText("Drag empty canvas to marquee a group.");
+    igBullet();
+    igText("Drag labels, stairs, or rooms to move the group.");
+    igBullet();
+    igText("Drag a door to slide it; drag an end to resize.");
     igBullet();
     igText("Esc deselects, then cancels a draft.");
     igBullet();
@@ -2221,8 +2476,8 @@ static void handle_shortcuts(Editor* e) {
     if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
         if (gesture_is_drag(e)) {
             cancel_transient(e);
-        } else if (e->selection.kind != SEL_NONE) {
-            clear_selection(e);
+        } else if (sel_count(&e->selection) > 0) {
+            sel_clear(e);
             set_status(e, false, "Selection cleared");
         } else if (gesture_active(e)) {
             cancel_transient(e);
@@ -2244,8 +2499,8 @@ Editor* editor_create(const char* startup_path) {
     e->camera.center = v2(0.0f, 0.0f);
     e->camera.zoom = 1.0f;
     e->tool = TOOL_SELECT;
-    e->selection.kind = SEL_NONE;
-    e->selection.index = -1;
+    e->selection.primary.kind = SEL_NONE;
+    e->selection.primary.index = -1;
     e->grid_size = 8.0f;
     e->snap = true;
     e->show_grid = true;
@@ -2253,9 +2508,6 @@ Editor* editor_create(const char* startup_path) {
     e->door_color = DOOR_WHITE;
     e->stairs_dir = STAIRS_H;
     e->stairs_steps = 8;
-    e->place_mode = PLACE_CLICK;
-    e->fill_mode = FILL_AUTO;
-    e->render_mode = RENDER_CUT;
     e->fit_pending = true;
     e->modal = MODAL_NONE;
     e->request_modal = MODAL_NONE;
