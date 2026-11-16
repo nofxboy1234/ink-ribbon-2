@@ -281,6 +281,10 @@ echo "== marquee select all, delete, undo =="
 xdotool key --clearmodifiers 1
 drag 200 100 960 760
 shot "$out-marquee.png"
+shift_click 547 400
+shift_click 320 400
+shift_click 547 361
+shot "$out-shift-existing.png"
 xdotool key --clearmodifiers Delete
 sleep 0.4
 save_as /tmp/ink-ribbon-allgone.lvl
