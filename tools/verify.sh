@@ -52,7 +52,9 @@ cleanup() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     xvfb_stop
+    _release_display
     test_reap
+    _run_unregister
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -489,7 +491,12 @@ if [ -n "$overflow" ]; then
     echo "$overflow"
     exit 1
 fi
-echo "PASS no leftover editor or display processes"
+others=$(pgrep -af '^ink-ribbon-(editor|xvfb)-' 2>/dev/null | grep -v "$RUN_ID" || true)
+if [ -n "$others" ]; then
+    echo "note: other test runs are still active and were left alone:"
+    echo "$others"
+fi
+echo "PASS no leftover editor or display processes from this run"
 
 echo "ALL EDITOR CHECKS PASSED"
 echo "screenshots: $out-*.png"

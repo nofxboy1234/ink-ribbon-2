@@ -22,7 +22,7 @@ Debian and Ubuntu:
 sudo apt install gcc g++ make pkg-config libx11-dev libxi-dev libxcursor-dev libgl1-mesa-dev
 ```
 
-`make verify` also needs `xdotool`, ImageMagick (for `import`, `convert`, and `compare`), and `Xvfb`. The editor itself does not use them. Verification runs on a private Xvfb display, so it never moves your mouse or touches your desktop. The harness names its processes `ink-ribbon-xvfb` and `ink-ribbon-editor`, kills them on exit and on SIGTERM, and reaps any that a killed run left behind on the next start. `make verify` also fails if any survive it.
+`make verify` also needs `xdotool`, ImageMagick (for `import`, `convert`, and `compare`), and `Xvfb`. The editor itself does not use them. Verification runs on a private Xvfb display, so it never moves your mouse or touches your desktop. The harness tags every process with a per-run id, such as `ink-ribbon-editor-4192-7731`, claims its own X display with a lock, and records itself in `/tmp/ink-ribbon-runs`. Two runs can therefore go at once on separate displays. Each run kills only its own processes on exit or SIGTERM, and the next run reaps the processes and display lock of any run that was killed outright. `make verify` also fails if its own run leaves anything behind.
 
 Build and run from the repository root:
 

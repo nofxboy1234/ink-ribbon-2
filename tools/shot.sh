@@ -15,7 +15,9 @@ meanwhile() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     xvfb_stop
+    _release_display
     test_reap
+    _run_unregister
 }
 trap meanwhile EXIT INT TERM HUP
 
