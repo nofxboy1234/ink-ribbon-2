@@ -468,6 +468,50 @@ fi
 set_grid 322
 echo "PASS stairs flush on grid 8 ($stairs8) and 32 ($stairs32); $stair_change"
 
+echo "== a stair edge meets a wall edge flush =="
+new_level
+set_grid 322
+xdotool key --clearmodifiers 2
+click 685 300
+click 685 500
+xdotool key --clearmodifiers Escape
+sleep 0.3
+xdotool key --clearmodifiers 6
+click 585 400
+save_as /tmp/ink-ribbon-flush-before.lvl
+read -r flush_rx flush_ry < <(python3 - /tmp/ink-ribbon-flush-before.lvl <<'PYEOF'
+import sys
+r = [line.split() for line in open(sys.argv[1]) if line.startswith("stairs ")][0]
+x, y, w, h = float(r[1]), float(r[2]), float(r[5]), float(r[6])
+print(int(round(x + w + 585)), int(round(y + h / 2 + 411.5)))
+PYEOF
+)
+xdotool key --clearmodifiers 1
+drag "$flush_rx" "$flush_ry" 685 404
+save_as /tmp/ink-ribbon-flush-after.lvl
+if ! flush=$(python3 - /tmp/ink-ribbon-flush-after.lvl <<'PYEOF'
+import sys
+walls = []
+stairs = None
+for line in open(sys.argv[1]):
+    q = line.split()
+    if q[0] == "wall":
+        walls.append((float(q[3]), float(q[4]), float(q[5]), float(q[6])))
+    elif q[0] == "stairs":
+        stairs = (float(q[1]), float(q[2]), float(q[5]), float(q[6]))
+wall_x = {w[0] for w in walls if w[0] == w[2]} | {w[2] for w in walls if w[0] == w[2]}
+x, y, w, h = stairs
+right = x + w
+if right not in wall_x:
+    print(f"stair right {right:g} is not on a wall edge {sorted(wall_x)}")
+    raise SystemExit(1)
+print(f"stair right edge {right:g} equals the wall edge")
+PYEOF
+); then
+    echo "FAIL stair edge does not meet the wall ($flush)"; exit 1
+fi
+echo "PASS $flush"
+
 echo "== the Grid setting changes the drawn grid =="
 grid_pixels() {
     convert "$1" -crop 780x50+195+40 +repage -format %c histogram:info:- 2>/dev/null |
