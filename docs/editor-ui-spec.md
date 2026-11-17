@@ -70,7 +70,11 @@ Click places a label at the snapped point with text `Room` and size 19. Select i
 
 ### Stairs
 
-Click places stairs at the snapped point using the current direction and step count from the tool options. Select it. The inspector lets the user change direction and step count. The footprint follows the model constants.
+Click places a stair footprint centred on the snapped point using the current direction and step count. With snap on, the across and run sizes round up to whole grid cells and the box corner is snapped, so all four edges land on the grid. Select it.
+
+- Drag within 7 screen pixels of an edge to resize: that edge moves, snapped, and the opposite edge stays. The box never gets smaller than `max(STAIR_MIN_SIZE, grid)` when snap is on. One history snapshot commits on release, and Esc restores it.
+- A press inside the box still moves the stair.
+- The inspector keeps direction and step count, and shows the width and length read only. Changing either keeps the box. Step count divides the run into that many treads.
 
 ### Select
 
@@ -118,6 +122,7 @@ Below the tool buttons:
 
 - New: `level_init`, `history_reset`, clear selection, fit, path `levels/untitled.lvl`.
 - Open: modal with a path input plus a small clickable list of `levels/*.lvl`. On load success, history_reset, clear selection, fit. On failure, show the error in the status strip and keep the current level.
+- The save format is `ink-level 3`. Version 1 and 2 files still load; their stair records stored a centre and a derived size, which is converted to the explicit min-corner box.
 - Save writes to the current path. Save As opens a path modal with the current path prefilled and lists `levels/*.lvl`. Report success or the error in the status strip.
 - `Ctrl+S` saves, `Ctrl+Shift+S` opens Save As, `Ctrl+O` opens the Open modal.
 - `Ctrl+Z` undo, `Ctrl+Shift+Z` or `Ctrl+Y` redo, disabled while a drag is active.

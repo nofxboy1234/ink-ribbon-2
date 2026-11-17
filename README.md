@@ -44,7 +44,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - A closed shape fills only its own inside, in blue or red, or not at all with the None fill. Draw a painted area independently with the Room tool when it should not follow walls.
 - Add white, red, or blue doors to walls. A door keeps a fixed thickness, slides along its wall, and changes length by dragging either end or with the inspector.
 - Add text labels anywhere, edit the text in the inspector, resize and move them.
-- Add standard stairs with 2 to 48 steps. The step count sets the run length, and each run is horizontal or vertical.
+- Add stairs with 2 to 48 steps. A stair is a footprint box that snaps to the grid, so its edges sit flush with walls. Drag any edge to resize it, and the step count divides the run into treads.
 - Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
 - Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step. Dragging a wall line reshapes its shape, and dragging labels, rooms, or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
@@ -59,6 +59,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
 | Drag a wall line | Reshape the shape by sliding that line and stretching its neighbours |
+| Drag a stair edge | Resize the stair footprint on the grid |
 | Drag on empty canvas | Marquee select; Shift adds to the selection |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
@@ -83,7 +84,7 @@ Labels store a position, a size, and a string. Stairs store a center, a directio
 
 Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a wall line reshapes its shape. Selected rooms, labels, and stairs move as a group when dragged. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
 
-Snap-to-grid applies to wall and room points, labels, stairs, door centers, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
+Snap-to-grid applies to wall and room points, labels, stair placement and edges, door centers, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. Closing a loop writes its closing walls and the fill together. The history keeps 64 levels.
 
@@ -119,7 +120,7 @@ Before this was handled, leaving the window mid-chain made the preview build a d
 | `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
 | `src/level.c` | level document, shapes, edits, save, load, undo ring |
 | `src/geom.c` | vectors, snapping, segment and polygon math, triangulation |
-| `tests/test_level.c` | 294 headless checks for the core |
+| `tests/test_level.c` | 314 headless checks for the core |
 | `tools/verify.sh` | end-to-end X11 check with pixel and coordinate evidence |
 | `tools/shot.sh` | build, launch, drive, screenshot |
 | `tools/xvfb.sh` | private X display, per-run process tags, cleanup |
@@ -140,16 +141,17 @@ make verify
 
 ```text
 PASS build without warnings
-PASS core tests (294 checks)
-PASS demo fills blue=28695 red=26004
+PASS core tests (314 checks)
+PASS demo fills blue=28701 red=25714 and keeps its record counts
 PASS closed chain is one shape with a blue fill
 PASS None and Blue fill controls work
 PASS plus fill is inside only (inside=2B3F50 corner=0B0C0E)
 PASS dragged line moved, neighbours stretched, opposite line stayed
 PASS group drag moved every wall by (112,0) with no reshape and every door followed
 PASS two edges selected (accent px=1508, amber px=104) and both moved on drag
+PASS stairs flush on grid 8 (x -72..8 y -32..16) and 32 (x -96..0 y -32..32); right edge 8 -> 48, opposite edge -72 stayed
 PASS grid size 8 draws 13046 px and 32 draws 2760
-PASS focus loss survived (rss=105880 KB, 15970 px changed)
+PASS focus loss survived (rss=105576 KB, 16357 px changed)
 PASS no leftover editor or display processes
 ALL EDITOR CHECKS PASSED
 ```
