@@ -184,7 +184,22 @@ red0=$(count_hex "$out-start.png" 4a2028)
 if [ "$blue0" -lt 20000 ] || [ "$red0" -lt 15000 ]; then
     echo "FAIL demo fills blue=$blue0 red=$red0"; exit 1
 fi
-echo "PASS demo fills blue=$blue0 red=$red0"
+if ! python3 - levels/re2-library.lvl <<'PYEOF'
+import sys
+want = {"wall": 42, "shape": 11, "room": 6, "door": 10, "label": 6, "stairs": 4}
+have = {key: 0 for key in want}
+for line in open(sys.argv[1]):
+    tag = line.split(" ", 1)[0]
+    if tag in have:
+        have[tag] += 1
+if have != want:
+    print("demo counts", have)
+    raise SystemExit(1)
+PYEOF
+then
+    echo "FAIL the demo level was overwritten or corrupted"; exit 1
+fi
+echo "PASS demo fills blue=$blue0 red=$red0 and keeps its record counts"
 
 echo "== a closed wall chain becomes one filled shape =="
 new_level
