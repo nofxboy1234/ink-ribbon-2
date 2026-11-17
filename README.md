@@ -93,15 +93,17 @@ Undo stores whole level snapshots. Each completed change writes one snapshot. A 
 
 A plain click on an unselected object selects only it. Clicking an object already in a multi-selection keeps the group and makes it primary. Shift-click adds an object and never removes one. Ctrl-click toggles it. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
 
-A wall belongs to a shape, so clicking any of its lines selects the whole shape. The inspector then shows the shape: its fill, whether it is closed, and how many walls it has.
+A wall belongs to a shape, and each line is selectable on its own. Click a line to select that edge, shift-click to add another, or click inside a closed shape to select all of its edges. The inspector then shows the shape: its fill, whether it is closed, how many walls it has, and which edge you are on.
 
-![A wall shape selected](docs/screenshots/selection.png)
+![Two selected edges with amber vertices](docs/screenshots/selection.png)
 
-Drag one of the shape's lines to reshape it. The line slides along its normal, snapped to the grid, and every line that meets it stretches. Lines on the opposite side stay where they are.
+Drag a selected line to reshape it. The line slides along its normal, snapped to the grid, and every line that meets it stretches. Lines on the opposite side stay where they are. Select several lines and they slide together, so two opposite walls can move at once and a shared corner follows both axes.
+
+Dragging while a whole shape, or a mixed marquee selection, is active moves everything rigidly instead. Walls translate, their doors follow by wall id, and rooms, labels, and stairs move with them.
 
 ![A line dragged to reshape the shape](docs/screenshots/reshape.png)
 
-Doors ride their host wall through a reshape. A door dragged alone slides along its wall, and dragging an end handle resizes it. Labels, rooms, and stairs still move as a group when they are dragged together.
+Selected edges draw in the accent colour, the rest of their shape draws dimmed, and the endpoints of selected edges turn amber so the vertices you are about to move are obvious. Doors ride their host wall through a reshape. A door dragged alone slides along its wall, and dragging an end handle resizes it.
 
 ## Focus and the pointer
 

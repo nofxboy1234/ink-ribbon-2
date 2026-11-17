@@ -78,13 +78,16 @@ Click hit-tests in this order: door, label, stairs, wall, room. Tolerance is 7 s
 
 Dragging a wall starts a reshape. A horizontal wall slides in y, a vertical one in x. The drag snaps the moved coordinate to the grid, then `level_slide_wall_edge` carries every coincident endpoint, so connected lines stretch and opposite lines stay. The gesture commits one snapshot on release and restores the previous snapshot on Esc or right-click.
 
-Selection is a bounded set per object kind plus a primary reference. The set is never serialized.
+Selection is a bounded set per object kind plus a primary reference. Walls are selected as individual edges. Clicking inside a closed shape selects all of its edges. The set is never serialized.
 
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out. Neither starts a drag.
 - Plain press on empty canvas clears the selection and starts a marquee. Shift-press starts an additive marquee. Travel under 4 screen pixels is a click.
 - On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap, rooms use polygon intersection.
-- Drag a wall line to reshape its shape, as described under Wall. Selected rooms, labels, and stairs move as a group when dragged. A group snaps from the primary object's anchor and commits one history snapshot on release.
+- Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes. This is the reshape mode.
+- Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, rooms, labels, and stairs by their own move calls, and doors follow their host wall. This is the move mode.
+- A press on an unselected object selects it, and the gesture still starts on it. A release without movement collapses a multi-selection to the pressed object.
+- Selected edges use the accent colour. The other edges of their shape are dimmed. Endpoints of selected edges use the vertex accent `#e0a33c`; the other vertices of the same shape use a dim accent.
 - A door follows its host wall, so it moves with a selected wall. A door whose host wall is not selected stays put and the status line says so. A door dragged when it is the only selected object slides along its wall, and dragging an end handle resizes it.
 - `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.
 - `Esc` clears selection, cancels a draft, or restores a live drag.

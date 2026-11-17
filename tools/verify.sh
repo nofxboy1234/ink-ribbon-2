@@ -60,6 +60,15 @@ drag() {
 undo() {
     xdotool keydown ctrl; sleep 0.1; xdotool key z; sleep 0.1; xdotool keyup ctrl; sleep 0.5
 }
+open_level() {
+    local path=$1
+    xdotool keydown ctrl; sleep 0.1; xdotool key o; sleep 0.1; xdotool keyup ctrl
+    sleep 0.6
+    xdotool keydown ctrl; sleep 0.1; xdotool key a; sleep 0.1; xdotool keyup ctrl
+    sleep 0.1
+    xdotool type --clearmodifiers --delay 20 "$path"; sleep 0.3
+    xdotool key --clearmodifiers Return; sleep 1.0
+}
 new_level() {
     xdotool mousemove --sync $((WX + 35)) $((WY + 11)); xdotool click 1; sleep 0.4
     xdotool mousemove --sync $((WX + 30)) $((WY + 35)); xdotool click 1; sleep 0.6
@@ -102,10 +111,10 @@ def walls(path):
     out = {}
     for line in open(path):
         parts = line.split()
-        if len(parts) != 8 or parts[0] != "wall":
+        if len(parts) != 7 or parts[0] != "wall":
             continue
-        wid = int(parts[2])
-        x1, y1, x2, y2 = (float(v) for v in parts[4:8])
+        wid = int(parts[1])
+        x1, y1, x2, y2 = (float(v) for v in parts[3:7])
         out[wid] = (x1, y1, x2, y2)
     return out
 
@@ -237,6 +246,7 @@ fi
 echo "PASS dragged line moved, neighbours stretched, opposite line stayed"
 
 echo "== marquee selects walls, doors, and the rest as one movable group =="
+open_level levels/re2-library.lvl
 save_as /tmp/ink-ribbon-group-before.lvl
 xdotool key --clearmodifiers 1
 xdotool mousemove --sync $((WX + 215)) $((WY + 215))
@@ -279,9 +289,9 @@ def load(path):
     for line in open(path):
         parts = line.split()
         if parts[0] == "wall":
-            walls[int(parts[2])] = tuple(float(v) for v in parts[4:8])
+            walls[int(parts[1])] = tuple(float(v) for v in parts[3:7])
         elif parts[0] == "door":
-            doors[int(parts[1])] = (parts[2], float(parts[3]))
+            doors[int(parts[2])] = (int(parts[1]), round(float(parts[3]), 3))
     return walls, doors
 
 before_w, before_d = load(sys.argv[1])
@@ -325,15 +335,15 @@ amber=$(convert "$out-edges.png" -format %c histogram:info:- 2>/dev/null |
     awk 'toupper($0) ~ /#E0A33C/ { gsub(":", "", $1); print $1 }' | head -1)
 vertex_a=$(pixel_hex "$out-edges.png" 450 300)
 vertex_b=$(pixel_hex "$out-edges.png" 650 500)
-plain_vertex=$(pixel_hex "$out-edges.png" 650 300)
+side_edge=$(pixel_hex "$out-edges.png" 450 400)
 if [ "${amber:-0}" -lt 20 ]; then
     echo "FAIL selected vertices are not amber (amber px=${amber:-0})"; exit 1
 fi
 if [ "$vertex_a" != "E0A33C" ] && [ "$vertex_b" != "E0A33C" ]; then
     echo "FAIL neither selected endpoint is amber ($vertex_a, $vertex_b)"; exit 1
 fi
-if [ "$plain_vertex" = "E0A33C" ]; then
-    echo "FAIL an unselected vertex is amber"; exit 1
+if [ "$side_edge" = "5AA0C8" ]; then
+    echo "FAIL an unselected edge is drawn as selected"; exit 1
 fi
 save_as /tmp/ink-ribbon-edges-before.lvl
 drag 550 300 550 340
@@ -347,9 +357,9 @@ def horizontals(path):
         parts = line.split()
         if parts[0] != "wall":
             continue
-        y1, y2 = float(parts[5]), float(parts[7])
+        y1, y2 = float(parts[4]), float(parts[6])
         if abs(y1 - y2) < 0.001:
-            out[int(parts[2])] = round(y1, 3)
+            out[int(parts[1])] = round(y1, 3)
     return out
 
 before = horizontals(sys.argv[1])
@@ -359,30 +369,8 @@ if set(before) != set(after):
 moved = [wid for wid in before if abs(before[wid] - after[wid]) > 0.001]
 if len(moved) != 2:
     raise SystemExit(1)
-if len({after[wid] for wid in moved}) != 1:
-    raise SystemExit(1)
-PYEOF'
-import sys
-
-def ys(path):
-    out = []
-    for line in open(path):
-        parts = line.split()
-        if parts[0] != "wall":
-            continue
-        y1, y2 = float(parts[5]), float(parts[7])
-        if abs(y1 - y2) < 0.001:
-            out.append(round(y1, 3))
-    return sorted(set(out))
-
-before = ys(sys.argv[1])
-after = ys(sys.argv[2])
-if [abs(a - b) > 0.001 for a, b in zip(before, after)]:
-    pass
-moved = [b for a, b in zip(before, after) if abs(a - b) > 0.001]
-if sorted(before) != [-112, 48] and sorted(before) != [48, 112]:
-    pass
-if len(moved) != 2:
+shifts = {round(after[wid] - before[wid], 3) for wid in moved}
+if len(shifts) != 1 or abs(next(iter(shifts))) < 1:
     raise SystemExit(1)
 PYEOF
 then
