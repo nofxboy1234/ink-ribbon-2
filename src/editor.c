@@ -89,7 +89,18 @@ typedef enum {
     GESTURE_RESHAPE,
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
+    GESTURE_STAIRS_RESIZE,
 } GestureKind;
+
+/* Which edge of a stair footprint a resize drag moves. The opposite edge stays
+   fixed, so the drag only ever changes one extent. */
+typedef enum {
+    STAIR_EDGE_NONE = 0,
+    STAIR_EDGE_LEFT,
+    STAIR_EDGE_RIGHT,
+    STAIR_EDGE_TOP,
+    STAIR_EDGE_BOTTOM,
+} StairEdge;
 
 /* What a press landed on. A shape interior and a single edge both resolve to
    a wall set so selection and gestures have one path. */
@@ -122,6 +133,8 @@ typedef struct {
     bool additive;
     bool moved;
     float fixed_t;
+    int stair_edge;
+    float stair_fixed;
 } Gesture;
 
 typedef struct {
@@ -198,12 +211,12 @@ static const char* TOOL_NAMES[TOOL_COUNT] = {
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click an edge to select it, shift adds, drag to reshape or move",
+    "click an edge to select it, shift adds, drag to reshape or move; drag a stair edge to resize",
     "click to add walls, click the first point or Enter closes the shape",
     "click to draw a fill, Enter or double-click closes",
     "click a wall to place a door",
     "click to place a room label",
-    "click to place stairs",
+    "click to place stairs; drag a stair edge to resize",
 };
 
 static ImU32 col32(unsigned rgb) {
@@ -358,7 +371,9 @@ static bool gesture_active(const Editor* e) {
 static bool gesture_is_drag(const Editor* e) {
     return e->gesture.kind == GESTURE_MOVE || e->gesture.kind == GESTURE_RESHAPE ||
            e->gesture.kind == GESTURE_DOOR_SLIDE ||
-           e->gesture.kind == GESTURE_DOOR_RESIZE || e->gesture.kind == GESTURE_MARQUEE;
+           e->gesture.kind == GESTURE_DOOR_RESIZE ||
+           e->gesture.kind == GESTURE_STAIRS_RESIZE ||
+           e->gesture.kind == GESTURE_MARQUEE;
 }
 
 static void cancel_gesture(Editor* e) {
@@ -1138,19 +1153,18 @@ static void draw_stairs(const Editor* e) {
         ImVec2 b = world_to_screen(e, r.max);
         ImDrawList_AddRectFilledEx(dl, a, b, col32(STAIR_FILL), 0.0f, 0);
         ImDrawList_AddRectEx(dl, a, b, col32a(0x3a4048, 190), 0.0f, 1.0f, 0);
-        float along = (float)s->steps * STAIR_STEP_DEPTH;
-        if (s->dir == STAIRS_H) {
-            float x0 = s->pos.x - along * 0.5f;
-            for (int k = 0; k <= s->steps; k++) {
-                float x = x0 + (float)k * STAIR_STEP_DEPTH;
-                ImVec2 p = world_to_screen(e, v2(x, r.min.y));
+        /* steps + 1 tread lines across the box: the run axis takes width/steps
+           for a horizontal run and length/steps for a vertical one. */
+        bool horizontal = s->dir == STAIRS_H;
+        float run = horizontal ? s->width : s->length;
+        float spacing = run / (float)s->steps;
+        for (int k = 0; k <= s->steps; k++) {
+            float offset = (float)k * spacing;
+            if (horizontal) {
+                ImVec2 p = world_to_screen(e, v2(r.min.x + offset, r.min.y));
                 ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, col32(STAIR_COL), 1.0f, 0);
-            }
-        } else {
-            float y0 = s->pos.y - along * 0.5f;
-            for (int k = 0; k <= s->steps; k++) {
-                float y = y0 + (float)k * STAIR_STEP_DEPTH;
-                ImVec2 p = world_to_screen(e, v2(r.min.x, y));
+            } else {
+                ImVec2 p = world_to_screen(e, v2(r.min.x, r.min.y + offset));
                 ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, col32(STAIR_COL), 1.0f, 0);
             }
         }
@@ -1668,6 +1682,52 @@ static void begin_reshape(Editor* e, int wall_index, Vec2 world) {
     }
 }
 
+/* Nearest stair edge within the screen-pixel grab tolerance, or
+   STAIR_EDGE_NONE. Corners answer with whichever edge the press is closest to. */
+static int stair_edge_at(const Editor* e, int idx, ImVec2 mouse) {
+    if (idx < 0 || idx >= e->level.stairs_count) return STAIR_EDGE_NONE;
+    Rect r = level_stairs_rect(&e->level.stairs[idx]);
+    ImVec2 a = world_to_screen(e, r.min);
+    ImVec2 b = world_to_screen(e, r.max);
+    float tol = HIT_TOL_PX;
+    int best = STAIR_EDGE_NONE;
+    float best_dist = tol + 0.001f;
+    if (mouse.y >= a.y - tol && mouse.y <= b.y + tol) {
+        float d = fabsf(mouse.x - a.x);
+        if (d <= tol && d < best_dist) { best = STAIR_EDGE_LEFT; best_dist = d; }
+        d = fabsf(mouse.x - b.x);
+        if (d <= tol && d < best_dist) { best = STAIR_EDGE_RIGHT; best_dist = d; }
+    }
+    if (mouse.x >= a.x - tol && mouse.x <= b.x + tol) {
+        float d = fabsf(mouse.y - a.y);
+        if (d <= tol && d < best_dist) { best = STAIR_EDGE_TOP; best_dist = d; }
+        d = fabsf(mouse.y - b.y);
+        if (d <= tol && d < best_dist) { best = STAIR_EDGE_BOTTOM; best_dist = d; }
+    }
+    return best;
+}
+
+/* The edge under the press moves; the opposite edge is pinned for the whole
+   drag, so the box only ever grows or shrinks along one axis. */
+static void begin_stairs_resize(Editor* e, int idx, int edge, Vec2 world) {
+    Gesture* g = &e->gesture;
+    Rect r = level_stairs_rect(&e->level.stairs[idx]);
+    g->kind = GESTURE_STAIRS_RESIZE;
+    g->object_index = idx;
+    g->stair_edge = edge;
+    g->press_world = world;
+    g->move_applied = v2(0.0f, 0.0f);
+    g->moved = false;
+    switch (edge) {
+        case STAIR_EDGE_LEFT: g->stair_fixed = r.max.x; break;
+        case STAIR_EDGE_RIGHT: g->stair_fixed = r.min.x; break;
+        case STAIR_EDGE_TOP: g->stair_fixed = r.max.y; break;
+        case STAIR_EDGE_BOTTOM:
+        default: g->stair_fixed = r.min.y; break;
+    }
+    set_status(e, false, "Drag the stair edge to resize");
+}
+
 static void marquee_select(Editor* e, Rect rect, bool additive) {
     if (!additive) sel_clear(e);
     for (int i = 0; i < e->level.door_count; i++) {
@@ -1877,6 +1937,53 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             break;
         }
+        case GESTURE_STAIRS_RESIZE: {
+            int idx = g->object_index;
+            if (idx < 0 || idx >= e->level.stairs_count) {
+                cancel_gesture(e);
+                break;
+            }
+            if (down) {
+                Rect before = level_stairs_rect(&e->level.stairs[idx]);
+                Rect next = before;
+                /* Snap on keeps every edge on the grid, so the minimum is one
+                   whole cell even when that is larger than STAIR_MIN_SIZE. */
+                float min_size = e->snap ? fmaxf(STAIR_MIN_SIZE, e->grid_size)
+                                         : STAIR_MIN_SIZE;
+                if (g->stair_edge == STAIR_EDGE_LEFT ||
+                    g->stair_edge == STAIR_EDGE_RIGHT) {
+                    float x = e->snap ? snap_scalar(world.x, e->grid_size) : world.x;
+                    if (g->stair_edge == STAIR_EDGE_LEFT) {
+                        next.min.x = fminf(x, g->stair_fixed - min_size);
+                    } else {
+                        next.max.x = fmaxf(x, g->stair_fixed + min_size);
+                    }
+                } else if (g->stair_edge == STAIR_EDGE_TOP ||
+                           g->stair_edge == STAIR_EDGE_BOTTOM) {
+                    float y = e->snap ? snap_scalar(world.y, e->grid_size) : world.y;
+                    if (g->stair_edge == STAIR_EDGE_TOP) {
+                        next.min.y = fminf(y, g->stair_fixed - min_size);
+                    } else {
+                        next.max.y = fmaxf(y, g->stair_fixed + min_size);
+                    }
+                }
+                if (level_set_stairs_rect(&e->level, idx, next)) {
+                    Rect after = level_stairs_rect(&e->level.stairs[idx]);
+                    if (fabsf(after.min.x - before.min.x) > 0.0001f ||
+                        fabsf(after.min.y - before.min.y) > 0.0001f ||
+                        fabsf(after.max.x - before.max.x) > 0.0001f ||
+                        fabsf(after.max.y - before.max.y) > 0.0001f) {
+                        g->moved = true;
+                    }
+                }
+            }
+            if (!down) {
+                if (g->moved) commit(e, "Stairs resized");
+                else collapse_click(e);
+                cancel_gesture(e);
+            }
+            break;
+        }
         case GESTURE_NONE:
         case GESTURE_CHAIN:
         case GESTURE_POLYGON:
@@ -1981,6 +2088,18 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     bool ctrl = io->KeyCtrl;
     Hit hit = hit_test(e, world);
     if (hit.kind == HIT_NONE) {
+        /* A press just outside a stair box still grabs its edge, the way a wall
+           line is grabbable from either side. */
+        if (!shift && !ctrl) {
+            for (int i = e->level.stairs_count - 1; i >= 0; i--) {
+                int edge = stair_edge_at(e, i, mouse);
+                if (edge == STAIR_EDGE_NONE) continue;
+                sel_only(e, SEL_STAIRS, i);
+                cancel_gesture(e);
+                begin_stairs_resize(e, i, edge, world);
+                return;
+            }
+        }
         cancel_gesture(e);
         if (!shift) sel_clear(e);
         Gesture* g = &e->gesture;
@@ -2086,6 +2205,14 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         return;
     }
 
+    if (target.kind == SEL_STAIRS && !in_group) {
+        int edge = stair_edge_at(e, target.index, mouse);
+        if (edge != STAIR_EDGE_NONE) {
+            begin_stairs_resize(e, target.index, edge, world);
+            return;
+        }
+    }
+
     Vec2 anchor;
     if (!primary_anchor(e, &anchor)) return;
     begin_move(e, world, anchor);
@@ -2187,9 +2314,28 @@ static void begin_label_click(Editor* e, Vec2 world) {
     commit(e, "Label added");
 }
 
+/* The placement box before it goes into the level. With snap on, both extents
+   round up to whole grid cells and the min corner snaps, so every edge lands on
+   the grid the way walls do. */
+static Rect stairs_placement_rect(const Editor* e, Vec2 world) {
+    float across = STAIR_WIDTH;
+    float run = (float)e->stairs_steps * STAIR_STEP_DEPTH;
+    if (e->snap) {
+        across = ceilf(across / e->grid_size) * e->grid_size;
+        run = ceilf(run / e->grid_size) * e->grid_size;
+    }
+    float width = e->stairs_dir == STAIRS_H ? run : across;
+    float length = e->stairs_dir == STAIRS_H ? across : run;
+    Vec2 min = v2(world.x - width * 0.5f, world.y - length * 0.5f);
+    if (e->snap) {
+        min = v2(snap_scalar(min.x, e->grid_size), snap_scalar(min.y, e->grid_size));
+    }
+    return (Rect){ min, v2(min.x + width, min.y + length) };
+}
+
 static void begin_stairs_click(Editor* e, Vec2 world) {
-    Vec2 p = snapped(e, world);
-    int idx = level_add_stairs(&e->level, p, e->stairs_dir, e->stairs_steps);
+    Rect rect = stairs_placement_rect(e, world);
+    int idx = level_add_stairs(&e->level, rect, e->stairs_dir, e->stairs_steps);
     if (idx < 0) {
         set_status(e, true, "Could not add stairs: level is full");
         return;
@@ -2506,7 +2652,8 @@ static void draw_left_panel(Editor* e) {
         case TOOL_SELECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
             small_note("Click an edge to select it. Shift adds, Ctrl toggles.");
-            small_note("Drag an edge to reshape; drag a group to move it. Drag empty canvas to marquee.");
+            small_note("Drag an edge to reshape; drag a group to move it. Drag a stair edge to resize.");
+            small_note("Drag empty canvas to marquee.");
             break;
         case TOOL_COUNT:
         default: break;
@@ -2703,6 +2850,8 @@ static void inspector_stairs(Editor* e, int idx) {
         level_set_stairs(&e->level, idx, s->dir, steps);
     }
     if (igIsItemDeactivatedAfterEdit()) commit(e, "Stairs step count changed");
+    igText("Width   %.1f", s->width);
+    igText("Length  %.1f", s->length);
     igText("Position %.1f, %.1f", s->pos.x, s->pos.y);
     object_delete_button(e);
 }
@@ -2768,6 +2917,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Shift-click adds; Ctrl-click toggles");
         igTextDisabled("Drag empty canvas to marquee");
         igTextDisabled("Drag selected edges to reshape them");
+        igTextDisabled("Drag a stair edge to resize its footprint");
         igTextDisabled("Drag a group to move walls, doors, rooms, labels, or stairs");
         igTextDisabled("Drag a door to slide; drag an end to resize");
         igTextDisabled("Delete removes every selected object");
@@ -2859,6 +3009,8 @@ static void draw_help_modal(Editor* e) {
     igText("Drag a group to move its walls, doors, rooms, labels, and stairs.");
     igBullet();
     igText("Drag a door to slide it; drag an end to resize.");
+    igBullet();
+    igText("Drag a stair edge to resize its footprint.");
     igBullet();
     igText("A closed wall shape fills with the Wall tool color.");
     igBullet();
