@@ -102,6 +102,47 @@ count_records() { grep -c "$2" "$1" || true; }
 pixel_hex() {
     convert "$1" -format "%[hex:p{$2,$3}]" info: 2>/dev/null
 }
+set_grid() {
+    xdotool mousemove --sync $((WX + 63)) $((WY + 269)); xdotool click 1; sleep 0.5
+    xdotool mousemove --sync $((WX + 63)) $((WY + $1)); sleep 0.4
+    xdotool click 1; sleep 0.5
+}
+grid_flush() {
+    python3 - "$1" "$2" <<'PYEOF'
+import sys
+path, grid = sys.argv[1], float(sys.argv[2])
+rows = [line.split() for line in open(path) if line.startswith("stairs ")]
+if len(rows) != 1:
+    print("expected one stair, found", len(rows))
+    raise SystemExit(1)
+x, y, w, h = float(rows[0][1]), float(rows[0][2]), float(rows[0][5]), float(rows[0][6])
+edges = [x, y, x + w, y + h]
+bad = [v for v in edges if abs(v / grid - round(v / grid)) > 1e-6]
+print(f"x {x:g}..{x + w:g} y {y:g}..{y + h:g}")
+raise SystemExit(1 if bad else 0)
+PYEOF
+}
+stair_edge_drag() {
+    python3 - "$1" "$2" "$3" <<'PYEOF'
+import sys
+before, after, grid = sys.argv[1], sys.argv[2], float(sys.argv[3])
+def box(path):
+    r = [line.split() for line in open(path) if line.startswith("stairs ")][0]
+    return float(r[1]), float(r[2]), float(r[5]), float(r[6])
+x0, y0, w0, h0 = box(before)
+x1, y1, w1, h1 = box(after)
+if abs(x1 - x0) > 1e-6 or abs(y1 - y0) > 1e-6 or abs(h1 - h0) > 1e-6:
+    print("an edge that should stay fixed moved")
+    raise SystemExit(1)
+if w1 <= w0:
+    print("the dragged edge did not move out")
+    raise SystemExit(1)
+if abs((x1 + w1) / grid - round((x1 + w1) / grid)) > 1e-6:
+    print("the dragged edge is off the grid")
+    raise SystemExit(1)
+print(f"right edge {x0 + w0:g} -> {x1 + w1:g}, opposite edge {x0:g} stayed")
+PYEOF
+}
 # Every wall line in two saved levels, with its delta and length change.
 wall_moves() {
     python3 - "$1" "$2" <<'PYEOF'
@@ -378,6 +419,39 @@ then
 fi
 edges_accent=$accent
 echo "PASS two edges selected (accent px=$accent, amber px=$amber) and both moved on drag"
+
+echo "== stairs sit on the grid and their edges resize =="
+new_level
+set_grid 322
+xdotool key --clearmodifiers 6
+click 550 400
+save_as /tmp/ink-ribbon-stairs8.lvl
+if ! stairs8=$(grid_flush /tmp/ink-ribbon-stairs8.lvl 8); then
+    echo "FAIL stairs are not flush on grid 8 ($stairs8)"; exit 1
+fi
+xdotool key --clearmodifiers 1
+read -r stair_rx stair_ry < <(python3 - /tmp/ink-ribbon-stairs8.lvl <<'PYEOF'
+import sys
+r = [line.split() for line in open(sys.argv[1]) if line.startswith("stairs ")][0]
+x, y, w, h = float(r[1]), float(r[2]), float(r[5]), float(r[6])
+print(int(round(x + w + 585)), int(round(y + h / 2 + 411.5)))
+PYEOF
+)
+drag "$stair_rx" "$stair_ry" "$((stair_rx + 40))" "$stair_ry"
+save_as /tmp/ink-ribbon-stairs8b.lvl
+if ! stair_change=$(stair_edge_drag /tmp/ink-ribbon-stairs8.lvl /tmp/ink-ribbon-stairs8b.lvl 8); then
+    echo "FAIL stair edge drag ($stair_change)"; exit 1
+fi
+set_grid 359
+new_level
+xdotool key --clearmodifiers 6
+click 550 400
+save_as /tmp/ink-ribbon-stairs32.lvl
+if ! stairs32=$(grid_flush /tmp/ink-ribbon-stairs32.lvl 32); then
+    echo "FAIL stairs are not flush on grid 32 ($stairs32)"; exit 1
+fi
+set_grid 322
+echo "PASS stairs flush on grid 8 ($stairs8) and 32 ($stairs32); $stair_change"
 
 echo "== the Grid setting changes the drawn grid =="
 grid_pixels() {
