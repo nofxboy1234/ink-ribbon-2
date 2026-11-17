@@ -75,10 +75,10 @@ static void input(const sapp_event* ev) {
 
 sapp_desc sokol_main(int argc, char* argv[]) {
     snprintf(startup_level, sizeof startup_level, "%s", "levels/re2-library.lvl");
-    for (int i = 1; i + 1 < argc; i++) {
-        if (strcmp(argv[i], "--level") == 0) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
             snprintf(startup_level, sizeof startup_level, "%s", argv[i + 1]);
-            break;
+            i++;
         }
     }
 

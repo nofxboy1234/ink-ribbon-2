@@ -455,7 +455,7 @@ static void test_save_load(void) {
           "save writes label text as the rest of the line");
     check(strstr(file, "label 0.000 0.000 8.000 bad name\n") != NULL,
           "save replaces control characters in label text with spaces");
-    check(strstr(file, "stairs 42.000 50.000 0 6 72.000 44.000\n") != NULL,
+    check(strstr(file, "stairs 42.000 50.000 0 6 72.000 44.000 0\n") != NULL,
           "save writes the explicit resized stair footprint");
 
     Level dst;
@@ -464,6 +464,8 @@ static void test_save_load(void) {
     check(err.message[0] == '\0', "level_load clears the error on success");
     check(dst.wall_count == 2 && dst.walls[0].id == 2 && dst.walls[1].id == 3,
           "roundtrip preserves wall ids");
+    check(dst.stairs_count == 1 && dst.stairs[0].bottom == 0,
+          "roundtrip preserves the stair bottom edge");
     check(dst.next_wall_id == 4, "load sets next_wall_id to max wall id + 1");
     check(dst.shape_count == 2 && dst.shapes[0].id == 2 && dst.shapes[1].id == 3 &&
               !dst.shapes[0].closed && !dst.shapes[1].closed &&

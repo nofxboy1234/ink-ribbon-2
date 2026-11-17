@@ -753,6 +753,7 @@ int level_add_stairs(Level* level, Rect rect, StairsDir dir, int steps) {
         rect.max.y - rect.min.y,
         clamp_steps(steps),
         dir,
+        false,
     };
     return index;
 }
@@ -854,9 +855,9 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
     }
     for (int i = 0; ok && i < level->stairs_count; i++) {
         const Stairs* s = &level->stairs[i];
-        ok = fprintf(f, "stairs %.3f %.3f %d %d %.3f %.3f\n",
+        ok = fprintf(f, "stairs %.3f %.3f %d %d %.3f %.3f %d\n",
                      s->pos.x, s->pos.y, (int)s->dir, s->steps,
-                     s->width, s->length) >= 0;
+                     s->width, s->length, s->bottom ? 1 : 0) >= 0;
     }
 
     int write_errno = 0;
@@ -1103,8 +1104,15 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             if (!read_float(&save, &x) || !read_float(&save, &y) ||
                 !read_int(&save, &dir) || !read_int(&save, &steps) ||
                 (version == 3 && (!read_float(&save, &width) ||
-                                  !read_float(&save, &length))) ||
-                next_token(&save)) {
+                                  !read_float(&save, &length)))) {
+                ok = fail_line(err, line_no, "malformed stairs record");
+                break;
+            }
+            /* Prototype builds append which end of the run is the bottom. Old
+               files omit it, so it stays optional. */
+            int bottom = 0;
+            char* extra = next_token(&save);
+            if (extra && (!parse_int(extra, &bottom) || next_token(&save))) {
                 ok = fail_line(err, line_no, "malformed stairs record");
                 break;
             }
@@ -1132,7 +1140,8 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 break;
             }
             tmp.stairs[tmp.stairs_count++] =
-                (Stairs){ box.min, width, length, kept_steps, (StairsDir)dir };
+                (Stairs){ box.min, width, length, kept_steps, (StairsDir)dir,
+                          bottom != 0 };
         } else {
             ok = fail_line(err, line_no, "unknown record '%s'", tag);
         }

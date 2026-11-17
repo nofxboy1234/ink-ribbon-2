@@ -85,13 +85,16 @@ typedef enum {
 
 /* A stair footprint is an explicit box, so its edges can sit on the grid and
    be dragged. pos is the min corner. width and length are the world extents.
-   dir picks which axis carries the treads; steps divides that run. */
+   dir picks which axis carries the treads; steps divides that run. bottom says
+   the bottom of the run sits at the min end of that axis; the treads fade out
+   toward it. */
 typedef struct {
     Vec2 pos;
     float width;
     float length;
     int steps;
     StairsDir dir;
+    bool bottom;
 } Stairs;
 
 typedef struct {

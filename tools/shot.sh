@@ -21,7 +21,7 @@ meanwhile() {
 }
 trap meanwhile EXIT INT TERM HUP
 
-( exec -a "$EDITOR_TAG" ./build/editor ) >/tmp/ink-ribbon.log 2>&1 &
+( exec -a "$EDITOR_TAG" ./build/editor ${EDITOR_ARGS:-} ) >/tmp/ink-ribbon.log 2>&1 &
 pid=$!
 
 win=""

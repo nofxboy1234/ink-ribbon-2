@@ -53,6 +53,20 @@ typedef enum {
     TOOL_COUNT,
 } Tool;
 
+/* Prototype variants differ only in how drawing and selecting share the
+   mouse. PROTO_NONE is the shipped editor. */
+typedef enum {
+    PROTO_NONE = 0,
+    PROTO_A_MODIFIER,
+} ProtoVariant;
+
+/* One clipped piece of a wall kept from the last marquee. Wall ids are stable
+   across wall deletes, so a span survives an unrelated edit. */
+typedef struct {
+    WallId wall;
+    float t0, t1;
+} WallSpan;
+
 typedef enum {
     SEL_NONE = 0,
     SEL_WALL,
@@ -90,6 +104,9 @@ typedef enum {
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
     GESTURE_STAIRS_RESIZE,
+    /* Prototype presses wait for the release to decide click versus drag. */
+    GESTURE_PROTO_PENDING,
+    /* Prototype C: the press landed on a wall endpoint, so a drag extends it. */
 } GestureKind;
 
 /* Which edge of a stair footprint a resize drag moves. The opposite edge stays
@@ -135,6 +152,9 @@ typedef struct {
     float fixed_t;
     int stair_edge;
     float stair_fixed;
+    /* Prototype press: a click-click chain was already active, so its points
+       survive under the temporary pending gesture. */
+    bool proto_chain;
 } Gesture;
 
 typedef struct {
@@ -175,6 +195,25 @@ struct Editor {
     Gesture gesture;
     bool fit_pending;
     bool pan_active;
+
+    ProtoVariant proto;
+
+    /* Line selection from the last marquee: clipped wall spans plus the
+       snapped box and drag vector the menu needs for stairs. */
+    WallSpan spans[LEVEL_MAX_WALLS];
+    int span_count;
+    Rect proto_rect;
+    bool proto_rect_valid;
+    Vec2 proto_drag_from;
+    Vec2 proto_drag_to;
+
+    /* Context menu is opened after the canvas input runs, in the canvas
+       window, from state captured on the right click. */
+    bool ctx_open;
+    ShapeId ctx_fill_shape;
+    bool ctx_can_fill;
+    bool ctx_can_door;
+    bool ctx_can_stairs;
 
     float grid_size;
     bool snap;
@@ -373,6 +412,7 @@ static bool gesture_is_drag(const Editor* e) {
            e->gesture.kind == GESTURE_DOOR_SLIDE ||
            e->gesture.kind == GESTURE_DOOR_RESIZE ||
            e->gesture.kind == GESTURE_STAIRS_RESIZE ||
+           e->gesture.kind == GESTURE_PROTO_PENDING ||
            e->gesture.kind == GESTURE_MARQUEE;
 }
 
@@ -899,12 +939,14 @@ static void new_level(Editor* e) {
 
 static bool save_level_as(Editor* e, const char* path) {
     LevelError err;
-    if (!level_save(&e->level, path, &err)) {
+    char target[512];
+    snprintf(target, sizeof target, "%s", path);
+    if (!level_save(&e->level, target, &err)) {
         snprintf(e->modal_error, sizeof e->modal_error, "%s", err.message);
         set_status(e, true, "Save failed: %s", err.message);
         return false;
     }
-    snprintf(e->current_path, sizeof e->current_path, "%s", path);
+    snprintf(e->current_path, sizeof e->current_path, "%s", target);
     set_status(e, false, "Saved %s", path);
     e->modal_error[0] = '\0';
     return true;
@@ -1154,18 +1196,23 @@ static void draw_stairs(const Editor* e) {
         ImDrawList_AddRectFilledEx(dl, a, b, col32(STAIR_FILL), 0.0f, 0);
         ImDrawList_AddRectEx(dl, a, b, col32a(0x3a4048, 190), 0.0f, 1.0f, 0);
         /* steps + 1 tread lines across the box: the run axis takes width/steps
-           for a horizontal run and length/steps for a vertical one. */
+           for a horizontal run and length/steps for a vertical one. The treads
+           fade toward the bottom edge, which the drag started at. */
         bool horizontal = s->dir == STAIRS_H;
         float run = horizontal ? s->width : s->length;
         float spacing = run / (float)s->steps;
         for (int k = 0; k <= s->steps; k++) {
             float offset = (float)k * spacing;
+            float frac = run > 0.0001f ? offset / run : 1.0f;
+            if (!s->bottom) frac = 1.0f - frac;
+            float alpha = 0.40f + 0.60f * frac;
+            ImU32 tread = col32a(STAIR_COL, (unsigned)(alpha * 255.0f));
             if (horizontal) {
                 ImVec2 p = world_to_screen(e, v2(r.min.x + offset, r.min.y));
-                ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, col32(STAIR_COL), 1.0f, 0);
+                ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, tread, 1.0f, 0);
             } else {
                 ImVec2 p = world_to_screen(e, v2(r.min.x, r.min.y + offset));
-                ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, col32(STAIR_COL), 1.0f, 0);
+                ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, tread, 1.0f, 0);
             }
         }
     }
@@ -1233,22 +1280,32 @@ static void draw_wall_segment(const Editor* e, ImDrawList* dl, const Wall* wall,
                          thickness, 0);
 }
 
+/* Prototype builds: an unfilled or open shape draws its lines faint, a filled
+   closed shape draws them at full opacity. */
+static unsigned wall_alpha_for(const Editor* e, const Wall* w) {
+    if (e->proto == PROTO_NONE) return 255;
+    const Shape* shape = level_shape_by_id_const(&e->level, w->shape);
+    if (shape && shape->closed && shape->fill != SHAPE_FILL_NONE) return 255;
+    return 140;
+}
+
 static void draw_walls(const Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     float wall_px = 2.0f;
     for (int i = 0; i < e->level.wall_count; i++) {
         const Wall* w = &e->level.walls[i];
+        ImU32 wall_col = col32a(WALL_COL, wall_alpha_for(e, w));
         Span spans[LEVEL_MAX_DOORS];
         int n = wall_door_spans(e, w, spans);
         float cursor = 0.0f;
         for (int k = 0; k < n; k++) {
             if (spans[k].a > cursor) {
-                draw_wall_segment(e, dl, w, cursor, spans[k].a, col32(WALL_COL), wall_px);
+                draw_wall_segment(e, dl, w, cursor, spans[k].a, wall_col, wall_px);
             }
             if (spans[k].b > cursor) cursor = spans[k].b;
         }
         if (cursor < 1.0f) {
-            draw_wall_segment(e, dl, w, cursor, 1.0f, col32(WALL_COL), wall_px);
+            draw_wall_segment(e, dl, w, cursor, 1.0f, wall_col, wall_px);
         }
     }
 }
@@ -1448,8 +1505,23 @@ static void draw_selected_edges(const Editor* e) {
     }
 }
 
+/* The clipped marquee selection: each span highlighted across its own wall. */
+static void draw_proto_spans(const Editor* e) {
+    if (e->span_count <= 0) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    ImU32 col = col32a(VERTEX_SELECT_COL, 240);
+    for (int i = 0; i < e->span_count; i++) {
+        const Wall* w = level_wall_by_id_const(&e->level, e->spans[i].wall);
+        if (!w) continue;
+        draw_wall_segment(e, dl, w, e->spans[i].t0, e->spans[i].t1,
+                          col32a(VERTEX_SELECT_COL, 70), 10.0f);
+        draw_wall_segment(e, dl, w, e->spans[i].t0, e->spans[i].t1, col, 4.0f);
+    }
+}
+
 static void draw_selection(Editor* e) {
     sel_prune(e);
+    if (e->proto != PROTO_NONE) draw_proto_spans(e);
     draw_selected_edges(e);
     for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
         SelKind kind = (SelKind)k;
@@ -1586,7 +1658,14 @@ static void draw_status_strip(Editor* e) {
     float clip_right = right_x - 14.0f;
     if (clip_right < pmin.x) clip_right = pmin.x;
     ImDrawList_PushClipRect(dl, pmin, (ImVec2){ clip_right, pmax.y }, true);
+    char proto_label[64];
     const char* tool = TOOL_NAMES[e->tool];
+    const char* hint = TOOL_HINTS[e->tool];
+    if (e->proto != PROTO_NONE) {
+        snprintf(proto_label, sizeof proto_label, "Lines");
+        tool = proto_label;
+        hint = "click-click draws, Shift+drag marquees";
+    }
     ImDrawList_AddTextImFontPtrEx(dl, font, size, (ImVec2){ x, ty },
                                   col32(SELECT_COL), tool, NULL, 0.0f, NULL);
     x += ImFont_CalcTextSizeA(font, size, FLT_MAX, 0.0f, tool).x + 2.0f;
@@ -1595,9 +1674,9 @@ static void draw_status_strip(Editor* e) {
     if (e->status_error && e->status[0]) {
         snprintf(rest, sizeof rest, "  %s", e->status);
     } else if (e->status[0]) {
-        snprintf(rest, sizeof rest, "  %s   |   %s", e->status, TOOL_HINTS[e->tool]);
+        snprintf(rest, sizeof rest, "  %s   |   %s", e->status, hint);
     } else {
-        snprintf(rest, sizeof rest, "  %s", TOOL_HINTS[e->tool]);
+        snprintf(rest, sizeof rest, "  %s", hint);
     }
     ImDrawList_AddTextImFontPtrEx(dl, font, size, (ImVec2){ x, ty },
                                   col32(e->status_error ? ERROR_COL : MUTED_COL),
@@ -1767,6 +1846,177 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
     set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
 }
 
+/* ---- prototype line-first interaction --------------------------------- */
+
+static void begin_select(Editor* e, Vec2 world, ImVec2 mouse);
+static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse);
+
+/* Portion of an axis-aligned wall inside rect, as a t range. */
+static bool proto_clip_wall(const Wall* w, Rect r, float* out_t0, float* out_t1) {
+    float t0 = 0.0f;
+    float t1 = 1.0f;
+    float dx = w->b.x - w->a.x;
+    float dy = w->b.y - w->a.y;
+    if (fabsf(dx) < 0.0001f) {
+        if (w->a.x < r.min.x || w->a.x > r.max.x) return false;
+    } else {
+        float a = (r.min.x - w->a.x) / dx;
+        float b = (r.max.x - w->a.x) / dx;
+        if (a > b) {
+            float tmp = a;
+            a = b;
+            b = tmp;
+        }
+        if (a > t0) t0 = a;
+        if (b < t1) t1 = b;
+    }
+    if (fabsf(dy) < 0.0001f) {
+        if (w->a.y < r.min.y || w->a.y > r.max.y) return false;
+    } else {
+        float a = (r.min.y - w->a.y) / dy;
+        float b = (r.max.y - w->a.y) / dy;
+        if (a > b) {
+            float tmp = a;
+            a = b;
+            b = tmp;
+        }
+        if (a > t0) t0 = a;
+        if (b < t1) t1 = b;
+    }
+    if (t1 - t0 <= 0.0001f) return false;
+    *out_t0 = t0;
+    *out_t1 = t1;
+    return true;
+}
+
+static void proto_finish_marquee(Editor* e, Vec2 from, Vec2 to) {
+    Rect raw = rect_from_points(from, to);
+    Rect r = rect_from_points(snapped(e, raw.min), snapped(e, raw.max));
+    e->span_count = 0;
+    for (int i = 0; i < e->level.wall_count && e->span_count < LEVEL_MAX_WALLS; i++) {
+        float t0, t1;
+        if (!proto_clip_wall(&e->level.walls[i], r, &t0, &t1)) continue;
+        e->spans[e->span_count++] = (WallSpan){ e->level.walls[i].id, t0, t1 };
+    }
+    float w = r.max.x - r.min.x;
+    float h = r.max.y - r.min.y;
+    e->proto_rect = r;
+    e->proto_rect_valid = e->span_count == 0 && w >= e->grid_size && h >= e->grid_size;
+    e->proto_drag_from = from;
+    e->proto_drag_to = to;
+    sel_clear(e);
+    if (e->span_count > 0) {
+        set_status(e, false, "%d wall section%s selected", e->span_count,
+                   e->span_count == 1 ? "" : "s");
+    } else if (e->proto_rect_valid) {
+        set_status(e, false, "Empty box %.0f x %.0f: right-click for Stairs", w, h);
+    } else {
+        set_status(e, false, "Marquee clipped no walls");
+    }
+}
+
+/* Start a chain at an existing endpoint without adding a wall yet. */
+static void proto_arm_chain(Editor* e, Vec2 world) {
+    Gesture* g = &e->gesture;
+    Vec2 p = snapped(e, world);
+    if (g->kind == GESTURE_CHAIN) {
+        Vec2 last = g->pts[g->point_count - 1];
+        if (v2_equal(last, p, 0.001f)) {
+            set_status(e, false, "Continuing line");
+            return;
+        }
+        discard_empty_chain_shape(e);
+    }
+    cancel_gesture(e);
+    sel_clear(e);
+    ShapeId shape = level_add_shape(&e->level);
+    if (shape == 0) {
+        set_status(e, true, "Could not start a shape: level is full");
+        return;
+    }
+    g = &e->gesture;
+    g->kind = GESTURE_CHAIN;
+    g->shape = shape;
+    g->point_count = 1;
+    g->pts[0] = p;
+    g->wall_count = 0;
+    set_status(e, false, "Continuing line from endpoint");
+}
+
+/* One orthogonal segment for a drag stroke. Continues the chain only when the
+   stroke starts on its last point. */
+static void proto_add_stroke(Editor* e, Vec2 from, Vec2 to) {
+    from = snapped(e, from);
+    to = snapped(e, to);
+    if (v2_equal(from, to, 0.001f)) return;
+    Gesture* g = &e->gesture;
+    if (g->kind == GESTURE_CHAIN) {
+        Vec2 last = g->pts[g->point_count - 1];
+        if (!v2_equal(last, from, 0.001f)) {
+            discard_empty_chain_shape(e);
+            cancel_gesture(e);
+        }
+    }
+    if (g->kind != GESTURE_CHAIN) {
+        sel_clear(e);
+        ShapeId shape = level_add_shape(&e->level);
+        if (shape == 0) {
+            set_status(e, true, "Could not start a shape: level is full");
+            return;
+        }
+        g = &e->gesture;
+        g->kind = GESTURE_CHAIN;
+        g->shape = shape;
+        g->point_count = 1;
+        g->pts[0] = from;
+        g->wall_count = 0;
+    }
+    if (g->point_count > LEVEL_MAX_WALLS) {
+        set_status(e, true, "Chain is full");
+        return;
+    }
+    if (level_add_wall_to_shape(&e->level, g->shape, from, to) < 0) {
+        set_status(e, true, "Could not add wall (capacity or invalid segment)");
+        return;
+    }
+    g->wall_count++;
+    g->pts[g->point_count++] = to;
+    commit(e, "Wall added");
+}
+
+static void proto_finish_pending(Editor* e, ImVec2 mouse, bool moved) {
+    Gesture* g = &e->gesture;
+    Vec2 press = g->press_world;
+    Vec2 release = screen_to_world(e, mouse);
+    Vec2 end = constrained(e, press, release);
+    bool marquee = false, stroke = false, click = false, select = false, arm = false;
+
+    if (!moved) click = true;
+
+    bool had_chain = g->proto_chain;
+    if (had_chain) g->kind = GESTURE_CHAIN;
+    if (!click && !stroke && !arm) {
+        if (had_chain) discard_empty_chain_shape(e);
+        cancel_gesture(e);
+    } else if (!had_chain) {
+        cancel_gesture(e);
+    }
+
+    if (marquee) {
+        proto_finish_marquee(e, press, release);
+    } else if (stroke) {
+        proto_add_stroke(e, press, end);
+    } else if (select) {
+        begin_select(e, release, mouse);
+    } else if (arm) {
+        proto_arm_chain(e, press);
+    } else if (click) {
+        begin_wall_click(e, press, mouse);
+    } else {
+        set_status(e, false, "A: plain drag does nothing, Shift+drag marquees");
+    }
+}
+
 static void update_drag(Editor* e, bool have_pointer) {
     ImGuiIO* io = igGetIO();
     Gesture* g = &e->gesture;
@@ -1786,11 +2036,16 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             if (down) break;
             if (g->moved) {
-                marquee_select(e, rect_from_points(g->press_world, g->cur_world),
-                               g->additive);
+                if (e->proto != PROTO_NONE) {
+                    proto_finish_marquee(e, g->press_world, g->cur_world);
+                } else {
+                    marquee_select(e, rect_from_points(g->press_world, g->cur_world),
+                                   g->additive);
+                }
             } else {
                 int n = sel_count(&e->selection);
-                if (n == 0) set_status(e, false, "Selection cleared");
+                if (e->proto != PROTO_NONE) set_status(e, false, "Marquee");
+                else if (n == 0) set_status(e, false, "Selection cleared");
                 else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
             }
             cancel_gesture(e);
@@ -1984,6 +2239,18 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             break;
         }
+        case GESTURE_PROTO_PENDING: {
+            if (!have_pointer) {
+                cancel_gesture(e);
+                break;
+            }
+            g->cur_world = world;
+            if (screen_dist(io->MousePos, v2_to_im(g->press_screen)) >= 4.0f) {
+                g->moved = true;
+            }
+            if (!down) proto_finish_pending(e, io->MousePos, g->moved);
+            break;
+        }
         case GESTURE_NONE:
         case GESTURE_CHAIN:
         case GESTURE_POLYGON:
@@ -2046,7 +2313,9 @@ static void close_wall_chain(Editor* e, bool via_enter) {
 
     ShapeId closed = g->shape;
     cancel_gesture(e);
-    sel_only_shape_walls(e, closed);
+    /* Prototype selection is the marquee span, so closing does not select the
+       whole outline. */
+    if (e->proto == PROTO_NONE) sel_only_shape_walls(e, closed);
     commit(e, "Shape closed");
 }
 
@@ -2067,7 +2336,10 @@ static void close_polygon(Editor* e) {
 }
 
 static void cancel_transient(Editor* e) {
-    if (e->gesture.kind == GESTURE_MARQUEE) {
+    if (e->gesture.kind == GESTURE_PROTO_PENDING) {
+        cancel_gesture(e);
+        set_status(e, false, "Cancelled");
+    } else if (e->gesture.kind == GESTURE_MARQUEE) {
         cancel_gesture(e);
         set_status(e, false, "Marquee cancelled");
     } else if (e->gesture.kind == GESTURE_CHAIN || e->gesture.kind == GESTURE_POLYGON) {
@@ -2344,6 +2616,151 @@ static void begin_stairs_click(Editor* e, Vec2 world) {
     commit(e, "Stairs added");
 }
 
+/* Nearest wall endpoint within 10 screen pixels of the press. */
+
+static void proto_press(Editor* e, Vec2 world, ImVec2 mouse) {
+    ImGuiIO* io = igGetIO();
+    Gesture* g = &e->gesture;
+
+    bool had_chain = g->kind == GESTURE_CHAIN;
+    if (e->proto == PROTO_A_MODIFIER && io->KeyShift) {
+        if (had_chain) discard_empty_chain_shape(e);
+        cancel_gesture(e);
+        g = &e->gesture;
+        g->kind = GESTURE_MARQUEE;
+        g->press_world = world;
+        g->cur_world = world;
+        g->press_screen = v2(mouse.x, mouse.y);
+        g->additive = false;
+        g->moved = false;
+        set_status(e, false, "Marquee");
+        return;
+    }
+
+    if (!had_chain) cancel_gesture(e);
+    g = &e->gesture;
+    g->kind = GESTURE_PROTO_PENDING;
+    g->press_world = world;
+    g->cur_world = world;
+    g->press_screen = v2(mouse.x, mouse.y);
+    g->moved = false;
+    g->proto_chain = had_chain;
+    set_status(e, false, "Press");
+}
+
+static void proto_open_context(Editor* e, Vec2 world) {
+    int shape = level_shape_at(&e->level, world);
+    int spans = 0;
+    for (int i = 0; i < e->span_count; i++) {
+        if (level_wall_by_id_const(&e->level, e->spans[i].wall)) spans++;
+    }
+    e->ctx_open = true;
+    e->ctx_fill_shape = shape >= 0 ? e->level.shapes[shape].id : 0;
+    e->ctx_can_door = spans > 0;
+    e->ctx_can_fill = e->ctx_fill_shape != 0 && spans == 0;
+    e->ctx_can_stairs = spans == 0 && e->proto_rect_valid;
+}
+
+static void proto_set_fill(Editor* e, ShapeFill fill) {
+    Shape* shape = level_shape_by_id(&e->level, e->ctx_fill_shape);
+    if (!shape) {
+        set_status(e, true, "No closed shape under the click");
+        return;
+    }
+    level_set_shape_fill(&e->level, shape->id, fill);
+    commit(e, fill == SHAPE_FILL_RED ? "Filled red"
+                                     : fill == SHAPE_FILL_BLUE ? "Filled blue"
+                                                               : "Fill cleared");
+}
+
+static void proto_add_doors(Editor* e, DoorColor color) {
+    int added = 0;
+    for (int i = 0; i < e->span_count; i++) {
+        const Wall* w = level_wall_by_id_const(&e->level, e->spans[i].wall);
+        if (!w) continue;
+        float len = wall_length(w);
+        if (len <= 0.0001f) continue;
+        float t = (e->spans[i].t0 + e->spans[i].t1) * 0.5f;
+        float width = (e->spans[i].t1 - e->spans[i].t0) * len;
+        /* level_add_door clamps to the wall and raises the width to the
+           minimum, so the span only needs its centre and length. */
+        if (level_add_door(&e->level, w->id, t, width, color) >= 0) added++;
+    }
+    e->span_count = 0;
+    e->proto_rect_valid = false;
+    if (added > 0) commit(e, "Door added");
+    else set_status(e, true, "No wall section to door");
+}
+
+static void proto_add_stairs(Editor* e) {
+    Rect r = e->proto_rect;
+    float dx = e->proto_drag_to.x - e->proto_drag_from.x;
+    float dy = e->proto_drag_to.y - e->proto_drag_from.y;
+    StairsDir dir = fabsf(dy) >= fabsf(dx) ? STAIRS_V : STAIRS_H;
+    float run = dir == STAIRS_H ? r.max.x - r.min.x : r.max.y - r.min.y;
+    int steps = (int)lroundf(run / STAIR_STEP_DEPTH);
+    if (steps < STAIR_MIN_STEPS) steps = STAIR_MIN_STEPS;
+    if (steps > STAIR_MAX_STEPS) steps = STAIR_MAX_STEPS;
+    int idx = level_add_stairs(&e->level, r, dir, steps);
+    if (idx < 0) {
+        set_status(e, true, "Could not add stairs: box is invalid");
+        return;
+    }
+    /* The drag starts at the bottom edge. */
+    e->level.stairs[idx].bottom = dir == STAIRS_H ? dx >= 0.0f : dy >= 0.0f;
+    sel_only(e, SEL_STAIRS, idx);
+    e->span_count = 0;
+    e->proto_rect_valid = false;
+    commit(e, "Stairs added");
+}
+
+static void proto_context_menu(Editor* e) {
+    if (e->ctx_can_door && igBeginMenu("Door")) {
+        if (igMenuItemEx("White", NULL, false, true)) {
+            proto_add_doors(e, DOOR_WHITE);
+            igCloseCurrentPopup();
+        }
+        if (igMenuItemEx("Red", NULL, false, true)) {
+            proto_add_doors(e, DOOR_RED);
+            igCloseCurrentPopup();
+        }
+        if (igMenuItemEx("Blue", NULL, false, true)) {
+            proto_add_doors(e, DOOR_BLUE);
+            igCloseCurrentPopup();
+        }
+        igEndMenu();
+    }
+    if (e->ctx_can_fill && igBeginMenu("Fill")) {
+        if (igMenuItemEx("Red", NULL, false, true)) {
+            proto_set_fill(e, SHAPE_FILL_RED);
+            igCloseCurrentPopup();
+        }
+        if (igMenuItemEx("Blue", NULL, false, true)) {
+            proto_set_fill(e, SHAPE_FILL_BLUE);
+            igCloseCurrentPopup();
+        }
+        if (igMenuItemEx("None", NULL, false, true)) {
+            proto_set_fill(e, SHAPE_FILL_NONE);
+            igCloseCurrentPopup();
+        }
+        igEndMenu();
+    }
+    if (e->ctx_can_stairs && igMenuItemEx("Stairs", NULL, false, true)) {
+        proto_add_stairs(e);
+        igCloseCurrentPopup();
+    }
+    if (e->ctx_can_door || e->ctx_can_fill || e->ctx_can_stairs) {
+        igSeparator();
+    }
+    if (igMenuItemEx("Clear selection", NULL, false, true)) {
+        sel_clear(e);
+        e->span_count = 0;
+        e->proto_rect_valid = false;
+        set_status(e, false, "Selection cleared");
+        igCloseCurrentPopup();
+    }
+}
+
 static void handle_canvas_click(Editor* e, Vec2 world, ImVec2 mouse, int hover_wall,
                                 float hover_t) {
     switch (e->tool) {
@@ -2414,11 +2831,13 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     }
 
     if (hovered && igIsMouseClicked(1)) {
-        cancel_transient(e);
+        if (e->proto != PROTO_NONE) proto_open_context(e, world);
+        else cancel_transient(e);
         return;
     }
     if (hovered && igIsMouseClicked(0) && !e->pan_active) {
-        handle_canvas_click(e, world, io->MousePos, hover_wall, hover_t);
+        if (e->proto != PROTO_NONE) proto_press(e, world, io->MousePos);
+        else handle_canvas_click(e, world, io->MousePos, hover_wall, hover_t);
     }
 }
 
@@ -2478,6 +2897,15 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_marquee(e);
     draw_status_strip(e);
 
+    if (e->ctx_open) {
+        igOpenPopup("##proto_ctx", 0);
+        e->ctx_open = false;
+    }
+    if (e->proto != PROTO_NONE && igBeginPopup("##proto_ctx", 0)) {
+        proto_context_menu(e);
+        igEndPopup();
+    }
+
     igEnd();
 }
 
@@ -2534,6 +2962,28 @@ static void draw_menu(Editor* e) {
     }
 }
 
+/* The variant chip names the variant and its select gesture. */
+static void proto_chip(Editor* e) {
+    float w = igGetContentRegionAvail().x;
+    float h = 62.0f;
+    ImVec2 p = igGetCursorScreenPos();
+    ImVec2 q = { p.x + w, p.y + h };
+    ImDrawList* dl = igGetWindowDrawList();
+    ImDrawList_AddRectFilledEx(dl, p, q, col32(0x1a2531), 4.0f, 0);
+    ImDrawList_AddRectEx(dl, p, q, col32a(ACCENT_COL, 200), 4.0f, 1.0f, 0);
+
+    const char* line1 = "Lines";
+    const char* line2 = "click-click draws";
+    const char* line3 = "Shift+drag marquees";
+    ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 14.0f, (ImVec2){ p.x + 9.0f, p.y + 7.0f },
+                                  col32(ACCENT_COL), line1, NULL, 0.0f, NULL);
+    ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 10.0f, (ImVec2){ p.x + 9.0f, p.y + 25.0f },
+                                  col32(TEXT_COL), line2, NULL, 0.0f, NULL);
+    ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 10.0f, (ImVec2){ p.x + 9.0f, p.y + 40.0f },
+                                  col32(MUTED_COL), line3, NULL, 0.0f, NULL);
+    igDummy((ImVec2){ w, h + 4.0f });
+}
+
 static void draw_left_panel(Editor* e) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -2545,13 +2995,18 @@ static void draw_left_panel(Editor* e) {
     igBegin("##tools", NULL, flags);
     igPopStyleColorEx(1);
 
-    heading("Tools");
-    for (int i = 0; i < TOOL_COUNT; i++) {
-        if (tool_button(e, (Tool)i)) switch_tool(e, (Tool)i);
+    if (e->proto != PROTO_NONE) {
+        heading("Line");
+        proto_chip(e);
+    } else {
+        heading("Tools");
+        for (int i = 0; i < TOOL_COUNT; i++) {
+            if (tool_button(e, (Tool)i)) switch_tool(e, (Tool)i);
+        }
     }
 
     igDummy((ImVec2){ 0.0f, 4.0f });
-    heading("Tool options");
+    heading(e->proto != PROTO_NONE ? "Canvas" : "Tool options");
 
     static const float grid_sizes[4] = { 4.0f, 8.0f, 16.0f, 32.0f };
     int grid_index = 1;
@@ -2566,7 +3021,7 @@ static void draw_left_panel(Editor* e) {
     igSameLineEx(0.0f, 12.0f);
     igCheckbox("Show grid", &e->show_grid);
 
-    switch (e->tool) {
+    if (e->proto == PROTO_NONE) switch (e->tool) {
         case TOOL_WALL: {
             igDummy((ImVec2){ 0.0f, 3.0f });
             igTextDisabled("Fill color");
@@ -2578,7 +3033,8 @@ static void draw_left_panel(Editor* e) {
             igSameLineEx(0.0f, 6.0f);
             if (swatch_button("##shapeblue", "Blue", col32(ROOM_BLUE_COL),
                               e->shape_fill == SHAPE_FILL_BLUE, false, third)) {
-                e->shape_fill = SHAPE_FILL_BLUE;
+                /* A drawn shape starts unfilled; the context menu applies a fill. */
+    e->shape_fill = SHAPE_FILL_NONE;
             }
             igSameLineEx(0.0f, 6.0f);
             if (swatch_button("##shapered", "Red", col32(ROOM_RED_COL),
@@ -2657,6 +3113,12 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_COUNT:
         default: break;
+    }
+
+    if (e->proto != PROTO_NONE) {
+        igDummy((ImVec2){ 0.0f, 6.0f });
+        small_note("Right-click: Fill inside a closed shape, Door over a marquee-clipped wall, Stairs in an empty box.");
+        small_note("Enter closes the line. Esc ends it open.");
     }
 
     igEnd();
@@ -3135,10 +3597,12 @@ static void handle_shortcuts(Editor* e) {
         }
     }
 
-    for (int i = 0; i < TOOL_COUNT; i++) {
-        if (igIsKeyPressedEx(ImGuiKey_1 + i, false)) {
-            switch_tool(e, (Tool)i);
-            return;
+    if (e->proto == PROTO_NONE) {
+        for (int i = 0; i < TOOL_COUNT; i++) {
+            if (igIsKeyPressedEx(ImGuiKey_1 + i, false)) {
+                switch_tool(e, (Tool)i);
+                return;
+            }
         }
     }
     if (igIsKeyPressedEx(ImGuiKey_F, false)) {
@@ -3201,12 +3665,14 @@ Editor* editor_create(const char* startup_path) {
     e->camera.center = v2(0.0f, 0.0f);
     e->camera.zoom = 1.0f;
     e->tool = TOOL_SELECT;
+    e->proto = PROTO_A_MODIFIER;
     e->selection.primary.kind = SEL_NONE;
     e->selection.primary.index = -1;
     e->grid_size = 8.0f;
     e->snap = true;
     e->show_grid = true;
-    e->shape_fill = SHAPE_FILL_BLUE;
+    /* A drawn shape starts unfilled; the context menu applies a fill. */
+    e->shape_fill = SHAPE_FILL_NONE;
     e->room_color = ROOM_BLUE;
     e->door_color = DOOR_WHITE;
     e->stairs_dir = STAIRS_H;
@@ -3254,6 +3720,7 @@ Editor* editor_create(const char* startup_path) {
     }
     return e;
 }
+
 
 void editor_destroy(Editor* e) {
     if (!e) return;
