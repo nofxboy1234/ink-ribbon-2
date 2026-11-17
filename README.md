@@ -4,7 +4,7 @@ A native 2D level editor for floor-plan style maps. It is written in C with soko
 
 ![The editor with the demo level](docs/screenshots/editor.png)
 
-The demo level in `levels/re2-library.lvl` is loaded on startup. It has 42 walls, 6 painted areas, 10 doors, 6 labels, and 4 stair runs. `tools/gen_demo_map.py` regenerates it from readable coordinates.
+The level in `levels/re2-library.lvl` is loaded on startup. It has 76 walls, 17 shapes, 10 doors, 6 labels, and 4 stair runs. The full-scale plan is kept in `levels/re2-library-source.lvl`, and `tools/gen_demo_map.py` regenerates it from readable coordinates.
 
 ## Build and run
 
@@ -34,6 +34,12 @@ make
 
 Load another level with `./build/editor --level path/to/level.lvl`. The `levels/` path is relative to the working directory.
 
+## Rebuilding the reference map
+
+`tools/build_map.py` reads the full-scale plan, scales it to half, snaps every point to the 4-unit grid, and drives the editor through real xdotool clicks, drags, menus, and typing. It prints the commands with `--emit`, so the run is auditable and rerunnable.
+
+`tools/record_build.sh` starts a private 1280x800 Xvfb display, records it with ffmpeg at 30 fps with the cursor, runs the driver, and leaves the finished level at `levels/re2-library.lvl`. The next `./build/editor` with no arguments opens that level.
+
 `sokol` is pinned at `93aa187b5d387cc24b7290b3ca3f13f61e139e7c` and `dcimgui` (Dear ImGui 1.93.0 C bindings) at `2c0e382fc10771bbd5dac15fc34f7fab84f87917`. Both live in `vendor/` as git submodules.
 
 ## What you can do
@@ -41,10 +47,10 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Draw walls click by click. Every segment is horizontal or vertical and continues from the last click.
 - Close a drawn loop by clicking its first point or pressing Enter. Close with an L-shaped pair when the last point is not aligned with the first. Press Esc to keep the chain open.
 - Each drawn chain is one wall shape. Select any of its lines to select the shape, then drag a line to reshape it: that line moves and the lines connected to it stretch, while opposite lines stay put.
-- A closed shape fills only its own inside, in blue or red, or not at all with the None fill. Draw a painted area independently with the Room tool when it should not follow walls.
-- Add white, red, or blue doors to walls. A door keeps a fixed thickness, slides along its wall, and changes length by dragging either end or with the inspector.
-- Add text labels anywhere, edit the text in the inspector, resize and move them.
-- Add stairs with 2 to 48 steps. A stair is a footprint box that snaps to the grid, so its edges sit flush with walls. Drag any edge to resize it, and the step count divides the run into treads.
+- A closed shape fills only its own inside, in blue or red, or not at all with the None fill. Use the right-click Fill submenu to change a closed shape's fill.
+- Marquee a wall section with Shift plus drag in Line mode, then use the right-click Door submenu to add a white, red, or blue door. In Select mode the selected walls feed the same menu. A door keeps a fixed thickness, slides along its wall, and changes length by dragging either end or with the inspector.
+- Drag an empty box with Shift in Line mode, then right-click Stairs to add a footprint. A stair snaps to the grid, so its edges sit flush with walls. Drag any edge to resize it, and the step count divides the run into treads.
+- Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The Label tool also has a size setting, and the inspector can resize and move any label.
 - Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
 - Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step. Dragging a wall line reshapes its shape, and dragging labels, rooms, or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off.
@@ -54,7 +60,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 
 | Input | Action |
 | --- | --- |
-| 1 to 6 | Select, Wall, Room, Door, Label, Stairs |
+| 1, 2, 3 | Select, Line, Label. Line is the default |
 | Left click | Use the active tool |
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
@@ -63,7 +69,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Drag on empty canvas | Marquee select; Shift adds to the selection |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
-| Enter | Close a wall chain or room polygon |
+| Enter | Close a line chain |
 | Esc | Clear the selection, cancel a draft, or cancel a drag |
 | Backspace | Remove the last wall in the current chain |
 | Delete | Delete every selected object |
@@ -76,15 +82,15 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 
 ## Editing model
 
-Walls are independent axis-aligned segments. Corners meet because the wall tool starts each new segment at the previous click. A wall has a stable id. Doors store that id, a normalized center position, and a world-space length, so a door follows its wall and never points at a deleted one.
+Walls are independent axis-aligned segments. Corners meet because the Line tool starts each new segment at the previous click. A wall has a stable id. Doors store that id, a normalized center position, and a world-space length, so a door follows its wall and never points at a deleted one.
 
-Painted areas are explicit polygons. That keeps their color and identity when nearby walls change, and it allows fills that are not exact wall loops, as in the reference. Painted areas do not follow wall edits.
+Painted areas are closed wall shapes carrying a fill. The fill polygon comes from the shape's wall loop, so it follows a reshape. The reference map also stores each painted area as its own shape, which is why some outlines appear twice.
 
 Labels store a position, a size, and a string. Stairs store a center, a direction, and a step count. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size.
 
 Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a wall line reshapes its shape. Selected rooms, labels, and stairs move as a group when dragged. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
 
-Snap-to-grid applies to wall and room points, labels, stair placement and edges, door centers, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
+Snap-to-grid applies to line points, labels, stair boxes and edges, door centers, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. Closing a loop writes its closing walls and the fill together. The history keeps 64 levels.
 
