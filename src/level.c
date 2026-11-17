@@ -133,6 +133,17 @@ static int clamp_steps(int steps) {
     return steps;
 }
 
+/* A stair footprint must be finite and at least STAIR_MIN_SIZE on both axes.
+   Everything that accepts a Rect from outside the model checks this. */
+static bool stairs_footprint_ok(Rect rect) {
+    if (!isfinite(rect.min.x) || !isfinite(rect.min.y) ||
+        !isfinite(rect.max.x) || !isfinite(rect.max.y)) {
+        return false;
+    }
+    return rect.max.x - rect.min.x >= STAIR_MIN_SIZE &&
+           rect.max.y - rect.min.y >= STAIR_MIN_SIZE;
+}
+
 static void copy_label_text(char* dst, const char* src) {
     if (!src) src = "";
     size_t n = strlen(src);
@@ -730,12 +741,19 @@ bool level_move_label(Level* level, int label_index, Vec2 pos) {
     return true;
 }
 
-int level_add_stairs(Level* level, Vec2 pos, StairsDir dir, int steps) {
+int level_add_stairs(Level* level, Rect rect, StairsDir dir, int steps) {
     if (level->stairs_count >= LEVEL_MAX_STAIRS) return -1;
     if (dir != STAIRS_H && dir != STAIRS_V) return -1;
+    if (!stairs_footprint_ok(rect)) return -1;
 
     int index = level->stairs_count++;
-    level->stairs[index] = (Stairs){ pos, clamp_steps(steps), dir };
+    level->stairs[index] = (Stairs){
+        rect.min,
+        rect.max.x - rect.min.x,
+        rect.max.y - rect.min.y,
+        clamp_steps(steps),
+        dir,
+    };
     return index;
 }
 
@@ -755,6 +773,16 @@ bool level_set_stairs(Level* level, int stairs_index, StairsDir dir, int steps) 
     return true;
 }
 
+bool level_set_stairs_rect(Level* level, int stairs_index, Rect rect) {
+    if (stairs_index < 0 || stairs_index >= level->stairs_count) return false;
+    if (!stairs_footprint_ok(rect)) return false;
+    Stairs* stairs = &level->stairs[stairs_index];
+    stairs->pos = rect.min;
+    stairs->width = rect.max.x - rect.min.x;
+    stairs->length = rect.max.y - rect.min.y;
+    return true;
+}
+
 bool level_move_stairs(Level* level, int stairs_index, Vec2 pos) {
     if (stairs_index < 0 || stairs_index >= level->stairs_count) return false;
     level->stairs[stairs_index].pos = pos;
@@ -762,13 +790,9 @@ bool level_move_stairs(Level* level, int stairs_index, Vec2 pos) {
 }
 
 Rect level_stairs_rect(const Stairs* stairs) {
-    float along = (float)stairs->steps * STAIR_STEP_DEPTH;
-    float across = STAIR_WIDTH;
-    float w = stairs->dir == STAIRS_V ? across : along;
-    float h = stairs->dir == STAIRS_V ? along : across;
     return (Rect){
-        { stairs->pos.x - w * 0.5f, stairs->pos.y - h * 0.5f },
-        { stairs->pos.x + w * 0.5f, stairs->pos.y + h * 0.5f },
+        stairs->pos,
+        { stairs->pos.x + stairs->width, stairs->pos.y + stairs->length },
     };
 }
 
@@ -796,7 +820,7 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
         return false;
     }
 
-    bool ok = fprintf(f, "ink-level 2\n") >= 0;
+    bool ok = fprintf(f, "ink-level 3\n") >= 0;
 
     for (int i = 0; ok && i < level->shape_count; i++) {
         const Shape* shape = &level->shapes[i];
@@ -830,8 +854,9 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
     }
     for (int i = 0; ok && i < level->stairs_count; i++) {
         const Stairs* s = &level->stairs[i];
-        ok = fprintf(f, "stairs %.3f %.3f %d %d\n",
-                     s->pos.x, s->pos.y, (int)s->dir, s->steps) >= 0;
+        ok = fprintf(f, "stairs %.3f %.3f %d %d %.3f %.3f\n",
+                     s->pos.x, s->pos.y, (int)s->dir, s->steps,
+                     s->width, s->length) >= 0;
     }
 
     int write_errno = 0;
@@ -908,8 +933,9 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             char* extra = next_token(&save);
             if (strcmp(tag, "ink-level") != 0 || !version_text || extra ||
                 (strcmp(version_text, "1") != 0 &&
-                 strcmp(version_text, "2") != 0)) {
-                ok = fail_line(err, line_no, "expected ink-level 1 or 2");
+                 strcmp(version_text, "2") != 0 &&
+                 strcmp(version_text, "3") != 0)) {
+                ok = fail_line(err, line_no, "expected ink-level 1, 2, or 3");
                 break;
             }
             version = version_text[0] - '0';
@@ -920,8 +946,9 @@ bool level_load(Level* level, const char* path, LevelError* err) {
         if (strcmp(tag, "shape") == 0) {
             uint32_t id;
             int closed, fill;
-            if (version != 2) {
-                ok = fail_line(err, line_no, "shape record requires ink-level 2");
+            if (version < 2) {
+                ok = fail_line(err, line_no,
+                               "shape record requires ink-level 2 or later");
                 break;
             }
             if (!read_uint(&save, &id) || !read_int(&save, &closed) ||
@@ -959,7 +986,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 ok = fail_line(err, line_no, "malformed wall record");
                 break;
             }
-            if (version == 2 && !read_uint(&save, &shape)) {
+            if (version >= 2 && !read_uint(&save, &shape)) {
                 ok = fail_line(err, line_no, "malformed wall record");
                 break;
             }
@@ -1071,10 +1098,12 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             label->size = isfinite(size) && size >= 6.0f ? size : 6.0f;
             copy_label_text(label->text, text);
         } else if (strcmp(tag, "stairs") == 0) {
-            float x, y;
+            float x = 0, y = 0, width = 0, length = 0;
             int dir, steps;
             if (!read_float(&save, &x) || !read_float(&save, &y) ||
                 !read_int(&save, &dir) || !read_int(&save, &steps) ||
+                (version == 3 && (!read_float(&save, &width) ||
+                                  !read_float(&save, &length))) ||
                 next_token(&save)) {
                 ok = fail_line(err, line_no, "malformed stairs record");
                 break;
@@ -1087,8 +1116,23 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 ok = fail_line(err, line_no, "too many stairs");
                 break;
             }
+            int kept_steps = clamp_steps(steps);
+            if (version < 3) {
+                /* Version 1 and 2 stored the centre and derived the size from
+                   the step count. Convert to the explicit min-corner box. */
+                float run = (float)kept_steps * STAIR_STEP_DEPTH;
+                width = dir == STAIRS_V ? STAIR_WIDTH : run;
+                length = dir == STAIRS_V ? run : STAIR_WIDTH;
+                x -= width * 0.5f;
+                y -= length * 0.5f;
+            }
+            Rect box = { { x, y }, { x + width, y + length } };
+            if (!stairs_footprint_ok(box)) {
+                ok = fail_line(err, line_no, "bad stairs footprint");
+                break;
+            }
             tmp.stairs[tmp.stairs_count++] =
-                (Stairs){ v2(x, y), clamp_steps(steps), (StairsDir)dir };
+                (Stairs){ box.min, width, length, kept_steps, (StairsDir)dir };
         } else {
             ok = fail_line(err, line_no, "unknown record '%s'", tag);
         }
@@ -1099,7 +1143,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
     if (!ok) return false;
 
     if (!saw_header) {
-        return fail_line(err, line_no + 1, "expected ink-level 1 or 2");
+        return fail_line(err, line_no + 1, "expected ink-level 1, 2, or 3");
     }
 
     if (version == 1) {

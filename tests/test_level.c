@@ -340,31 +340,66 @@ static void test_stairs(void) {
     Level level;
     level_init(&level);
 
-    check(level_add_stairs(&level, v2(100, 100), STAIRS_H, 1) == 0 &&
+    Rect box = { { 100, 100 }, { 160, 144 } };
+    check(level_add_stairs(&level, box, STAIRS_H, 1) == 0 &&
               level.stairs[0].steps == STAIR_MIN_STEPS,
           "stairs step count clamped low");
     Rect h = level_stairs_rect(&level.stairs[0]);
-    check(nearv(h.min, v2(90, 78)) && nearv(h.max, v2(110, 122)),
-          "stairs H rect is wide on x and tall on y");
+    check(nearv(h.min, v2(100, 100)) && nearv(h.max, v2(160, 144)) &&
+              nearf(level.stairs[0].width, 60) &&
+              nearf(level.stairs[0].length, 44),
+          "add stairs keeps the rect as the explicit footprint");
 
-    check(level_add_stairs(&level, v2(100, 100), STAIRS_V, 100) == 1 &&
+    check(level_add_stairs(&level, (Rect){ { 100, 100 }, { 144, 160 } },
+                           STAIRS_V, 100) == 1 &&
               level.stairs[1].steps == STAIR_MAX_STEPS,
           "stairs step count clamped high");
     Rect v = level_stairs_rect(&level.stairs[1]);
-    check(nearv(v.min, v2(78, -140)) && nearv(v.max, v2(122, 340)),
-          "stairs V rect transposes the footprint");
+    check(nearv(v.min, v2(100, 100)) && nearv(v.max, v2(144, 160)),
+          "stairs V footprint is the stored box, not derived from steps");
 
     check(level_set_stairs(&level, 0, STAIRS_V, 10), "set stairs direction");
-    Rect changed = level_stairs_rect(&level.stairs[0]);
-    check(nearv(changed.min, v2(78, 50)) && nearv(changed.max, v2(122, 150)),
-          "stairs rect follows set_stairs");
-    check(level_move_stairs(&level, 0, v2(0, 0)) &&
-              nearv(level.stairs[0].pos, v2(0, 0)),
-          "move stairs");
+    check(nearv(level.stairs[0].pos, v2(100, 100)) &&
+              nearf(level.stairs[0].width, 60) &&
+              nearf(level.stairs[0].length, 44) &&
+              level.stairs[0].steps == 10,
+          "set direction and steps keeps the footprint");
+
+    check(level_set_stairs_rect(&level, 0, (Rect){ { 92, 100 }, { 160, 144 } }),
+          "set stairs rect moves one edge");
+    Rect dragged = level_stairs_rect(&level.stairs[0]);
+    check(nearv(dragged.min, v2(92, 100)) && nearv(dragged.max, v2(160, 144)),
+          "resized box keeps the other three edges");
+
+    Level snapshot = level;
+    check(level_add_stairs(&level, (Rect){ { 0, 0 }, { 7, 50 } },
+                           STAIRS_H, 4) == -1,
+          "reject stairs whose footprint is too small");
+    check(memcmp(&level, &snapshot, sizeof level) == 0,
+          "rejected add leaves the level byte-identical");
+    check(level_add_stairs(&level, (Rect){ { 0, 0 }, { INFINITY, 50 } },
+                           STAIRS_H, 4) == -1,
+          "reject stairs with a non-finite corner");
+    check(memcmp(&level, &snapshot, sizeof level) == 0,
+          "rejected non-finite add leaves the level byte-identical");
+
+    snapshot = level;
+    check(!level_set_stairs_rect(&level, 0,
+                                 (Rect){ { 100, 100 }, { 107, 144 } }),
+          "set stairs rect rejects a too-small box");
+    check(memcmp(&level, &snapshot, sizeof level) == 0,
+          "rejected resize leaves the stair byte-identical");
+
+    check(level_move_stairs(&level, 0, v2(200, 300)) &&
+              nearv(level.stairs[0].pos, v2(200, 300)) &&
+              nearf(level.stairs[0].width, 68) &&
+              nearf(level.stairs[0].length, 44),
+          "move stairs shifts the min corner and keeps the size");
     check(level_delete_stairs(&level, 0) && level.stairs_count == 1,
           "delete stairs");
     check(!level_delete_stairs(&level, 4), "delete stairs rejects a bad index");
-    check(level_add_stairs(&level, v2(0, 0), (StairsDir)5, 4) == -1,
+    check(level_add_stairs(&level, (Rect){ { 0, 0 }, { 10, 10 } },
+                           (StairsDir)5, 4) == -1,
           "reject stairs with unknown direction");
 }
 
@@ -380,7 +415,9 @@ static void test_save_load(void) {
     level_add_room(&src, square, 4, ROOM_BLUE);
     level_add_door(&src, src.walls[0].id, 0.5f, 20, DOOR_RED);
     level_add_label(&src, v2(10, 20), "attic stairs", 12);
-    level_add_stairs(&src, v2(50, 50), STAIRS_H, 6);
+    level_add_stairs(&src, (Rect){ { 50, 50 }, { 110, 94 } }, STAIRS_H, 6);
+    check(level_set_stairs_rect(&src, 0, (Rect){ { 42, 50 }, { 114, 94 } }),
+          "prepare a resized stair for the roundtrip");
 
     check(level_add_label(&src, v2(0, 0), "bad\nname", 8) == 1,
           "add label with a control character");
@@ -397,10 +434,10 @@ static void test_save_load(void) {
     char file[8192] = { 0 };
     if (f) {
         if (fgets(first, sizeof first, f)) {
-            check(strcmp(first, "ink-level 2\n") == 0,
-                  "saved file starts with ink-level 2");
+            check(strcmp(first, "ink-level 3\n") == 0,
+                  "saved file starts with ink-level 3");
         } else {
-            check(false, "saved file starts with ink-level 2");
+            check(false, "saved file starts with ink-level 3");
         }
         rewind(f);
         size_t got = fread(file, 1, sizeof file - 1, f);
@@ -418,8 +455,8 @@ static void test_save_load(void) {
           "save writes label text as the rest of the line");
     check(strstr(file, "label 0.000 0.000 8.000 bad name\n") != NULL,
           "save replaces control characters in label text with spaces");
-    check(strstr(file, "stairs 50.000 50.000 0 6\n") != NULL,
-          "save writes the stairs record");
+    check(strstr(file, "stairs 42.000 50.000 0 6 72.000 44.000\n") != NULL,
+          "save writes the explicit resized stair footprint");
 
     Level dst;
     level_init(&dst);
@@ -451,8 +488,11 @@ static void test_save_load(void) {
               strcmp(dst.labels[1].text, "bad name") == 0,
           "roundtrip preserves label text and spacing");
     check(dst.stairs_count == 1 && dst.stairs[0].dir == STAIRS_H &&
-              dst.stairs[0].steps == 6,
-          "roundtrip preserves stairs");
+              dst.stairs[0].steps == 6 &&
+              nearv(dst.stairs[0].pos, v2(42, 50)) &&
+              nearf(dst.stairs[0].width, 72) &&
+              nearf(dst.stairs[0].length, 44),
+          "roundtrip preserves the resized stair box and steps");
     Rect src_bounds = level_bounds(&src);
     Rect dst_bounds = level_bounds(&dst);
     check(nearv(src_bounds.min, dst_bounds.min) &&
@@ -565,6 +605,57 @@ static void test_save_load(void) {
     remove(bad_path);
 }
 
+static void test_stair_migration(void) {
+    char path[256];
+    snprintf(path, sizeof path, "/tmp/ink_ribbon_stair_v2_%ld.lvl",
+             (long)getpid());
+
+    LevelError err;
+    Level level;
+    level_init(&level);
+    check(write_text_file(path,
+                          "ink-level 2\n"
+                          "stairs 100.000 100.000 0 6\n"),
+          "write a version 2 fixture with a stair");
+    check(level_load(&level, path, &err),
+          "a version 2 file with a stair still loads");
+    check(level.stairs_count == 1 && level.stairs[0].dir == STAIRS_H &&
+              level.stairs[0].steps == 6 &&
+              nearf(level.stairs[0].width, 60) &&
+              nearf(level.stairs[0].length, 44),
+          "version 2 stair derives 44 across and steps*10 along");
+    check(nearv(level.stairs[0].pos, v2(70, 78)),
+          "version 2 centre converts to the min corner");
+
+    check(write_text_file(path,
+                          "ink-level 1\n"
+                          "stairs 100.000 100.000 1 9\n"),
+          "write a version 1 fixture with a stair");
+    level_init(&level);
+    check(level_load(&level, path, &err) && level.stairs_count == 1,
+          "a version 1 file with a stair still loads");
+    check(level.stairs[0].dir == STAIRS_V &&
+              nearf(level.stairs[0].width, 44) &&
+              nearf(level.stairs[0].length, 90),
+          "version 1 vertical stair derives the transposed box");
+    check(nearv(level.stairs[0].pos, v2(78, 55)),
+          "version 1 centre converts to the min corner");
+
+    Level intact;
+    level_init(&intact);
+    level_add_stairs(&intact, (Rect){ { 0, 0 }, { 20, 20 } }, STAIRS_H, 4);
+    Level snapshot = intact;
+    check(write_text_file(path,
+                          "ink-level 3\n"
+                          "stairs 0.000 0.000 0 4 4.000 20.000\n"),
+          "write a version 3 stair below the minimum size");
+    check(!level_load(&intact, path, &err),
+          "load rejects a version 3 stair footprint that is too small");
+    check(memcmp(&intact, &snapshot, sizeof intact) == 0,
+          "a rejected stair load leaves the target level untouched");
+    remove(path);
+}
+
 static void test_bounds(void) {
     Level level;
     level_init(&level);
@@ -580,7 +671,7 @@ static void test_bounds(void) {
     Vec2 square[4] = { { 100, 100 }, { 200, 100 }, { 200, 200 }, { 100, 200 } };
     level_add_room(&level, square, 4, ROOM_RED);
     level_add_label(&level, v2(-5, -5), "hi", 10);
-    level_add_stairs(&level, v2(300, 300), STAIRS_H, 2);
+    level_add_stairs(&level, (Rect){ { 290, 278 }, { 310, 322 } }, STAIRS_H, 2);
     Rect all = level_bounds(&level);
     check(nearv(all.min, v2(-5, -5)), "level_bounds includes label text box");
     check(nearf(all.max.x, 310) && nearf(all.max.y, 322),
@@ -1094,8 +1185,8 @@ static void test_save_load_shapes(void) {
         file[got] = '\0';
         fclose(f);
     }
-    check(strncmp(file, "ink-level 2\n", 12) == 0,
-          "shape save starts with ink-level 2");
+    check(strncmp(file, "ink-level 3\n", 12) == 0,
+          "shape save starts with ink-level 3");
     check(strstr(file, "shape 1 1 1\n") != NULL,
           "shape save writes the closed flag and fill before walls");
     check(strstr(file, "wall 1 1 0.000 0.000 100.000 0.000\n") != NULL,
@@ -1237,6 +1328,7 @@ int main(void) {
     test_labels();
     test_stairs();
     test_save_load();
+    test_stair_migration();
     test_bounds();
     test_history();
     test_shape_lifecycle();

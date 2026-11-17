@@ -8,6 +8,10 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent / "levels" / "re2-library.lvl"
 
+GRID = 8
+STAIR_STEP_DEPTH = 10
+STAIR_WIDTH = 44
+
 walls = []
 shapes = []
 doors = []
@@ -70,8 +74,21 @@ def label(x, y, size, text):
     labels.append((x, y, size, text))
 
 
+def snap_up(value):
+    return -(-value // GRID) * GRID
+
+
+def snap_near(value):
+    return int(round(value / GRID)) * GRID
+
+
 def stair(x, y, direction, steps):
-    stairs.append((x, y, direction, steps))
+    """Place a stair near (x, y), the old centre, with a grid-flush box."""
+    run = steps * STAIR_STEP_DEPTH
+    width = snap_up(run if direction == "h" else STAIR_WIDTH)
+    length = snap_up(STAIR_WIDTH if direction == "h" else run)
+    stairs.append((snap_near(x - width / 2), snap_near(y - length / 2),
+                   direction, steps, width, length))
 
 
 # Left building shell.
@@ -139,13 +156,13 @@ label(892, 215, 18, "East Storage Room")
 label(1030, 440, 18, "Balcony")
 label(278, 540, 18, "Clock Tower")
 
-# Stairs: step count drives the footprint length.
+# Stairs: the run follows the step count, with the box snapped to the grid.
 stair(420, 110, "h", 10)
 stair(430, 495, "h", 8)
 stair(1090, 165, "v", 9)
 stair(700, 90, "h", 12)
 
-lines = ["ink-level 2"]
+lines = ["ink-level 3"]
 fill_index = {"none": 0, "blue": 1, "red": 2}
 for sid, shape in enumerate(shapes, start=1):
     lines.append(f"shape {sid} {1 if shape['closed'] else 0} {fill_index[shape.get('fill', 'none')]}")
@@ -160,8 +177,9 @@ for wall_index, t, width, color in doors:
     lines.append(f"door {ci} {wall_index} {t:.4f} {width:.3f}")
 for x, y, size, text in labels:
     lines.append(f"label {x:.3f} {y:.3f} {size:.3f} {text}")
-for x, y, direction, steps in stairs:
-    lines.append(f"stairs {x:.3f} {y:.3f} {0 if direction == 'h' else 1} {steps}")
+for x, y, direction, steps, width, length in stairs:
+    lines.append(f"stairs {x:.3f} {y:.3f} {0 if direction == 'h' else 1} "
+                 f"{steps} {width:.3f} {length:.3f}")
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text("\n".join(lines) + "\n")

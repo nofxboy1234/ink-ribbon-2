@@ -20,6 +20,7 @@
 #define DOOR_MIN_WIDTH 8.0f
 #define STAIR_STEP_DEPTH 10.0f
 #define STAIR_WIDTH 44.0f
+#define STAIR_MIN_SIZE 8.0f
 #define STAIR_MIN_STEPS 2
 #define STAIR_MAX_STEPS 48
 
@@ -82,8 +83,13 @@ typedef enum {
     STAIRS_V = 1,
 } StairsDir;
 
+/* A stair footprint is an explicit box, so its edges can sit on the grid and
+   be dragged. pos is the min corner. width and length are the world extents.
+   dir picks which axis carries the treads; steps divides that run. */
 typedef struct {
     Vec2 pos;
+    float width;
+    float length;
     int steps;
     StairsDir dir;
 } Stairs;
@@ -187,9 +193,12 @@ bool level_set_label_text(Level* level, int label_index, const char* text);
 bool level_set_label_size(Level* level, int label_index, float size);
 bool level_move_label(Level* level, int label_index, Vec2 pos);
 
-int level_add_stairs(Level* level, Vec2 pos, StairsDir dir, int steps);
+int level_add_stairs(Level* level, Rect rect, StairsDir dir, int steps);
 bool level_delete_stairs(Level* level, int stairs_index);
 bool level_set_stairs(Level* level, int stairs_index, StairsDir dir, int steps);
+/* Replaces the footprint. Rejects a non-finite or smaller-than-STAIR_MIN_SIZE
+   box and leaves the stair unchanged. */
+bool level_set_stairs_rect(Level* level, int stairs_index, Rect rect);
 bool level_move_stairs(Level* level, int stairs_index, Vec2 pos);
 Rect level_stairs_rect(const Stairs* stairs);
 float wall_length(const Wall* wall);
