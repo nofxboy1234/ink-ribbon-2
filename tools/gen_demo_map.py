@@ -67,7 +67,13 @@ def door_at(a, b, point, width, color):
 
 
 def room(points, color):
-    rooms.append((points, color))
+    # A room is a closed line shape carrying its own fill, so its walls draw
+    # bright and the area inside is painted.
+    begin_shape()
+    for i in range(len(points)):
+        wall(points[i], points[(i + 1) % len(points)])
+    end_shape(closed=True)
+    shapes[-1]["fill"] = color
 
 
 def label(x, y, size, text):
