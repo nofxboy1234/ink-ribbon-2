@@ -150,8 +150,9 @@ PASS dragged line moved, neighbours stretched, opposite line stayed
 PASS group drag moved every wall by (112,0) with no reshape and every door followed
 PASS two edges selected (accent px=1508, amber px=104) and both moved on drag
 PASS stairs flush on grid 8 (x -72..8 y -32..16) and 32 (x -96..0 y -32..32); right edge 8 -> 48, opposite edge -72 stayed
+PASS stair right edge 104 equals the wall edge
 PASS grid size 8 draws 13046 px and 32 draws 2760
-PASS focus loss survived (rss=105576 KB, 16357 px changed)
+PASS focus loss survived (rss=105764 KB, 16357 px changed)
 PASS no leftover editor or display processes
 ALL EDITOR CHECKS PASSED
 ```
