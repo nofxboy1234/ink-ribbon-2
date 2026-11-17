@@ -111,11 +111,56 @@ ImGui reports the pointer position as a sentinel when the window has none, which
 
 Before this was handled, leaving the window mid-chain made the preview build a dashed line of astronomically large length, which pinned a core and grew memory until the machine froze. `make verify` now covers that case.
 
+## Project layout
+
+| Path | Owns |
+| --- | --- |
+| `src/main.c` | sokol app lifecycle, font, frame order |
+| `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
+| `src/level.c` | level document, shapes, edits, save, load, undo ring |
+| `src/geom.c` | vectors, snapping, segment and polygon math, triangulation |
+| `tests/test_level.c` | 294 headless checks for the core |
+| `tools/verify.sh` | end-to-end X11 check with pixel and coordinate evidence |
+| `tools/shot.sh` | build, launch, drive, screenshot |
+| `tools/xvfb.sh` | private X display, per-run process tags, cleanup |
+| `tools/focus_drop.py` | drop X focus the way alt+tab does |
+| `tools/gen_demo_map.py` | regenerate the demo level |
+| `tools/level_info.c` | print counts, shapes, and bounds for a level file |
+
+Only `main.c` and `editor.c` include sokol or ImGui headers. `make test` links the core with gcc alone, so a core file that pulls in a UI header fails the build.
+
+## Verification
+
+```sh
+make test
+make verify
+```
+
+`make verify` runs `tools/verify.sh`, which rebuilds, runs the core tests, drives the real X11 window with xdotool, samples canvas pixels, and compares saved levels coordinate by coordinate. A recorded run at 1280x800:
+
+```text
+PASS build without warnings
+PASS core tests (294 checks)
+PASS demo fills blue=28695 red=26004
+PASS closed chain is one shape with a blue fill
+PASS None and Blue fill controls work
+PASS plus fill is inside only (inside=2B3F50 corner=0B0C0E)
+PASS dragged line moved, neighbours stretched, opposite line stayed
+PASS group drag moved every wall by (112,0) with no reshape and every door followed
+PASS two edges selected (accent px=1508, amber px=104) and both moved on drag
+PASS grid size 8 draws 13046 px and 32 draws 2760
+PASS focus loss survived (rss=105880 KB, 15970 px changed)
+PASS no leftover editor or display processes
+ALL EDITOR CHECKS PASSED
+```
+
+The script assumes a 1280x800 window and the default panel widths, and it uses its own Xvfb display. Screenshots land in `/tmp/ink-ribbon-verify-*.png`.
+
 ## Limits
 
-- Walls are horizontal or vertical only. Walls can be selected and deleted, but their endpoints do not drag. Deleting a wall cascades its doors.
+- Walls are horizontal or vertical only, and an edge slides only along its normal, so a wall cannot be dragged diagonally or turned into a diagonal. Deleting an edge cascades its doors and reopens the shape if the loop breaks.
 - Painted areas are independent polygons and do not follow wall edits.
-- Fixed capacities are 512 walls, 64 areas, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
+- Fixed capacities are 512 shapes, 512 walls, 64 painted areas, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
 - One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.
 - Group drag moves walls, rooms, labels, and stairs. Doors follow their host walls, so a selected door whose wall is not selected stays put. A single selected door slides along its wall instead.
 - The editor was tested on Linux and X11 only.
