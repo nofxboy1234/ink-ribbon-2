@@ -353,7 +353,9 @@ int level_shape_at(const Level* level, Vec2 p) {
         if (count < 3 || !point_in_polygon(polygon, count, p)) continue;
 
         float area = polygon_area(polygon, count);
-        if (area < best_area) {
+        /* The newest outline wins a tie, matching draw order: a filled shape
+           painted over an identical wall outline must be the click target. */
+        if (area <= best_area) {
             best_area = area;
             best = i;
         }

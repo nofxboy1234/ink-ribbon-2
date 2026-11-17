@@ -43,22 +43,15 @@
 #define BORDER_COL 0x2a2e34
 #define ACCENT_UI 0x4e7f9e
 
+/* Three tools own the mouse. Select edits what is there, Line draws walls,
+   Label places text. The tool is the only owner of which gesture a press
+   starts, so there is no second mode flag to keep in sync. */
 typedef enum {
     TOOL_SELECT = 0,
-    TOOL_WALL,
-    TOOL_ROOM,
-    TOOL_DOOR,
+    TOOL_LINE,
     TOOL_LABEL,
-    TOOL_STAIRS,
     TOOL_COUNT,
 } Tool;
-
-/* Prototype variants differ only in how drawing and selecting share the
-   mouse. PROTO_NONE is the shipped editor. */
-typedef enum {
-    PROTO_NONE = 0,
-    PROTO_A_MODIFIER,
-} ProtoVariant;
 
 /* One clipped piece of a wall kept from the last marquee. Wall ids are stable
    across wall deletes, so a span survives an unrelated edit. */
@@ -97,16 +90,14 @@ typedef enum {
 typedef enum {
     GESTURE_NONE = 0,
     GESTURE_CHAIN,
-    GESTURE_POLYGON,
     GESTURE_MARQUEE,
     GESTURE_MOVE,
     GESTURE_RESHAPE,
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
     GESTURE_STAIRS_RESIZE,
-    /* Prototype presses wait for the release to decide click versus drag. */
-    GESTURE_PROTO_PENDING,
-    /* Prototype C: the press landed on a wall endpoint, so a drag extends it. */
+    /* A Line press waits for the release to tell a click from a plain drag. */
+    GESTURE_LINE_PENDING,
 } GestureKind;
 
 /* Which edge of a stair footprint a resize drag moves. The opposite edge stays
@@ -152,9 +143,9 @@ typedef struct {
     float fixed_t;
     int stair_edge;
     float stair_fixed;
-    /* Prototype press: a click-click chain was already active, so its points
-       survive under the temporary pending gesture. */
-    bool proto_chain;
+    /* The Line press interrupted an active click-click chain, so its points
+       survive under the pending gesture and the release continues it. */
+    bool chain_active;
 } Gesture;
 
 typedef struct {
@@ -181,6 +172,21 @@ typedef struct {
     int index;
 } Hit;
 
+/* One snapshot of what a right-click may act on. The line marquee and the
+   select-mode selection both feed it, and the menu reads only this, so the
+   popup cannot disagree with the selection it was opened from. */
+typedef struct {
+    bool open;
+    bool can_fill;
+    ShapeId fill_shape;
+    WallSpan door_spans[LEVEL_MAX_WALLS];
+    int door_span_count;
+    bool can_stairs;
+    Rect stairs_rect;
+    Vec2 drag_from;
+    Vec2 drag_to;
+} ContextMenu;
+
 struct Editor {
     Level level;
     History history;
@@ -196,33 +202,22 @@ struct Editor {
     bool fit_pending;
     bool pan_active;
 
-    ProtoVariant proto;
-
-    /* Line selection from the last marquee: clipped wall spans plus the
-       snapped box and drag vector the menu needs for stairs. */
+    /* Line marquee result: clipped wall spans plus the snapped box the menu
+       needs for stairs. Select reuses the box when its marquee caught nothing. */
     WallSpan spans[LEVEL_MAX_WALLS];
     int span_count;
-    Rect proto_rect;
-    bool proto_rect_valid;
-    Vec2 proto_drag_from;
-    Vec2 proto_drag_to;
+    Rect line_box;
+    bool line_box_valid;
+    Vec2 line_drag_from;
+    Vec2 line_drag_to;
 
-    /* Context menu is opened after the canvas input runs, in the canvas
-       window, from state captured on the right click. */
-    bool ctx_open;
-    ShapeId ctx_fill_shape;
-    bool ctx_can_fill;
-    bool ctx_can_door;
-    bool ctx_can_stairs;
+    ContextMenu ctx;
 
     float grid_size;
     bool snap;
     bool show_grid;
     ShapeFill shape_fill;
-    RoomColor room_color;
-    DoorColor door_color;
-    StairsDir stairs_dir;
-    int stairs_steps;
+    float label_size;
 
     char current_path[512];
     char path_buf[512];
@@ -246,16 +241,13 @@ typedef struct {
 } Span;
 
 static const char* TOOL_NAMES[TOOL_COUNT] = {
-    "Select", "Wall", "Room", "Door", "Label", "Stairs",
+    "Select", "Line", "Label",
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click an edge to select it, shift adds, drag to reshape or move; drag a stair edge to resize",
-    "click to add walls, click the first point or Enter closes the shape",
-    "click to draw a fill, Enter or double-click closes",
-    "click a wall to place a door",
-    "click to place a room label",
-    "click to place stairs; drag a stair edge to resize",
+    "click an object to select it, drag empty canvas to marquee, drag a wall to reshape",
+    "click-click draws, Shift+drag marquees, right-click for Fill, Door, and Stairs",
+    "click to place a label, then type its text",
 };
 
 static ImU32 col32(unsigned rgb) {
@@ -412,7 +404,7 @@ static bool gesture_is_drag(const Editor* e) {
            e->gesture.kind == GESTURE_DOOR_SLIDE ||
            e->gesture.kind == GESTURE_DOOR_RESIZE ||
            e->gesture.kind == GESTURE_STAIRS_RESIZE ||
-           e->gesture.kind == GESTURE_PROTO_PENDING ||
+           e->gesture.kind == GESTURE_LINE_PENDING ||
            e->gesture.kind == GESTURE_MARQUEE;
 }
 
@@ -722,14 +714,6 @@ static bool selection_walls_whole_shape(const Editor* e) {
     return total == selected;
 }
 
-static void sel_only_shape_walls(Editor* e, ShapeId id) {
-    sel_clear(e);
-    int indices[LEVEL_MAX_WALLS];
-    int n = level_shape_wall_indices(&e->level, id, indices, LEVEL_MAX_WALLS);
-    for (int i = 0; i < n; i++) sel_add(e, SEL_WALL, indices[i]);
-    sel_promote(e);
-}
-
 static void switch_tool(Editor* e, Tool tool) {
     if (e->tool == tool) return;
     if (gesture_is_drag(e) && e->gesture.kind != GESTURE_MARQUEE) {
@@ -738,6 +722,8 @@ static void switch_tool(Editor* e, Tool tool) {
     }
     if (e->gesture.kind == GESTURE_CHAIN) discard_empty_chain_shape(e);
     cancel_gesture(e);
+    e->span_count = 0;
+    e->line_box_valid = false;
     e->tool = tool;
     set_status(e, false, "%s tool", TOOL_NAMES[tool]);
 }
@@ -824,22 +810,6 @@ static Hit hit_test(const Editor* e, Vec2 world) {
         hit.index = shape;
     }
     return hit;
-}
-
-static void add_door_to_wall(Editor* e, WallId wall_id, float t, float width) {
-    const Wall* w = level_wall_by_id_const(&e->level, wall_id);
-    if (!w) {
-        set_status(e, true, "Door needs a wall");
-        return;
-    }
-    if (e->snap) t = snap_wall_t(w, t, e->grid_size);
-    int idx = level_add_door(&e->level, wall_id, t, width, e->door_color);
-    if (idx < 0) {
-        set_status(e, true, "Could not add door: level is full or wall is invalid");
-        return;
-    }
-    sel_only(e, SEL_DOOR, idx);
-    commit(e, "Door added");
 }
 
 static void delete_selection(Editor* e) {
@@ -1280,10 +1250,9 @@ static void draw_wall_segment(const Editor* e, ImDrawList* dl, const Wall* wall,
                          thickness, 0);
 }
 
-/* Prototype builds: an unfilled or open shape draws its lines faint, a filled
-   closed shape draws them at full opacity. */
+/* An unfilled or open shape draws its lines faint, a filled closed shape
+   draws them at full opacity. */
 static unsigned wall_alpha_for(const Editor* e, const Wall* w) {
-    if (e->proto == PROTO_NONE) return 255;
     const Shape* shape = level_shape_by_id_const(&e->level, w->shape);
     if (shape && shape->closed && shape->fill != SHAPE_FILL_NONE) return 255;
     return 140;
@@ -1506,7 +1475,7 @@ static void draw_selected_edges(const Editor* e) {
 }
 
 /* The clipped marquee selection: each span highlighted across its own wall. */
-static void draw_proto_spans(const Editor* e) {
+static void draw_spans(const Editor* e) {
     if (e->span_count <= 0) return;
     ImDrawList* dl = igGetWindowDrawList();
     ImU32 col = col32a(VERTEX_SELECT_COL, 240);
@@ -1521,7 +1490,7 @@ static void draw_proto_spans(const Editor* e) {
 
 static void draw_selection(Editor* e) {
     sel_prune(e);
-    if (e->proto != PROTO_NONE) draw_proto_spans(e);
+    draw_spans(e);
     draw_selected_edges(e);
     for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
         SelKind kind = (SelKind)k;
@@ -1579,51 +1548,6 @@ static void draw_chain_preview(Editor* e, ImVec2 mouse) {
     }
 }
 
-static void draw_polygon_preview(Editor* e, ImVec2 mouse) {
-    ImDrawList* dl = igGetWindowDrawList();
-    Gesture* g = &e->gesture;
-    if (g->point_count <= 0) return;
-    Vec2 cursor = screen_to_world(e, mouse);
-    Vec2 next = snapped(e, cursor);
-    ImVec2 pts[LEVEL_MAX_ROOM_PTS + 1];
-    for (int i = 0; i < g->point_count; i++) pts[i] = world_to_screen(e, g->pts[i]);
-    if (g->point_count >= 3) {
-        fill_world_polygon(e, g->pts, g->point_count, col32a(SELECT_COL, 36));
-    }
-    ImVec2 np = world_to_screen(e, next);
-    ImDrawList_AddLineEx(dl, pts[g->point_count - 1], np,
-                         col32a(ACCENT_COL, 180), 1.5f, 0);
-    ImDrawList_AddLineEx(dl, np, pts[0], col32a(ACCENT_COL, 90), 1.0f, 0);
-    for (int i = 0; i < g->point_count; i++) {
-        ImDrawList_AddCircleFilled(dl, pts[i], 2.6f, col32(ACCENT_COL), 10);
-    }
-    ImVec2 first = pts[0];
-    bool near = screen_dist(mouse, first) <= CLOSE_TOL_PX && g->point_count >= 3;
-    ImDrawList_AddCircleEx(dl, first, near ? 9.0f : 6.0f,
-                           near ? col32(ACCENT_COL) : col32a(ACCENT_COL, 150),
-                           16, near ? 2.5f : 1.5f, 0);
-    if (near) {
-        ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 11.0f,
-                                      (ImVec2){ first.x + 12.0f, first.y - 7.0f },
-                                      col32(ACCENT_COL), "close", NULL, 0.0f, NULL);
-    }
-}
-
-static void draw_door_preview(Editor* e, int hover_wall, float hover_t) {
-    if (e->tool != TOOL_DOOR) return;
-    if (hover_wall < 0) return;
-    ImDrawList* dl = igGetWindowDrawList();
-    const Wall* w = &e->level.walls[hover_wall];
-    float len = wall_length(w);
-    if (len <= 0.0001f) return;
-    float t = e->snap ? snap_wall_t(w, hover_t, e->grid_size) : hover_t;
-    float width = fminf(44.0f, len);
-    float half = width / (2.0f * len);
-    Vec2 a = segment_point(w->a, w->b, clampf(t - half, 0.0f, 1.0f));
-    Vec2 b = segment_point(w->a, w->b, clampf(t + half, 0.0f, 1.0f));
-    draw_door_bar(dl, e, w, a, b, col32a(SELECT_COL, 130), 2.0f);
-}
-
 static void draw_status_strip(Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     float y0 = e->canvas.max.y - STATUS_H;
@@ -1658,14 +1582,8 @@ static void draw_status_strip(Editor* e) {
     float clip_right = right_x - 14.0f;
     if (clip_right < pmin.x) clip_right = pmin.x;
     ImDrawList_PushClipRect(dl, pmin, (ImVec2){ clip_right, pmax.y }, true);
-    char proto_label[64];
     const char* tool = TOOL_NAMES[e->tool];
     const char* hint = TOOL_HINTS[e->tool];
-    if (e->proto != PROTO_NONE) {
-        snprintf(proto_label, sizeof proto_label, "Lines");
-        tool = proto_label;
-        hint = "click-click draws, Shift+drag marquees";
-    }
     ImDrawList_AddTextImFontPtrEx(dl, font, size, (ImVec2){ x, ty },
                                   col32(SELECT_COL), tool, NULL, 0.0f, NULL);
     x += ImFont_CalcTextSizeA(font, size, FLT_MAX, 0.0f, tool).x + 2.0f;
@@ -1846,13 +1764,13 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
     set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
 }
 
-/* ---- prototype line-first interaction --------------------------------- */
+/* ---- Line tool ------------------------------------------------------- */
 
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse);
 static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse);
 
 /* Portion of an axis-aligned wall inside rect, as a t range. */
-static bool proto_clip_wall(const Wall* w, Rect r, float* out_t0, float* out_t1) {
+static bool clip_wall_span(const Wall* w, Rect r, float* out_t0, float* out_t1) {
     float t0 = 0.0f;
     float t1 = 1.0f;
     float dx = w->b.x - w->a.x;
@@ -1889,131 +1807,50 @@ static bool proto_clip_wall(const Wall* w, Rect r, float* out_t0, float* out_t1)
     return true;
 }
 
-static void proto_finish_marquee(Editor* e, Vec2 from, Vec2 to) {
+/* A Shift+drag in Line mode clips every crossed wall to the dragged box. A
+   box of at least one grid cell also stands on its own as a stair footprint,
+   even when it touches a wall, because a stair flush with a wall is common. */
+static void line_finish_marquee(Editor* e, Vec2 from, Vec2 to) {
     Rect raw = rect_from_points(from, to);
     Rect r = rect_from_points(snapped(e, raw.min), snapped(e, raw.max));
     e->span_count = 0;
     for (int i = 0; i < e->level.wall_count && e->span_count < LEVEL_MAX_WALLS; i++) {
         float t0, t1;
-        if (!proto_clip_wall(&e->level.walls[i], r, &t0, &t1)) continue;
+        if (!clip_wall_span(&e->level.walls[i], r, &t0, &t1)) continue;
         e->spans[e->span_count++] = (WallSpan){ e->level.walls[i].id, t0, t1 };
     }
     float w = r.max.x - r.min.x;
     float h = r.max.y - r.min.y;
-    e->proto_rect = r;
-    e->proto_rect_valid = e->span_count == 0 && w >= e->grid_size && h >= e->grid_size;
-    e->proto_drag_from = from;
-    e->proto_drag_to = to;
+    e->line_box = r;
+    e->line_box_valid = w >= e->grid_size && h >= e->grid_size;
+    e->line_drag_from = from;
+    e->line_drag_to = to;
     sel_clear(e);
-    if (e->span_count > 0) {
+    if (e->line_box_valid) {
+        set_status(e, false, "Box %.0f x %.0f: right-click for Stairs", w, h);
+    } else if (e->span_count > 0) {
         set_status(e, false, "%d wall section%s selected", e->span_count,
                    e->span_count == 1 ? "" : "s");
-    } else if (e->proto_rect_valid) {
-        set_status(e, false, "Empty box %.0f x %.0f: right-click for Stairs", w, h);
     } else {
         set_status(e, false, "Marquee clipped no walls");
     }
 }
 
-/* Start a chain at an existing endpoint without adding a wall yet. */
-static void proto_arm_chain(Editor* e, Vec2 world) {
+/* A plain Line drag does nothing. A plain Line click draws, and a click while
+   a chain is open continues it; the chain's points ride under the pending
+   gesture so the release can tell the two apart. */
+static void line_finish_pending(Editor* e, ImVec2 mouse, bool moved) {
     Gesture* g = &e->gesture;
-    Vec2 p = snapped(e, world);
-    if (g->kind == GESTURE_CHAIN) {
-        Vec2 last = g->pts[g->point_count - 1];
-        if (v2_equal(last, p, 0.001f)) {
-            set_status(e, false, "Continuing line");
-            return;
-        }
-        discard_empty_chain_shape(e);
-    }
-    cancel_gesture(e);
-    sel_clear(e);
-    ShapeId shape = level_add_shape(&e->level);
-    if (shape == 0) {
-        set_status(e, true, "Could not start a shape: level is full");
-        return;
-    }
-    g = &e->gesture;
-    g->kind = GESTURE_CHAIN;
-    g->shape = shape;
-    g->point_count = 1;
-    g->pts[0] = p;
-    g->wall_count = 0;
-    set_status(e, false, "Continuing line from endpoint");
-}
-
-/* One orthogonal segment for a drag stroke. Continues the chain only when the
-   stroke starts on its last point. */
-static void proto_add_stroke(Editor* e, Vec2 from, Vec2 to) {
-    from = snapped(e, from);
-    to = snapped(e, to);
-    if (v2_equal(from, to, 0.001f)) return;
-    Gesture* g = &e->gesture;
-    if (g->kind == GESTURE_CHAIN) {
-        Vec2 last = g->pts[g->point_count - 1];
-        if (!v2_equal(last, from, 0.001f)) {
-            discard_empty_chain_shape(e);
-            cancel_gesture(e);
-        }
-    }
-    if (g->kind != GESTURE_CHAIN) {
-        sel_clear(e);
-        ShapeId shape = level_add_shape(&e->level);
-        if (shape == 0) {
-            set_status(e, true, "Could not start a shape: level is full");
-            return;
-        }
-        g = &e->gesture;
-        g->kind = GESTURE_CHAIN;
-        g->shape = shape;
-        g->point_count = 1;
-        g->pts[0] = from;
-        g->wall_count = 0;
-    }
-    if (g->point_count > LEVEL_MAX_WALLS) {
-        set_status(e, true, "Chain is full");
-        return;
-    }
-    if (level_add_wall_to_shape(&e->level, g->shape, from, to) < 0) {
-        set_status(e, true, "Could not add wall (capacity or invalid segment)");
-        return;
-    }
-    g->wall_count++;
-    g->pts[g->point_count++] = to;
-    commit(e, "Wall added");
-}
-
-static void proto_finish_pending(Editor* e, ImVec2 mouse, bool moved) {
-    Gesture* g = &e->gesture;
+    bool had_chain = g->chain_active;
     Vec2 press = g->press_world;
-    Vec2 release = screen_to_world(e, mouse);
-    Vec2 end = constrained(e, press, release);
-    bool marquee = false, stroke = false, click = false, select = false, arm = false;
-
-    if (!moved) click = true;
-
-    bool had_chain = g->proto_chain;
     if (had_chain) g->kind = GESTURE_CHAIN;
-    if (!click && !stroke && !arm) {
-        if (had_chain) discard_empty_chain_shape(e);
-        cancel_gesture(e);
-    } else if (!had_chain) {
-        cancel_gesture(e);
-    }
-
-    if (marquee) {
-        proto_finish_marquee(e, press, release);
-    } else if (stroke) {
-        proto_add_stroke(e, press, end);
-    } else if (select) {
-        begin_select(e, release, mouse);
-    } else if (arm) {
-        proto_arm_chain(e, press);
-    } else if (click) {
+    else cancel_gesture(e);
+    if (!moved) {
         begin_wall_click(e, press, mouse);
+    } else if (had_chain) {
+        set_status(e, false, "Line draft continues; click to add a wall");
     } else {
-        set_status(e, false, "A: plain drag does nothing, Shift+drag marquees");
+        set_status(e, false, "Click-click draws, Shift+drag marquees");
     }
 }
 
@@ -2036,15 +1873,26 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             if (down) break;
             if (g->moved) {
-                if (e->proto != PROTO_NONE) {
-                    proto_finish_marquee(e, g->press_world, g->cur_world);
+                if (e->tool == TOOL_LINE) {
+                    line_finish_marquee(e, g->press_world, g->cur_world);
                 } else {
                     marquee_select(e, rect_from_points(g->press_world, g->cur_world),
                                    g->additive);
+                    if (sel_count(&e->selection) == 0) {
+                        Rect raw = rect_from_points(g->press_world, g->cur_world);
+                        Rect box = rect_from_points(snapped(e, raw.min),
+                                                    snapped(e, raw.max));
+                        e->line_box = box;
+                        e->line_box_valid =
+                            box.max.x - box.min.x >= e->grid_size &&
+                            box.max.y - box.min.y >= e->grid_size;
+                        e->line_drag_from = g->press_world;
+                        e->line_drag_to = g->cur_world;
+                    }
                 }
             } else {
                 int n = sel_count(&e->selection);
-                if (e->proto != PROTO_NONE) set_status(e, false, "Marquee");
+                if (e->tool == TOOL_LINE) set_status(e, false, "Marquee");
                 else if (n == 0) set_status(e, false, "Selection cleared");
                 else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
             }
@@ -2239,7 +2087,7 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             break;
         }
-        case GESTURE_PROTO_PENDING: {
+        case GESTURE_LINE_PENDING: {
             if (!have_pointer) {
                 cancel_gesture(e);
                 break;
@@ -2248,12 +2096,11 @@ static void update_drag(Editor* e, bool have_pointer) {
             if (screen_dist(io->MousePos, v2_to_im(g->press_screen)) >= 4.0f) {
                 g->moved = true;
             }
-            if (!down) proto_finish_pending(e, io->MousePos, g->moved);
+            if (!down) line_finish_pending(e, io->MousePos, g->moved);
             break;
         }
         case GESTURE_NONE:
         case GESTURE_CHAIN:
-        case GESTURE_POLYGON:
         default: break;
     }
 }
@@ -2311,39 +2158,19 @@ static void close_wall_chain(Editor* e, bool via_enter) {
     }
     level_set_shape_fill(&e->level, g->shape, e->shape_fill);
 
-    ShapeId closed = g->shape;
     cancel_gesture(e);
-    /* Prototype selection is the marquee span, so closing does not select the
-       whole outline. */
-    if (e->proto == PROTO_NONE) sel_only_shape_walls(e, closed);
     commit(e, "Shape closed");
 }
 
-static void close_polygon(Editor* e) {
-    Gesture* g = &e->gesture;
-    if (g->kind != GESTURE_POLYGON || g->point_count < 3) {
-        set_status(e, true, "A room needs at least three points");
-        return;
-    }
-    int room = level_add_room(&e->level, g->pts, g->point_count, e->room_color);
-    cancel_gesture(e);
-    if (room < 0) {
-        set_status(e, true, "Could not create room: level is full or polygon is degenerate");
-        return;
-    }
-    sel_only(e, SEL_ROOM, room);
-    commit(e, "Room added");
-}
-
 static void cancel_transient(Editor* e) {
-    if (e->gesture.kind == GESTURE_PROTO_PENDING) {
+    if (e->gesture.kind == GESTURE_LINE_PENDING) {
         cancel_gesture(e);
         set_status(e, false, "Cancelled");
     } else if (e->gesture.kind == GESTURE_MARQUEE) {
         cancel_gesture(e);
         set_status(e, false, "Marquee cancelled");
-    } else if (e->gesture.kind == GESTURE_CHAIN || e->gesture.kind == GESTURE_POLYGON) {
-        if (e->gesture.kind == GESTURE_CHAIN) discard_empty_chain_shape(e);
+    } else if (e->gesture.kind == GESTURE_CHAIN) {
+        discard_empty_chain_shape(e);
         cancel_gesture(e);
         set_status(e, false, "Draft cancelled");
     } else if (gesture_is_drag(e)) {
@@ -2533,50 +2360,9 @@ static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse) {
     commit(e, "Wall added");
 }
 
-static void begin_room_click(Editor* e, Vec2 world, ImVec2 mouse) {
-    Gesture* g = &e->gesture;
-    if (g->kind != GESTURE_POLYGON) {
-        cancel_gesture(e);
-        sel_clear(e);
-        g = &e->gesture;
-        g->kind = GESTURE_POLYGON;
-        g->point_count = 1;
-        g->pts[0] = snapped(e, world);
-        set_status(e, false, "Fill started");
-        return;
-    }
-    ImVec2 first = world_to_screen(e, g->pts[0]);
-    bool near = g->point_count >= 3 && screen_dist(mouse, first) <= CLOSE_TOL_PX;
-    if (near || igGetMouseClickedCount(0) == 2) {
-        if (g->point_count >= 3) {
-            close_polygon(e);
-        } else {
-            set_status(e, true, "A room needs at least three points");
-        }
-        return;
-    }
-    if (g->point_count >= LEVEL_MAX_ROOM_PTS) {
-        set_status(e, true, "Room point limit reached");
-        return;
-    }
-    Vec2 p = snapped(e, world);
-    if (v2_equal(p, g->pts[g->point_count - 1], 0.0001f)) return;
-    g->pts[g->point_count++] = p;
-}
-
-static void begin_door_click(Editor* e, int hover_wall, float hover_t) {
-    if (hover_wall < 0) {
-        set_status(e, true, "Click near a wall to place a door");
-        return;
-    }
-    const Wall* w = &e->level.walls[hover_wall];
-    float len = wall_length(w);
-    add_door_to_wall(e, w->id, hover_t, fminf(44.0f, len));
-}
-
 static void begin_label_click(Editor* e, Vec2 world) {
     Vec2 p = snapped(e, world);
-    int idx = level_add_label(&e->level, p, "Room", 19.0f);
+    int idx = level_add_label(&e->level, p, "Room", e->label_size);
     if (idx < 0) {
         set_status(e, true, "Could not add label: level is full");
         return;
@@ -2586,44 +2372,16 @@ static void begin_label_click(Editor* e, Vec2 world) {
     commit(e, "Label added");
 }
 
-/* The placement box before it goes into the level. With snap on, both extents
-   round up to whole grid cells and the min corner snaps, so every edge lands on
-   the grid the way walls do. */
-static Rect stairs_placement_rect(const Editor* e, Vec2 world) {
-    float across = STAIR_WIDTH;
-    float run = (float)e->stairs_steps * STAIR_STEP_DEPTH;
-    if (e->snap) {
-        across = ceilf(across / e->grid_size) * e->grid_size;
-        run = ceilf(run / e->grid_size) * e->grid_size;
-    }
-    float width = e->stairs_dir == STAIRS_H ? run : across;
-    float length = e->stairs_dir == STAIRS_H ? across : run;
-    Vec2 min = v2(world.x - width * 0.5f, world.y - length * 0.5f);
-    if (e->snap) {
-        min = v2(snap_scalar(min.x, e->grid_size), snap_scalar(min.y, e->grid_size));
-    }
-    return (Rect){ min, v2(min.x + width, min.y + length) };
-}
-
-static void begin_stairs_click(Editor* e, Vec2 world) {
-    Rect rect = stairs_placement_rect(e, world);
-    int idx = level_add_stairs(&e->level, rect, e->stairs_dir, e->stairs_steps);
-    if (idx < 0) {
-        set_status(e, true, "Could not add stairs: level is full");
-        return;
-    }
-    sel_only(e, SEL_STAIRS, idx);
-    commit(e, "Stairs added");
-}
-
-/* Nearest wall endpoint within 10 screen pixels of the press. */
-
-static void proto_press(Editor* e, Vec2 world, ImVec2 mouse) {
+/* A Line press either starts a marquee (Shift), continues an open chain, or
+   waits for the release so a plain drag stays a no-op. */
+static void line_press(Editor* e, Vec2 world, ImVec2 mouse) {
     ImGuiIO* io = igGetIO();
     Gesture* g = &e->gesture;
-
     bool had_chain = g->kind == GESTURE_CHAIN;
-    if (e->proto == PROTO_A_MODIFIER && io->KeyShift) {
+    e->span_count = 0;
+    e->line_box_valid = false;
+
+    if (io->KeyShift) {
         if (had_chain) discard_empty_chain_shape(e);
         cancel_gesture(e);
         g = &e->gesture;
@@ -2639,30 +2397,60 @@ static void proto_press(Editor* e, Vec2 world, ImVec2 mouse) {
 
     if (!had_chain) cancel_gesture(e);
     g = &e->gesture;
-    g->kind = GESTURE_PROTO_PENDING;
+    g->kind = GESTURE_LINE_PENDING;
     g->press_world = world;
     g->cur_world = world;
     g->press_screen = v2(mouse.x, mouse.y);
     g->moved = false;
-    g->proto_chain = had_chain;
-    set_status(e, false, "Press");
+    g->chain_active = had_chain;
+    set_status(e, false, had_chain ? "Press" : "Press: click draws");
 }
 
-static void proto_open_context(Editor* e, Vec2 world) {
+/* The right-click snapshot. Both tools feed one shape target, one set of wall
+   spans, and one stair box; the popup then cannot read stale selection state. */
+static void open_context_menu(Editor* e, Vec2 world) {
+    ContextMenu* c = &e->ctx;
+    memset(c, 0, sizeof *c);
     int shape = level_shape_at(&e->level, world);
-    int spans = 0;
-    for (int i = 0; i < e->span_count; i++) {
-        if (level_wall_by_id_const(&e->level, e->spans[i].wall)) spans++;
+    c->fill_shape = shape >= 0 ? e->level.shapes[shape].id : 0;
+
+    if (e->tool == TOOL_LINE) {
+        for (int i = 0; i < e->span_count; i++) {
+            if (level_wall_by_id_const(&e->level, e->spans[i].wall)) {
+                c->door_spans[c->door_span_count++] = e->spans[i];
+            }
+        }
+        c->can_fill = c->fill_shape != 0 && c->door_span_count == 0;
+        c->can_stairs = e->line_box_valid;
+        c->stairs_rect = e->line_box;
+        c->drag_from = e->line_drag_from;
+        c->drag_to = e->line_drag_to;
+    } else {
+        for (int i = 0; i < e->level.wall_count; i++) {
+            if (!sel_has(&e->selection, SEL_WALL, i)) continue;
+            c->door_spans[c->door_span_count++] =
+                (WallSpan){ e->level.walls[i].id, 0.0f, 1.0f };
+        }
+        if (c->door_span_count == 0) {
+            float t = 0.0f;
+            int wall = level_nearest_wall(&e->level, world,
+                                          HIT_TOL_PX / e->camera.zoom, &t);
+            if (wall >= 0) {
+                c->door_spans[c->door_span_count++] =
+                    (WallSpan){ e->level.walls[wall].id, 0.0f, 1.0f };
+            }
+        }
+        c->can_fill = c->fill_shape != 0;
+        c->can_stairs = e->line_box_valid && c->door_span_count == 0;
+        c->stairs_rect = e->line_box;
+        c->drag_from = e->line_drag_from;
+        c->drag_to = e->line_drag_to;
     }
-    e->ctx_open = true;
-    e->ctx_fill_shape = shape >= 0 ? e->level.shapes[shape].id : 0;
-    e->ctx_can_door = spans > 0;
-    e->ctx_can_fill = e->ctx_fill_shape != 0 && spans == 0;
-    e->ctx_can_stairs = spans == 0 && e->proto_rect_valid;
+    c->open = true;
 }
 
-static void proto_set_fill(Editor* e, ShapeFill fill) {
-    Shape* shape = level_shape_by_id(&e->level, e->ctx_fill_shape);
+static void context_set_fill(Editor* e, ShapeFill fill) {
+    Shape* shape = level_shape_by_id(&e->level, e->ctx.fill_shape);
     if (!shape) {
         set_status(e, true, "No closed shape under the click");
         return;
@@ -2673,29 +2461,57 @@ static void proto_set_fill(Editor* e, ShapeFill fill) {
                                                                : "Fill cleared");
 }
 
-static void proto_add_doors(Editor* e, DoorColor color) {
+/* A thin door marquee can cross a short collinear wall that ends inside its
+   span, such as a painted fill border painted over the same line. The door
+   belongs to the longer span it already covers, so a contained span is
+   skipped rather than adding a second, tiny door. */
+static bool span_contains(const Wall* outer, float o0, float o1,
+                          const Wall* inner, float i0, float i1) {
+    Vec2 oa = segment_point(outer->a, outer->b, o0);
+    Vec2 ob = segment_point(outer->a, outer->b, o1);
+    Vec2 ia = segment_point(inner->a, inner->b, i0);
+    Vec2 ib = segment_point(inner->a, inner->b, i1);
+    return point_segment_dist(ia, oa, ob) <= 0.5f &&
+           point_segment_dist(ib, oa, ob) <= 0.5f;
+}
+
+static void context_add_doors(Editor* e, DoorColor color) {
+    ContextMenu* c = &e->ctx;
     int added = 0;
-    for (int i = 0; i < e->span_count; i++) {
-        const Wall* w = level_wall_by_id_const(&e->level, e->spans[i].wall);
+    for (int i = 0; i < c->door_span_count; i++) {
+        const Wall* w = level_wall_by_id_const(&e->level, c->door_spans[i].wall);
         if (!w) continue;
         float len = wall_length(w);
         if (len <= 0.0001f) continue;
-        float t = (e->spans[i].t0 + e->spans[i].t1) * 0.5f;
-        float width = (e->spans[i].t1 - e->spans[i].t0) * len;
+        bool covered = false;
+        for (int j = 0; j < i; j++) {
+            const Wall* prev =
+                level_wall_by_id_const(&e->level, c->door_spans[j].wall);
+            if (!prev) continue;
+            if (span_contains(prev, c->door_spans[j].t0, c->door_spans[j].t1,
+                              w, c->door_spans[i].t0, c->door_spans[i].t1)) {
+                covered = true;
+                break;
+            }
+        }
+        if (covered) continue;
+        float t = (c->door_spans[i].t0 + c->door_spans[i].t1) * 0.5f;
+        float width = (c->door_spans[i].t1 - c->door_spans[i].t0) * len;
         /* level_add_door clamps to the wall and raises the width to the
            minimum, so the span only needs its centre and length. */
         if (level_add_door(&e->level, w->id, t, width, color) >= 0) added++;
     }
     e->span_count = 0;
-    e->proto_rect_valid = false;
+    e->line_box_valid = false;
     if (added > 0) commit(e, "Door added");
     else set_status(e, true, "No wall section to door");
 }
 
-static void proto_add_stairs(Editor* e) {
-    Rect r = e->proto_rect;
-    float dx = e->proto_drag_to.x - e->proto_drag_from.x;
-    float dy = e->proto_drag_to.y - e->proto_drag_from.y;
+static void context_add_stairs(Editor* e) {
+    ContextMenu* c = &e->ctx;
+    Rect r = c->stairs_rect;
+    float dx = c->drag_to.x - c->drag_from.x;
+    float dy = c->drag_to.y - c->drag_from.y;
     StairsDir dir = fabsf(dy) >= fabsf(dx) ? STAIRS_V : STAIRS_H;
     float run = dir == STAIRS_H ? r.max.x - r.min.x : r.max.y - r.min.y;
     int steps = (int)lroundf(run / STAIR_STEP_DEPTH);
@@ -2710,67 +2526,55 @@ static void proto_add_stairs(Editor* e) {
     e->level.stairs[idx].bottom = dir == STAIRS_H ? dx >= 0.0f : dy >= 0.0f;
     sel_only(e, SEL_STAIRS, idx);
     e->span_count = 0;
-    e->proto_rect_valid = false;
+    e->line_box_valid = false;
     commit(e, "Stairs added");
 }
 
-static void proto_context_menu(Editor* e) {
-    if (e->ctx_can_door && igBeginMenu("Door")) {
+static void context_menu(Editor* e) {
+    ContextMenu* c = &e->ctx;
+    if (c->door_span_count > 0 && igBeginMenu("Door")) {
         if (igMenuItemEx("White", NULL, false, true)) {
-            proto_add_doors(e, DOOR_WHITE);
+            context_add_doors(e, DOOR_WHITE);
             igCloseCurrentPopup();
         }
         if (igMenuItemEx("Red", NULL, false, true)) {
-            proto_add_doors(e, DOOR_RED);
+            context_add_doors(e, DOOR_RED);
             igCloseCurrentPopup();
         }
         if (igMenuItemEx("Blue", NULL, false, true)) {
-            proto_add_doors(e, DOOR_BLUE);
+            context_add_doors(e, DOOR_BLUE);
             igCloseCurrentPopup();
         }
         igEndMenu();
     }
-    if (e->ctx_can_fill && igBeginMenu("Fill")) {
+    if (c->can_fill && igBeginMenu("Fill")) {
         if (igMenuItemEx("Red", NULL, false, true)) {
-            proto_set_fill(e, SHAPE_FILL_RED);
+            context_set_fill(e, SHAPE_FILL_RED);
             igCloseCurrentPopup();
         }
         if (igMenuItemEx("Blue", NULL, false, true)) {
-            proto_set_fill(e, SHAPE_FILL_BLUE);
+            context_set_fill(e, SHAPE_FILL_BLUE);
             igCloseCurrentPopup();
         }
         if (igMenuItemEx("None", NULL, false, true)) {
-            proto_set_fill(e, SHAPE_FILL_NONE);
+            context_set_fill(e, SHAPE_FILL_NONE);
             igCloseCurrentPopup();
         }
         igEndMenu();
     }
-    if (e->ctx_can_stairs && igMenuItemEx("Stairs", NULL, false, true)) {
-        proto_add_stairs(e);
+    if (c->can_stairs && igMenuItemEx("Stairs", NULL, false, true)) {
+        context_add_stairs(e);
         igCloseCurrentPopup();
     }
-    if (e->ctx_can_door || e->ctx_can_fill || e->ctx_can_stairs) {
+    if (c->door_span_count > 0 || c->can_fill || c->can_stairs) {
         igSeparator();
     }
     if (igMenuItemEx("Clear selection", NULL, false, true)) {
         sel_clear(e);
         e->span_count = 0;
-        e->proto_rect_valid = false;
+        e->line_box_valid = false;
         set_status(e, false, "Selection cleared");
         igCloseCurrentPopup();
-    }
-}
-
-static void handle_canvas_click(Editor* e, Vec2 world, ImVec2 mouse, int hover_wall,
-                                float hover_t) {
-    switch (e->tool) {
-        case TOOL_SELECT: begin_select(e, world, mouse); break;
-        case TOOL_WALL: begin_wall_click(e, world, mouse); break;
-        case TOOL_ROOM: begin_room_click(e, world, mouse); break;
-        case TOOL_DOOR: begin_door_click(e, hover_wall, hover_t); break;
-        case TOOL_LABEL: begin_label_click(e, world); break;
-        case TOOL_STAIRS: begin_stairs_click(e, world); break;
-        default: break;
     }
 }
 
@@ -2823,21 +2627,18 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
 
     update_drag(e, true);
 
-    int hover_wall = -1;
-    float hover_t = 0.0f;
-    if (have_pointer && e->tool == TOOL_DOOR && hovered) {
-        float tol = DOOR_TOL_PX / e->camera.zoom;
-        hover_wall = level_nearest_wall(&e->level, world, tol, &hover_t);
-    }
-
     if (hovered && igIsMouseClicked(1)) {
-        if (e->proto != PROTO_NONE) proto_open_context(e, world);
-        else cancel_transient(e);
+        if (e->tool == TOOL_LABEL) cancel_transient(e);
+        else open_context_menu(e, world);
         return;
     }
     if (hovered && igIsMouseClicked(0) && !e->pan_active) {
-        if (e->proto != PROTO_NONE) proto_press(e, world, io->MousePos);
-        else handle_canvas_click(e, world, io->MousePos, hover_wall, hover_t);
+        switch (e->tool) {
+            case TOOL_SELECT: begin_select(e, world, io->MousePos); break;
+            case TOOL_LINE: line_press(e, world, io->MousePos); break;
+            case TOOL_LABEL: begin_label_click(e, world); break;
+            default: break;
+        }
     }
 }
 
@@ -2882,27 +2683,17 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_doors(e);
     draw_labels(e);
 
-    int hover_wall = -1;
-    float hover_t = 0.0f;
-    if (have_pointer && e->tool == TOOL_DOOR && hovered) {
-        Vec2 world = screen_to_world(e, mouse);
-        hover_wall = level_nearest_wall(&e->level, world,
-                                        DOOR_TOL_PX / e->camera.zoom, &hover_t);
-    }
-    draw_door_preview(e, hover_wall, hover_t);
-
     if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
-    if (have_pointer && e->gesture.kind == GESTURE_POLYGON) draw_polygon_preview(e, mouse);
     draw_selection(e);
     draw_marquee(e);
     draw_status_strip(e);
 
-    if (e->ctx_open) {
-        igOpenPopup("##proto_ctx", 0);
-        e->ctx_open = false;
+    if (e->ctx.open) {
+        igOpenPopup("##canvas_ctx", 0);
+        e->ctx.open = false;
     }
-    if (e->proto != PROTO_NONE && igBeginPopup("##proto_ctx", 0)) {
-        proto_context_menu(e);
+    if (igBeginPopup("##canvas_ctx", 0)) {
+        context_menu(e);
         igEndPopup();
     }
 
@@ -2963,7 +2754,7 @@ static void draw_menu(Editor* e) {
 }
 
 /* The variant chip names the variant and its select gesture. */
-static void proto_chip(Editor* e) {
+static void line_chip(Editor* e) {
     float w = igGetContentRegionAvail().x;
     float h = 62.0f;
     ImVec2 p = igGetCursorScreenPos();
@@ -2995,18 +2786,18 @@ static void draw_left_panel(Editor* e) {
     igBegin("##tools", NULL, flags);
     igPopStyleColorEx(1);
 
-    if (e->proto != PROTO_NONE) {
+    heading("Tools");
+    for (int i = 0; i < TOOL_COUNT; i++) {
+        if (tool_button(e, (Tool)i)) switch_tool(e, (Tool)i);
+    }
+    if (e->tool == TOOL_LINE) {
+        igDummy((ImVec2){ 0.0f, 4.0f });
         heading("Line");
-        proto_chip(e);
-    } else {
-        heading("Tools");
-        for (int i = 0; i < TOOL_COUNT; i++) {
-            if (tool_button(e, (Tool)i)) switch_tool(e, (Tool)i);
-        }
+        line_chip(e);
     }
 
     igDummy((ImVec2){ 0.0f, 4.0f });
-    heading(e->proto != PROTO_NONE ? "Canvas" : "Tool options");
+    heading("Tool options");
 
     static const float grid_sizes[4] = { 4.0f, 8.0f, 16.0f, 32.0f };
     int grid_index = 1;
@@ -3021,8 +2812,8 @@ static void draw_left_panel(Editor* e) {
     igSameLineEx(0.0f, 12.0f);
     igCheckbox("Show grid", &e->show_grid);
 
-    if (e->proto == PROTO_NONE) switch (e->tool) {
-        case TOOL_WALL: {
+    switch (e->tool) {
+        case TOOL_LINE: {
             igDummy((ImVec2){ 0.0f, 3.0f });
             igTextDisabled("Fill color");
             float third = (igGetContentRegionAvail().x - 12.0f) / 3.0f;
@@ -3033,8 +2824,7 @@ static void draw_left_panel(Editor* e) {
             igSameLineEx(0.0f, 6.0f);
             if (swatch_button("##shapeblue", "Blue", col32(ROOM_BLUE_COL),
                               e->shape_fill == SHAPE_FILL_BLUE, false, third)) {
-                /* A drawn shape starts unfilled; the context menu applies a fill. */
-    e->shape_fill = SHAPE_FILL_NONE;
+                e->shape_fill = SHAPE_FILL_BLUE;
             }
             igSameLineEx(0.0f, 6.0f);
             if (swatch_button("##shapered", "Red", col32(ROOM_RED_COL),
@@ -3044,83 +2834,29 @@ static void draw_left_panel(Editor* e) {
             small_note("A closed chain takes this fill. None leaves it empty.");
             break;
         }
-        case TOOL_ROOM: {
+        case TOOL_LABEL: {
             igDummy((ImVec2){ 0.0f, 3.0f });
-            igTextDisabled("Fill color");
-            float half = (igGetContentRegionAvail().x - 6.0f) * 0.5f;
-            if (swatch_button("##roomblue", "Blue", col32(ROOM_BLUE_COL),
-                              e->room_color == ROOM_BLUE, false, half)) {
-                e->room_color = ROOM_BLUE;
-            }
-            igSameLineEx(0.0f, 6.0f);
-            if (swatch_button("##roomred", "Red", col32(ROOM_RED_COL),
-                              e->room_color == ROOM_RED, false, half)) {
-                e->room_color = ROOM_RED;
-            }
-            break;
-        }
-        case TOOL_DOOR: {
-            igDummy((ImVec2){ 0.0f, 3.0f });
-            igTextDisabled("Door color");
-            float third = (igGetContentRegionAvail().x - 12.0f) / 3.0f;
-            if (swatch_button("##doorwhite", "White", col32(DOOR_WHITE_COL),
-                              e->door_color == DOOR_WHITE, false, third)) {
-                e->door_color = DOOR_WHITE;
-            }
-            igSameLineEx(0.0f, 6.0f);
-            if (swatch_button("##doorred", "Red", col32(DOOR_RED_COL),
-                              e->door_color == DOOR_RED, false, third)) {
-                e->door_color = DOOR_RED;
-            }
-            igSameLineEx(0.0f, 6.0f);
-            if (swatch_button("##doorblue", "Blue", col32(DOOR_BLUE_COL),
-                              e->door_color == DOOR_BLUE, false, third)) {
-                e->door_color = DOOR_BLUE;
-            }
-            break;
-        }
-        case TOOL_STAIRS: {
-            igDummy((ImVec2){ 0.0f, 3.0f });
-            igTextDisabled("Direction");
-            if (e->stairs_dir == STAIRS_H) {
-                igPushStyleColorImVec4(ImGuiCol_Button, v4c(0x2b3f50, 1.0f));
-                if (igButtonEx("Horizontal", (ImVec2){ -FLT_MIN, 22.0f }))
-                    e->stairs_dir = STAIRS_H;
-                igPopStyleColorEx(1);
-                if (igButtonEx("Vertical", (ImVec2){ -FLT_MIN, 22.0f }))
-                    e->stairs_dir = STAIRS_V;
-            } else {
-                if (igButtonEx("Horizontal", (ImVec2){ -FLT_MIN, 22.0f }))
-                    e->stairs_dir = STAIRS_H;
-                igPushStyleColorImVec4(ImGuiCol_Button, v4c(0x2b3f50, 1.0f));
-                if (igButtonEx("Vertical", (ImVec2){ -FLT_MIN, 22.0f }))
-                    e->stairs_dir = STAIRS_V;
-                igPopStyleColorEx(1);
-            }
             igSetNextItemWidth(120.0f);
-            igSliderInt("Steps", &e->stairs_steps, STAIR_MIN_STEPS, STAIR_MAX_STEPS);
+            igSliderFloatEx("Label size", &e->label_size, 8.0f, 48.0f, "%.1f", 0);
+            small_note("Click the canvas to place a label, then type its text.");
             break;
         }
-        case TOOL_LABEL:
-            igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Click the canvas to place a room label.");
-            break;
         case TOOL_SELECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Click an edge to select it. Shift adds, Ctrl toggles.");
-            small_note("Drag an edge to reshape; drag a group to move it. Drag a stair edge to resize.");
-            small_note("Drag empty canvas to marquee.");
+            small_note("Click an object to select it. Shift adds, Ctrl toggles.");
+            small_note("Drag a wall edge to reshape it; drag a group to move it.");
+            small_note("Drag empty canvas to marquee. Drag a stair edge to resize.");
+            small_note("Right-click for Fill, Door, or Stairs.");
             break;
         case TOOL_COUNT:
         default: break;
     }
 
-    if (e->proto != PROTO_NONE) {
+    if (e->tool == TOOL_LINE) {
         igDummy((ImVec2){ 0.0f, 6.0f });
-        small_note("Right-click: Fill inside a closed shape, Door over a marquee-clipped wall, Stairs in an empty box.");
+        small_note("Right-click: Fill inside a closed shape, Door over a marquee-clipped wall, Stairs over a dragged box.");
         small_note("Enter closes the line. Esc ends it open.");
     }
-
     igEnd();
 }
 
@@ -3374,7 +3110,7 @@ static void draw_inspector(Editor* e) {
         igDummy((ImVec2){ 0.0f, 4.0f });
         heading("Controls");
         igPushFontFloat(igGetFont(), 12.0f);
-        igTextDisabled("1-6 switch tools");
+        igTextDisabled("1 Select, 2 Line, 3 Label");
         igTextDisabled("F fit level, G toggle grid");
         igTextDisabled("Shift-click adds; Ctrl-click toggles");
         igTextDisabled("Drag empty canvas to marquee");
@@ -3446,9 +3182,7 @@ static void draw_help_modal(Editor* e) {
     igSeparator();
     igText("Tools");
     igBullet();
-    igText("1 Select   2 Wall   3 Room");
-    igBullet();
-    igText("4 Door   5 Label   6 Stairs");
+    igText("1 Select   2 Line   3 Label");
     igText("Canvas");
     igBullet();
     igText("Left click uses the active tool.");
@@ -3597,12 +3331,10 @@ static void handle_shortcuts(Editor* e) {
         }
     }
 
-    if (e->proto == PROTO_NONE) {
-        for (int i = 0; i < TOOL_COUNT; i++) {
-            if (igIsKeyPressedEx(ImGuiKey_1 + i, false)) {
-                switch_tool(e, (Tool)i);
-                return;
-            }
+    for (int i = 0; i < TOOL_COUNT; i++) {
+        if (igIsKeyPressedEx(ImGuiKey_1 + i, false)) {
+            switch_tool(e, (Tool)i);
+            return;
         }
     }
     if (igIsKeyPressedEx(ImGuiKey_F, false)) {
@@ -3637,7 +3369,6 @@ static void handle_shortcuts(Editor* e) {
     }
     if (igIsKeyPressedEx(ImGuiKey_Enter, false)) {
         if (e->gesture.kind == GESTURE_CHAIN) close_wall_chain(e, true);
-        else if (e->gesture.kind == GESTURE_POLYGON) close_polygon(e);
     }
     if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
         if (gesture_is_drag(e)) {
@@ -3664,8 +3395,7 @@ Editor* editor_create(const char* startup_path) {
 
     e->camera.center = v2(0.0f, 0.0f);
     e->camera.zoom = 1.0f;
-    e->tool = TOOL_SELECT;
-    e->proto = PROTO_A_MODIFIER;
+    e->tool = TOOL_LINE;
     e->selection.primary.kind = SEL_NONE;
     e->selection.primary.index = -1;
     e->grid_size = 8.0f;
@@ -3673,10 +3403,7 @@ Editor* editor_create(const char* startup_path) {
     e->show_grid = true;
     /* A drawn shape starts unfilled; the context menu applies a fill. */
     e->shape_fill = SHAPE_FILL_NONE;
-    e->room_color = ROOM_BLUE;
-    e->door_color = DOOR_WHITE;
-    e->stairs_dir = STAIRS_H;
-    e->stairs_steps = 8;
+    e->label_size = 19.0f;
     e->fit_pending = true;
     e->modal = MODAL_NONE;
     e->request_modal = MODAL_NONE;

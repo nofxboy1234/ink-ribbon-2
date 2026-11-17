@@ -1152,6 +1152,13 @@ static void test_shape_at(void) {
     check(level_shape_at(&level, v2(300, 20)) == -1,
           "shape_at misses a point outside every closed shape");
 
+    int twin_walls[4];
+    ShapeId twin = add_rectangle(&level, v2(50, 50), 100, 100, twin_walls);
+    check(level_close_shape(&level, twin),
+          "close a second identical outline for shape_at");
+    check(level_shape_at(&level, v2(100, 100)) == 2,
+          "shape_at prefers the newest of two identical outlines");
+
     Level open;
     level_init(&open);
     ShapeId open_shape = level_add_shape(&open);
