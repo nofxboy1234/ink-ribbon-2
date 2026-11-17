@@ -55,6 +55,23 @@ if have != want:
     print("counts", have); raise SystemExit(1)
 PYEOF
 echo "PASS demo counts 76 walls, 17 shapes, 10 doors, 6 labels, 4 stairs"
+python3 tools/check_map.py levels/re2-library.lvl
+echo "PASS built map bounds, stair flush, fills, doors, labels, and open shapes"
+
+echo "== default tool is Line, not Select =="
+shot "$out-default.png"
+line_px=$(convert "$out-default.png" -format "%[hex:p{30,102}]" info:)
+select_px=$(convert "$out-default.png" -format "%[hex:p{30,76}]" info:)
+python3 - "$line_px" "$select_px" <<'PYEOF'
+import sys
+def lum(h):
+    h = h.strip("#")
+    return int(h[0:2], 16) + int(h[2:4], 16) + int(h[4:6], 16)
+if lum(sys.argv[1]) <= lum(sys.argv[2]):
+    print(f"Line button is not active: line {sys.argv[1]} select {sys.argv[2]}")
+    raise SystemExit(1)
+PYEOF
+echo "PASS Line is the active default ($line_px vs $select_px)"
 
 echo "== draw a shape, fill it red from the context menu =="
 new_level
@@ -115,7 +132,53 @@ if w <= 0 or h <= 0: raise SystemExit(1)
 PYEOF
 echo "PASS empty marquee added stairs"
 
+echo "== Select click-selects the whole shape without a marquee =="
+xdotool key --clearmodifiers 1; sleep 0.4
+click 635 462
+xdotool key --clearmodifiers Delete; sleep 0.5
+save_as /tmp/ink-ribbon-select.lvl
+python3 - /tmp/ink-ribbon-select.lvl <<'PYEOF'
+import sys
+want = {"wall": 0, "shape": 0, "door": 0, "stairs": 1, "label": 0}
+have = {k: 0 for k in want}
+for line in open(sys.argv[1]):
+    t = line.split(" ", 1)[0]
+    if t in have:
+        have[t] += 1
+if have != want:
+    print("counts after select delete", have); raise SystemExit(1)
+PYEOF
+xdotool keydown ctrl; sleep 0.1; xdotool key z; sleep 0.1; xdotool keyup ctrl; sleep 0.6
+save_as /tmp/ink-ribbon-select-undo.lvl
+python3 - /tmp/ink-ribbon-select-undo.lvl <<'PYEOF'
+import sys
+want = {"wall": 4, "shape": 1, "door": 1, "stairs": 1, "label": 0}
+have = {k: 0 for k in want}
+for line in open(sys.argv[1]):
+    t = line.split(" ", 1)[0]
+    if t in have:
+        have[t] += 1
+if have != want:
+    print("counts after undo", have); raise SystemExit(1)
+PYEOF
+echo "PASS Select deleted the clicked shape and undo restored it"
+
+echo "== Label tool places a label and typing renames it =="
+xdotool key --clearmodifiers 3; sleep 0.4
+click 400 650
+xdotool type --clearmodifiers --delay 20 "Suite Label"; sleep 0.2
+xdotool key --clearmodifiers Return; sleep 0.5
+save_as /tmp/ink-ribbon-label.lvl
+python3 - /tmp/ink-ribbon-label.lvl <<'PYEOF'
+import sys
+labels = [line.split(" ", 4) for line in open(sys.argv[1]) if line.startswith("label ")]
+if len(labels) != 1 or labels[0][4].strip() != "Suite Label":
+    print("labels", labels); raise SystemExit(1)
+PYEOF
+echo "PASS Label tool placed and renamed a label"
+
 echo "== losing focus during a line draft must not freeze =="
+xdotool key --clearmodifiers 2; sleep 0.3
 click 400 400
 xdotool mousemove --sync $((WX + 520)) $((WY + 300)); sleep 0.3
 python3 tools/focus_drop.py >/dev/null; sleep 0.4
@@ -133,4 +196,4 @@ cleanup
 overflow=$(test_leftovers)
 [ -z "$overflow" ] || { echo "FAIL leftover:"; echo "$overflow"; exit 1; }
 echo "PASS no leftover processes"
-echo "ALL LINE-FIRST CHECKS PASSED"
+echo "ALL THREE-TOOL CHECKS PASSED"
