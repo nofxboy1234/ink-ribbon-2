@@ -160,6 +160,12 @@ typedef struct {
     int index;
 } SelRef;
 
+/* A marked section of one wall. t0 and t1 order along the wall. */
+typedef struct {
+    WallId wall;
+    float t0, t1;
+} Span;
+
 typedef struct {
     bool walls[LEVEL_MAX_WALLS];
     bool doors[LEVEL_MAX_DOORS];
@@ -185,13 +191,12 @@ struct Editor {
     Tool tool;
     Selection selection;
     Gesture gesture;
-    /* The section of one wall that Select marked with Shift+drag. It sits
-       beside the selection instead of inside it, so selecting, reshaping, and
-       cutting never share a flag. */
-    WallId span_wall;
-    float span_t0;
-    float span_t1;
-    bool span_active;
+    /* The wall sections Select marked to cut. It sits beside the selection
+       instead of inside it, so selecting, reshaping, and cutting never share
+       a flag. Per wall the intervals are ordered and disjoint, so Delete cuts
+       each marked piece once. */
+    Span spans[LEVEL_MAX_WALLS];
+    int span_count;
     bool fit_pending;
     bool pan_active;
 
@@ -375,13 +380,54 @@ static void cancel_gesture(Editor* e) {
     memset(&e->gesture, 0, sizeof e->gesture);
 }
 
-/* A span is one wall plus two parameters, so wall id 0 is the empty value and
-   there is no fourth flag that could disagree with span_active. */
+/* Sections live in one canonical list: per wall the intervals are ordered and
+   disjoint, so Delete cuts the far piece first and never cuts a piece twice. */
 static void span_clear(Editor* e) {
-    e->span_wall = 0;
-    e->span_t0 = 0.0f;
-    e->span_t1 = 0.0f;
-    e->span_active = false;
+    e->span_count = 0;
+}
+
+static bool span_touches(float a0, float a1, float b0, float b1) {
+    return a0 <= b1 + 1e-5f && b0 <= a1 + 1e-5f;
+}
+
+static void span_add(Editor* e, WallId wall, float t0, float t1) {
+    if (t0 > t1) {
+        float swap = t0;
+        t0 = t1;
+        t1 = swap;
+    }
+    t0 = clampf(t0, 0.0f, 1.0f);
+    t1 = clampf(t1, 0.0f, 1.0f);
+    if (t1 - t0 < 1e-3f) return;
+
+    bool merged = true;
+    while (merged) {
+        merged = false;
+        for (int i = 0; i < e->span_count; i++) {
+            Span* s = &e->spans[i];
+            if (s->wall != wall || !span_touches(s->t0, s->t1, t0, t1)) continue;
+            t0 = fminf(t0, s->t0);
+            t1 = fmaxf(t1, s->t1);
+            memmove(&e->spans[i], &e->spans[i + 1],
+                    (size_t)(e->span_count - i - 1) * sizeof e->spans[0]);
+            e->span_count--;
+            merged = true;
+            break;
+        }
+    }
+    if (e->span_count >= LEVEL_MAX_WALLS) return;
+    e->spans[e->span_count++] = (Span){ wall, t0, t1 };
+}
+
+/* Drops marks whose wall has gone, so an undo or a cut cannot leave a section
+   pointing at nothing. */
+static void span_prune(Editor* e) {
+    int keep = 0;
+    for (int i = 0; i < e->span_count; i++) {
+        if (!level_wall_by_id_const(&e->level, e->spans[i].wall)) continue;
+        e->spans[keep++] = e->spans[i];
+    }
+    e->span_count = keep;
 }
 
 /* A chain creates its shape on the first click, so a chain cancelled before
@@ -836,34 +882,83 @@ static void delete_selection(Editor* e) {
     }
 }
 
-/* A span owns Delete while it is active. The cut is one history step, and the
-   selection is dropped because the cut can remove or renumber walls. */
-static void cut_span(Editor* e) {
-    if (!e->span_active) return;
-    int index = level_find_wall_index(&e->level, e->span_wall);
-    if (index < 0) {
-        span_clear(e);
-        set_status(e, true, "The marked wall is gone");
-        return;
+/* Cuts every marked section in one history step. Sections on one wall run from
+   the far end back: each cut keeps the near piece on the same wall id, so the
+   next section's original parameters still map by dividing by the new end. */
+static int cut_spans(Editor* e, int* dropped_doors, int* failed) {
+    int cuts = 0;
+    bool used[LEVEL_MAX_WALLS] = { false };
+    *dropped_doors = 0;
+    *failed = 0;
+    for (int i = 0; i < e->span_count; i++) {
+        if (used[i]) continue;
+        WallId wall = e->spans[i].wall;
+        float iv[2 * LEVEL_MAX_WALLS];
+        int n = 0;
+        for (int k = i; k < e->span_count; k++) {
+            if (e->spans[k].wall != wall) continue;
+            used[k] = true;
+            iv[2 * n] = e->spans[k].t0;
+            iv[2 * n + 1] = e->spans[k].t1;
+            n++;
+        }
+        for (int k = 1; k < n; k++) {
+            float k0 = iv[2 * k];
+            float k1 = iv[2 * k + 1];
+            int j = k - 1;
+            while (j >= 0 && iv[2 * j] > k0) {
+                iv[2 * j + 2] = iv[2 * j];
+                iv[2 * j + 3] = iv[2 * j + 1];
+                j--;
+            }
+            iv[2 * j + 2] = k0;
+            iv[2 * j + 3] = k1;
+        }
+        float hi = 1.0f;
+        for (int k = n - 1; k >= 0; k--) {
+            int index = level_find_wall_index(&e->level, wall);
+            if (index < 0) break;
+            int dropped = 0;
+            if (!level_cut_wall_span(&e->level, index, iv[2 * k] / hi,
+                                     iv[2 * k + 1] / hi, &dropped)) {
+                (*failed)++;
+                continue;
+            }
+            *dropped_doors += dropped;
+            cuts++;
+            hi = iv[2 * k];
+        }
     }
-    float length = wall_length(&e->level.walls[index]) *
-                   fabsf(e->span_t1 - e->span_t0);
+    return cuts;
+}
+
+/* Sections own Delete while any are marked. The cut is one history step, and
+   the selection is dropped because the cut can remove or renumber walls. */
+static void cut_selected_spans(Editor* e) {
+    if (e->span_count == 0) return;
+    span_prune(e);
     int doors = 0;
-    if (!level_cut_wall_span(&e->level, index, e->span_t0, e->span_t1, &doors)) {
-        set_status(e, true, "Could not cut the section");
-        return;
-    }
+    int failed = 0;
+    int cuts = cut_spans(e, &doors, &failed);
     span_clear(e);
     sel_clear(e);
     cancel_gesture(e);
-    char message[96];
-    if (doors == 0) {
-        snprintf(message, sizeof message, "Cut %.0f units of wall, no doors",
-                 length);
+    if (cuts == 0) {
+        set_status(e, true, "Could not cut the marked sections");
+        return;
+    }
+    char message[128];
+    if (failed > 0) {
+        snprintf(message, sizeof message,
+                 "Cut %d section%s; %d could not be cut", cuts,
+                 cuts == 1 ? "" : "s", failed);
+    } else if (doors == 0) {
+        snprintf(message, sizeof message, "Cut %d section%s, no doors", cuts,
+                 cuts == 1 ? "" : "s");
     } else {
         snprintf(message, sizeof message,
-                 "Cut %.0f units of wall and removed %d door%s", length, doors,
-                 doors == 1 ? "" : "s");
+                 "Cut %d section%s and removed %d door%s", cuts,
+                 cuts == 1 ? "" : "s", doors, doors == 1 ? "" : "s");
     }
     commit(e, message);
 }
@@ -1163,9 +1258,9 @@ static void draw_door_bar(ImDrawList* dl, const Editor* e, const Wall* wall,
 
 typedef struct {
     float a, b;
-} Span;
+} DoorSpan;
 
-static int wall_door_spans(const Editor* e, const Wall* wall, Span* spans) {
+static int wall_door_spans(const Editor* e, const Wall* wall, DoorSpan* spans) {
     float len = wall_length(wall);
     if (len <= 0.0001f) return 0;
     int n = 0;
@@ -1185,7 +1280,7 @@ static int wall_door_spans(const Editor* e, const Wall* wall, Span* spans) {
         if (n >= LEVEL_MAX_DOORS) break;
     }
     for (int i = 1; i < n; i++) {
-        Span key = spans[i];
+        DoorSpan key = spans[i];
         int j = i - 1;
         while (j >= 0 && spans[j].a > key.a) {
             spans[j + 1] = spans[j];
@@ -1213,7 +1308,7 @@ static void draw_walls(const Editor* e) {
     for (int i = 0; i < e->level.wall_count; i++) {
         const Wall* w = &e->level.walls[i];
         ImU32 wall_col = col32a(WALL_COL, WALL_ALPHA);
-        Span spans[LEVEL_MAX_DOORS];
+        DoorSpan spans[LEVEL_MAX_DOORS];
         int n = wall_door_spans(e, w, spans);
         float cursor = 0.0f;
         for (int k = 0; k < n; k++) {
@@ -1240,31 +1335,33 @@ static void draw_doors(const Editor* e) {
     }
 }
 
-/* The marked section draws over its wall in the accent colour at double the
-   wall width, with a square at each end. The wall itself is untouched. */
-static void draw_span(const Editor* e) {
-    if (!e->span_active && e->gesture.kind != GESTURE_SPAN) return;
-    const Wall* wall = level_wall_by_id_const(&e->level, e->span_wall);
-    if (!wall) return;
-    float t0 = e->span_t0;
-    float t1 = e->span_t1;
-    if (t0 > t1) {
-        float swap = t0;
-        t0 = t1;
-        t1 = swap;
-    }
-    if (t1 - t0 <= 0.0f) return;
-
+/* Every marked section draws over its wall in the accent colour at double the
+   wall width, with a square cap at each end. The wall itself is untouched. */
+static void draw_spans(const Editor* e) {
+    if (e->span_count == 0) return;
     ImDrawList* dl = igGetWindowDrawList();
     ImU32 col = col32(ACCENT_COL);
-    ImVec2 a = world_to_screen(e, segment_point(wall->a, wall->b, t0));
-    ImVec2 b = world_to_screen(e, segment_point(wall->a, wall->b, t1));
-    ImDrawList_AddLineEx(dl, a, b, col, 4.0f, 0);
     const float h = 4.0f;
-    ImDrawList_AddRectFilledEx(dl, (ImVec2){ a.x - h, a.y - h },
-                               (ImVec2){ a.x + h, a.y + h }, col, 0.0f, 0);
-    ImDrawList_AddRectFilledEx(dl, (ImVec2){ b.x - h, b.y - h },
-                               (ImVec2){ b.x + h, b.y + h }, col, 0.0f, 0);
+    for (int i = 0; i < e->span_count; i++) {
+        const Span* span = &e->spans[i];
+        const Wall* wall = level_wall_by_id_const(&e->level, span->wall);
+        if (!wall) continue;
+        float t0 = span->t0;
+        float t1 = span->t1;
+        if (t0 > t1) {
+            float swap = t0;
+            t0 = t1;
+            t1 = swap;
+        }
+        if (t1 - t0 <= 0.0f) continue;
+        ImVec2 a = world_to_screen(e, segment_point(wall->a, wall->b, t0));
+        ImVec2 b = world_to_screen(e, segment_point(wall->a, wall->b, t1));
+        ImDrawList_AddLineEx(dl, a, b, col, 4.0f, 0);
+        ImDrawList_AddRectFilledEx(dl, (ImVec2){ a.x - h, a.y - h },
+                                   (ImVec2){ a.x + h, a.y + h }, col, 0.0f, 0);
+        ImDrawList_AddRectFilledEx(dl, (ImVec2){ b.x - h, b.y - h },
+                                   (ImVec2){ b.x + h, b.y + h }, col, 0.0f, 0);
+    }
 }
 
 /* The wall under the pointer and the centre parameter a door would take.
@@ -1775,10 +1872,9 @@ static bool span_from_marquee(Editor* e, const Gesture* g) {
         set_status(e, true, "Span shorter than one grid cell");
         return false;
     }
-    e->span_wall = w->id;
-    e->span_t0 = t0;
-    e->span_t1 = t1;
-    e->span_active = true;
+    span_clear(e);
+    span_add(e, w->id, t0, t1);
+    if (e->span_count == 0) return false;
     set_status(e, false, "Section of %.0f units marked, press Delete", length);
     return true;
 }
@@ -1883,7 +1979,10 @@ static void update_drag(Editor* e, bool have_pointer) {
             break;
         }
         case GESTURE_SPAN: {
-            const Wall* wall = level_wall_by_id_const(&e->level, e->span_wall);
+            const Wall* wall =
+                e->span_count == 1
+                    ? level_wall_by_id_const(&e->level, e->spans[0].wall)
+                    : NULL;
             if (!wall) {
                 span_clear(e);
                 cancel_gesture(e);
@@ -1896,7 +1995,7 @@ static void update_drag(Editor* e, bool have_pointer) {
                 }
                 float t = point_segment_t(world, wall->a, wall->b);
                 if (e->snap) t = snap_wall_t(wall, t, e->grid_size);
-                e->span_t1 = t;
+                e->spans[0].t1 = t;
                 break;
             }
             if (!g->moved) {
@@ -1919,24 +2018,22 @@ static void update_drag(Editor* e, bool have_pointer) {
                 cancel_gesture(e);
                 break;
             }
-            float t0 = e->span_t0;
-            float t1 = e->span_t1;
+            float t0 = e->spans[0].t0;
+            float t1 = e->spans[0].t1;
             if (t0 > t1) {
                 float swap = t0;
                 t0 = t1;
                 t1 = swap;
             }
             float length = wall_length(wall) * (t1 - t0);
+            WallId id = wall->id;
             span_clear(e);
             if (length < 1e-3f) {
                 set_status(e, true, "Span too short to cut");
             } else if (e->snap && length < e->grid_size) {
                 set_status(e, true, "Span shorter than one grid cell");
             } else {
-                e->span_wall = wall->id;
-                e->span_t0 = t0;
-                e->span_t1 = t1;
-                e->span_active = true;
+                span_add(e, id, t0, t1);
                 set_status(e, false, "Section of %.0f units marked, press Delete",
                            length);
             }
@@ -2384,9 +2481,8 @@ static void begin_span(Editor* e, int wall_index, float t, Vec2 world,
     g->cur_world = world;
     g->press_screen = v2(mouse.x, mouse.y);
     g->moved = false;
-    e->span_wall = e->level.walls[wall_index].id;
-    e->span_t0 = t;
-    e->span_t1 = t;
+    e->spans[0] = (Span){ e->level.walls[wall_index].id, t, t };
+    e->span_count = 1;
     set_status(e, false, "Drag along the wall to mark a section");
 }
 
@@ -2737,7 +2833,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_stairs(e);
     draw_walls(e);
     draw_doors(e);
-    draw_span(e);
+    draw_spans(e);
     if (e->tool == TOOL_DOOR && e->cursor_valid && !gesture_active(e)) {
         draw_door_ghost(e);
     }
@@ -3398,7 +3494,7 @@ static void handle_shortcuts(Editor* e) {
     if (igIsKeyPressedEx(ImGuiKey_H, false)) open_path_modal(e, MODAL_HELP);
     if (igIsKeyPressedEx(ImGuiKey_Delete, false)) {
         if (gesture_is_drag(e)) return;
-        if (e->span_active) cut_span(e);
+        if (e->span_count > 0) cut_selected_spans(e);
         else delete_selection(e);
     }
     if (igIsKeyPressedEx(ImGuiKey_Backspace, false)) {
@@ -3426,9 +3522,9 @@ static void handle_shortcuts(Editor* e) {
         if (e->gesture.kind == GESTURE_CHAIN) close_wall_chain(e, true);
     }
     if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
-        if (e->span_active) {
+        if (e->span_count > 0) {
             span_clear(e);
-            set_status(e, false, "Section cleared");
+            set_status(e, false, "Sections cleared");
             return;
         }
         if (e->tool == TOOL_LINE && !gesture_is_drag(e)) {
