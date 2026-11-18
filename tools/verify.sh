@@ -375,6 +375,36 @@ metric=$(compare -metric AE "$out-focus-b.png" "$out-focus-c.png" null: 2>&1 || 
 if [ "${metric%% *}" = "0" ]; then echo "FAIL no redraw after focus"; exit 1; fi
 echo "PASS focus loss survived (rss=${rss} KB)"
 
+echo "== Ctrl+D duplicates a selected shape =="
+new_level
+key 3
+drag 385 315 585 515
+key 1
+click 485 415
+xdotool keydown ctrl; sleep 0.1; xdotool keydown d; sleep 0.1
+xdotool keyup d; sleep 0.1; xdotool keyup ctrl; sleep 0.5
+save_as "$out-dup.lvl"
+python3 - "$out-dup.lvl" <<'PYEOF'
+import sys
+lines = [l.split() for l in open(sys.argv[1])]
+walls = [l for l in lines if l[0] == "wall"]
+shapes = [l for l in lines if l[0] == "shape"]
+if len(walls) != 8 or len(shapes) != 2:
+    print(f"duplicate is {len(walls)} walls and {len(shapes)} shapes")
+    raise SystemExit(1)
+copy = [w for w in walls if w[2] == shapes[1][1]]
+xs = [float(c) for w in copy for c in (w[3], w[5])]
+ys = [float(c) for w in copy for c in (w[4], w[6])]
+if min(xs) != -192.0 or max(xs) != 8.0 or min(ys) != -88.0 or max(ys) != 112.0:
+    print(f"the copy is not offset by one grid cell: {(min(xs), min(ys), max(xs), max(ys))}")
+    raise SystemExit(1)
+if shapes[1][2] != "1":
+    print("the copied shape is not closed")
+    raise SystemExit(1)
+print("eight walls, two closed shapes, the copy offset by (8, 8)")
+PYEOF
+echo "PASS Ctrl+D duplicates the selected shape at one grid offset"
+
 echo "== shift+drag cuts a section out of a wall =="
 new_level
 key 3

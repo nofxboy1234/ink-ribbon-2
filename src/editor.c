@@ -3264,10 +3264,12 @@ static void duplicate_selection(Editor* e) {
     }
     for (int i = e->level.shape_count - 1; i >= 0; i--) {
         const Shape* shape = &e->level.shapes[i];
-        int count = level_shape_wall_indices(&e->level, shape->id, NULL, 0);
-        if (count <= 0) continue;
         int indices[LEVEL_MAX_WALLS];
-        level_shape_wall_indices(&e->level, shape->id, indices, count);
+        /* The count call needs the real cap: the API returns min(count, cap),
+           so a zero cap asks for nothing and the shape was skipped. */
+        int count = level_shape_wall_indices(&e->level, shape->id, indices,
+                                             LEVEL_MAX_WALLS);
+        if (count <= 0) continue;
         bool hit = false;
         for (int k = 0; k < count; k++) {
             if (sel->walls[indices[k]]) { hit = true; break; }
@@ -3281,9 +3283,9 @@ static void duplicate_selection(Editor* e) {
                                     v2_add(w->b, off));
         }
         if (shape->closed) level_close_shape(&e->level, copy);
-        int copy_count = level_shape_wall_indices(&e->level, copy, NULL, 0);
         int copy_idx[LEVEL_MAX_WALLS];
-        level_shape_wall_indices(&e->level, copy, copy_idx, copy_count);
+        int copy_count = level_shape_wall_indices(&e->level, copy, copy_idx,
+                                                  LEVEL_MAX_WALLS);
         for (int k = 0; k < copy_count; k++) sel_add(e, SEL_WALL, copy_idx[k]);
         made++;
     }
