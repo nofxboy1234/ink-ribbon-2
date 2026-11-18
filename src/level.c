@@ -778,6 +778,83 @@ bool level_delete_wall(Level* level, int wall_index) {
     return true;
 }
 
+bool level_cut_wall_span(Level* level, int wall_index, float t0, float t1,
+                         int* dropped_doors) {
+    if (dropped_doors) *dropped_doors = 0;
+    if (!level || wall_index < 0 || wall_index >= level->wall_count) return false;
+    if (!isfinite(t0) || !isfinite(t1)) return false;
+
+    if (t0 > t1) {
+        float swap = t0;
+        t0 = t1;
+        t1 = swap;
+    }
+    t0 = clampf(t0, 0.0f, 1.0f);
+    t1 = clampf(t1, 0.0f, 1.0f);
+    if (t1 - t0 < 1e-3f) return false;
+
+    const Wall orig = level->walls[wall_index];
+    float len = wall_length(&orig);
+    /* A cut that leaves a piece too short to be a wall would break the model's
+       own invariant, so it is rejected whole rather than stored as a stub. */
+    if (t0 > 0.0f && t0 * len < ORTHO_EPS) return false;
+    if (t1 < 1.0f && (1.0f - t1) * len < ORTHO_EPS) return false;
+    if (t1 < 1.0f && level->wall_count >= LEVEL_MAX_WALLS) return false;
+
+    Vec2 p0 = segment_point(orig.a, orig.b, t0);
+    Vec2 p1 = segment_point(orig.a, orig.b, t1);
+
+    /* Append the far piece before touching the old wall, so a rejected append
+       leaves the level exactly as it was. */
+    WallId tail_id = 0;
+    if (t1 < 1.0f) {
+        int tail = append_wall(level, orig.shape, p1, orig.b);
+        if (tail < 0) return false;
+        tail_id = level->walls[tail].id;
+    }
+
+    /* Redistribute the old wall's doors by centre. Inside the span means gone.
+       Beyond t1 moves to the new wall. Before t0 stays on the shortened wall.
+       A door with no surviving wall on its side goes too. */
+    int keep = 0;
+    int dropped = 0;
+    for (int i = 0; i < level->door_count; i++) {
+        Door door = level->doors[i];
+        if (door.wall == orig.id) {
+            if (door.t > t0 && door.t < t1) {
+                dropped++;
+                continue;
+            }
+            if (door.t >= t1) {
+                if (tail_id == 0) {
+                    dropped++;
+                    continue;
+                }
+                door.wall = tail_id;
+                door.t = (door.t - t1) / (1.0f - t1);
+            } else {
+                if (t0 <= 0.0f) {
+                    dropped++;
+                    continue;
+                }
+                door.t = door.t / t0;
+            }
+        }
+        level->doors[keep] = door;
+        keep++;
+    }
+    level->door_count = keep;
+
+    if (t0 > 0.0f) {
+        level->walls[wall_index].b = p0;
+    } else {
+        level_delete_wall(level, wall_index);
+    }
+
+    if (dropped_doors) *dropped_doors = dropped;
+    return true;
+}
+
 bool level_delete_shape(Level* level, ShapeId id) {
     int index = shape_index_by_id(level, id);
     if (index < 0) return false;

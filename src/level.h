@@ -163,6 +163,18 @@ bool level_move_walls(Level* level, const bool* selected, int count, Vec2 delta)
 /* Index of the closed shape whose outline contains p, or -1. */
 int level_shape_at(const Level* level, Vec2 p);
 bool level_delete_wall(Level* level, int wall_index);
+/* Cuts the section between t0 and t1 out of one wall. The parameters are
+   ordered and clamped first. When the span starts after 0 the wall keeps its
+   id and shape and ends at the span start; when it ends before 1 a new wall
+   joins the same shape for the remainder, with a fresh WallId. Doors whose
+   centre lies inside the span are dropped and counted in dropped_doors. A door
+   before the span keeps its wall, and a door after it moves to the new wall,
+   both with t rescaled so the world centre holds. A shape loses its record
+   when the cut removes its last wall. Rejects a span shorter than 1e-3, a wall
+   index out of range, or a cut that would leave a wall too short to exist, and
+   changes nothing on rejection. */
+bool level_cut_wall_span(Level* level, int wall_index, float t0, float t1,
+                         int* dropped_doors);
 Wall* level_wall_by_id(Level* level, WallId id);
 const Wall* level_wall_by_id_const(const Level* level, WallId id);
 int level_find_wall_index(const Level* level, WallId id);

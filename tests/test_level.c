@@ -1445,6 +1445,132 @@ static void test_save_load_shapes(void) {
     remove(bad_path);
 }
 
+static void test_cut_wall_span(void) {
+    Level level;
+    int dropped = -1;
+
+    /* A middle cut of one wall leaves the near piece on the old wall and the
+       far piece on a new wall of the same shape. */
+    level_init(&level);
+    int index = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    ShapeId shape = level.walls[0].shape;
+    WallId id = level.walls[0].id;
+    check(level_cut_wall_span(&level, index, 0.2f, 0.6f, &dropped),
+          "cut the middle out of a wall");
+    check(level.wall_count == 2 && level.shape_count == 1 &&
+              level.walls[0].id == id && level.walls[1].id != id &&
+              level.walls[0].shape == shape && level.walls[1].shape == shape,
+          "a middle cut leaves two walls on the one shape with a fresh wall id");
+    check(nearv(level.walls[0].a, v2(0, 0)) &&
+              nearv(level.walls[0].b, v2(20, 0)) &&
+              nearv(level.walls[1].a, v2(60, 0)) &&
+              nearv(level.walls[1].b, v2(100, 0)),
+          "the cut leaves the walls on either side of the removed section");
+    check(dropped == 0, "a cut with no doors drops no doors");
+
+    /* The two parameters are an interval, not a direction. */
+    level_init(&level);
+    index = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    check(level_cut_wall_span(&level, index, 0.6f, 0.2f, &dropped) &&
+              level.wall_count == 2 && nearv(level.walls[0].b, v2(20, 0)) &&
+              nearv(level.walls[1].a, v2(60, 0)),
+          "a reversed pair of parameters cuts the same section");
+
+    /* Cutting a middle section of a closed outline keeps the shape record
+       closed and adds one wall to it. */
+    level_init(&level);
+    int rect_walls[4];
+    ShapeId rect = add_rectangle(&level, v2(0, 0), 100, 100, rect_walls);
+    check(level_close_shape(&level, rect), "close the rectangle before a cut");
+    check(level_cut_wall_span(&level, rect_walls[0], 0.2f, 0.6f, &dropped),
+          "cut the middle out of a closed rectangle's top wall");
+    const Shape* record = level_shape_by_id_const(&level, rect);
+    int top_pieces = 0;
+    for (int i = 0; i < level.wall_count; i++) {
+        const Wall* w = &level.walls[i];
+        if (w->shape == rect && nearf(w->a.y, 0) && nearf(w->b.y, 0)) top_pieces++;
+    }
+    check(level.wall_count == 5 && level.shape_count == 1 && record &&
+              record->closed && top_pieces == 2,
+          "a middle cut splits one wall in two and leaves the shape closed");
+
+    /* A cut from the start removes the wall and leaves only the far piece. */
+    level_init(&level);
+    index = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    id = level.walls[0].id;
+    check(level_cut_wall_span(&level, index, 0.0f, 0.4f, &dropped),
+          "cut a wall from its start");
+    check(level.wall_count == 1 && level.walls[0].id != id &&
+              nearv(level.walls[0].a, v2(40, 0)) &&
+              nearv(level.walls[0].b, v2(100, 0)),
+          "a cut from the start leaves only the remaining wall");
+
+    /* A cut to the end keeps the old wall for the near piece. */
+    level_init(&level);
+    index = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    id = level.walls[0].id;
+    check(level_cut_wall_span(&level, index, 0.6f, 1.0f, &dropped),
+          "cut a wall to its end");
+    check(level.wall_count == 1 && level.walls[0].id == id &&
+              nearv(level.walls[0].a, v2(0, 0)) &&
+              nearv(level.walls[0].b, v2(60, 0)),
+          "a cut to the end leaves one wall that keeps the old id");
+
+    /* Removing every wall removes the shape with it. */
+    level_init(&level);
+    index = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    check(level_cut_wall_span(&level, index, 0.0f, 1.0f, &dropped) &&
+              level.wall_count == 0 && level.shape_count == 0,
+          "a cut of the whole wall removes the empty shape");
+
+    /* Parameters outside 0..1 are clamped to the wall. */
+    level_init(&level);
+    index = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    check(level_cut_wall_span(&level, index, -0.5f, 1.5f, &dropped) &&
+              level.wall_count == 0 && level.shape_count == 0,
+          "parameters outside 0..1 clamp to the whole wall");
+
+    /* Doors sort by centre: inside goes, before stays on the shortened wall,
+       after moves to the new wall, and both keep their world centre. */
+    level_init(&level);
+    index = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    WallId host = level.walls[0].id;
+    check(level_add_door(&level, host, 0.1f, 10) == 0 &&
+              level_add_door(&level, host, 0.35f, 10) == 1 &&
+              level_add_door(&level, host, 0.8f, 10) == 2,
+          "place a door before, inside, and after the span");
+    dropped = -1;
+    check(level_cut_wall_span(&level, index, 0.2f, 0.6f, &dropped) &&
+              level.door_count == 2 && dropped == 1,
+          "a door inside the span goes and is counted");
+    check(level.doors[0].wall == host &&
+              nearv(level_door_center(&level, &level.doors[0]), v2(10, 0)),
+          "a door before the span keeps its wall and world centre");
+    check(level.doors[1].wall != host &&
+              level.doors[1].wall == level.walls[1].id &&
+              nearv(level_door_center(&level, &level.doors[1]), v2(80, 0)),
+          "a door beyond the span moves to the new wall and keeps its centre");
+
+    /* Rejections leave the level byte for byte untouched. */
+    level_init(&level);
+    level_add_wall(&level, v2(0, 0), v2(100, 0));
+    level_add_door(&level, level.walls[0].id, 0.5f, 10);
+    Level snapshot = level;
+    dropped = 7;
+    check(!level_cut_wall_span(&level, 0, 0.5f, 0.5f, &dropped) &&
+              memcmp(&level, &snapshot, sizeof level) == 0 && dropped == 0,
+          "a zero length span is rejected and changes nothing");
+    check(!level_cut_wall_span(&level, 4, 0.1f, 0.2f, &dropped) &&
+              memcmp(&level, &snapshot, sizeof level) == 0,
+          "a wall index out of range is rejected and changes nothing");
+    check(!level_cut_wall_span(&level, 0, 0.1f, 0.1004f, &dropped) &&
+              memcmp(&level, &snapshot, sizeof level) == 0,
+          "a span shorter than 1e-3 is rejected and changes nothing");
+    check(!level_cut_wall_span(&level, 0, NAN, 0.5f, &dropped) &&
+              memcmp(&level, &snapshot, sizeof level) == 0,
+          "a non-finite parameter is rejected and changes nothing");
+}
+
 int main(void) {
     test_geometry();
     test_polygon();
@@ -1465,6 +1591,7 @@ int main(void) {
     test_slide_edges_multi();
     test_move_walls();
     test_shape_at();
+    test_cut_wall_span();
     test_delete_edge_reopens_shape();
     test_save_load_shapes();
 
