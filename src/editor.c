@@ -1834,8 +1834,14 @@ static void update_drag(Editor* e, bool have_pointer) {
                 }
             }
             if (!down) {
-                if (g->moved) commit(e, "Reshaped");
-                else collapse_click(e);
+                if (g->moved) {
+                    commit(e, "Reshaped");
+                    if (merge_overlapping_shapes(e) > 0) {
+                        set_status(e, false, "Overlapping rectangles joined");
+                    }
+                } else {
+                    collapse_click(e);
+                }
                 cancel_gesture(e);
             }
             break;
