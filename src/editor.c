@@ -1171,6 +1171,38 @@ static void draw_doors(const Editor* e) {
     }
 }
 
+/* The wall under the pointer and the centre parameter a door would take.
+   Snap runs along the wall only, so the ghost stays on the wall line. */
+static bool door_hover(const Editor* e, Vec2 world, int* out_wall, float* out_t) {
+    float t = 0.0f;
+    int wall = level_nearest_wall(&e->level, world,
+                                  DOOR_HOVER_PX / e->camera.zoom, &t);
+    if (wall < 0) return false;
+    if (e->snap) t = snap_wall_t(&e->level.walls[wall], t, e->grid_size);
+    if (out_wall) *out_wall = wall;
+    if (out_t) *out_t = t;
+    return true;
+}
+
+/* A white ghost at the current door width, centred on the projected point
+   and clamped to the wall so it matches the door a click will place. */
+static void draw_door_ghost(const Editor* e) {
+    int wall = -1;
+    float t = 0.0f;
+    if (!door_hover(e, e->cursor_world, &wall, &t)) return;
+    const Wall* w = &e->level.walls[wall];
+    float len = wall_length(w);
+    if (len <= 0.0001f) return;
+    float width = fminf(e->door_width, len);
+    width = fmaxf(width, fminf(DOOR_MIN_WIDTH, len));
+    float half = width / (2.0f * len);
+    float centre = clampf(t, half, 1.0f - half);
+    Vec2 a = segment_point(w->a, w->b, centre - half);
+    Vec2 b = segment_point(w->a, w->b, centre + half);
+    draw_door_bar(igGetWindowDrawList(), e, w, a, b,
+                  col32a(DOOR_WHITE_COL, 120), 0.0f);
+}
+
 static void draw_labels(const Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     for (int i = 0; i < e->level.label_count; i++) {
@@ -2348,10 +2380,9 @@ static void line_press(Editor* e, Vec2 world, ImVec2 mouse) {
 /* The wall under the pointer answers. A click places a white door centred on
    the projected point. No marquee and no menu. */
 static void begin_door_click(Editor* e, Vec2 world) {
+    int wall = -1;
     float t = 0.0f;
-    int wall = level_nearest_wall(&e->level, world,
-                                  DOOR_HOVER_PX / e->camera.zoom, &t);
-    if (wall < 0) {
+    if (!door_hover(e, world, &wall, &t)) {
         set_status(e, false, "Hover a wall to place a door");
         return;
     }
@@ -2466,6 +2497,9 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_stairs(e);
     draw_walls(e);
     draw_doors(e);
+    if (e->tool == TOOL_DOOR && e->cursor_valid && !gesture_active(e)) {
+        draw_door_ghost(e);
+    }
     draw_labels(e);
 
     if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
