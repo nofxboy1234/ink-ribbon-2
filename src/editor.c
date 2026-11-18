@@ -1751,6 +1751,38 @@ static void begin_stairs_resize(Editor* e, int idx, int edge, Vec2 world) {
     set_status(e, false, "Drag the stair edge to resize");
 }
 
+/* A shift drag that stays close to one wall marks a section of it. The press
+   often lands a few pixels off the line, so the wall is chosen from the drag
+   itself rather than only from the press point. Returns true when a section was
+   marked. */
+static bool span_from_marquee(Editor* e, const Gesture* g) {
+    Vec2 a = g->press_world;
+    Vec2 b = g->cur_world;
+    float tol = (HIT_TOL_PX + 6.0f) / e->camera.zoom;
+    float mid_x = (a.x + b.x) * 0.5f;
+    float mid_y = (a.y + b.y) * 0.5f;
+    float t_mid = 0.0f;
+    int wall = level_nearest_wall(&e->level, v2(mid_x, mid_y), tol, &t_mid);
+    if (wall < 0) return false;
+    const Wall* w = &e->level.walls[wall];
+    float t0 = point_segment_t(a, w->a, w->b);
+    float t1 = point_segment_t(b, w->a, w->b);
+    if (e->snap) t1 = snap_wall_t(w, t1, e->grid_size);
+    if (t0 > t1) { float tmp = t0; t0 = t1; t1 = tmp; }
+    float length = wall_length(w) * (t1 - t0);
+    if (length < 1e-3f) return false;
+    if (e->snap && length < e->grid_size) {
+        set_status(e, true, "Span shorter than one grid cell");
+        return false;
+    }
+    e->span_wall = w->id;
+    e->span_t0 = t0;
+    e->span_t1 = t1;
+    e->span_active = true;
+    set_status(e, false, "Section of %.0f units marked, press Delete", length);
+    return true;
+}
+
 static void marquee_select(Editor* e, Rect rect, bool additive) {
     if (!additive) sel_clear(e);
     for (int i = 0; i < e->level.door_count; i++) {
@@ -1826,6 +1858,20 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             if (down) break;
             if (g->moved) {
+                /* A thin shift drag is a section of a wall, not a marquee. The
+                   press only has to be near the line, because a drag started a
+                   few pixels off it would otherwise select whole walls. */
+                bool thin = false;
+                if (g->additive) {
+                    ImVec2 ps = v2_to_im(g->press_screen);
+                    float dx = fabsf(io->MousePos.x - ps.x);
+                    float dy = fabsf(io->MousePos.y - ps.y);
+                    thin = (dx < 12.0f || dy < 12.0f);
+                }
+                if (thin && span_from_marquee(e, g)) {
+                    cancel_gesture(e);
+                    break;
+                }
                 marquee_select(e, rect_from_points(g->press_world, g->cur_world),
                                g->additive);
             } else {
@@ -2324,6 +2370,8 @@ static void draw_shape_preview(const Editor* e) {
 /* Shift+drag marks a section of the wall under the press. The start is the
    projected parameter; the drag moves the other end along the same wall, and
    Snap locks that coordinate to the grid. */
+#define SPAN_GRAB_PX 14.0f
+
 static void begin_span(Editor* e, int wall_index, float t, Vec2 world,
                        ImVec2 mouse) {
     Gesture* g = &e->gesture;
@@ -2352,9 +2400,12 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
        wall stays the additive marquee. Any other press clears the old span
        first and then runs the normal selection path. */
     if (shift && !ctrl) {
+        /* The press has to be near the line, not exactly on it, because a
+           hand-placed press a few pixels off would otherwise start a marquee
+           and select whole walls. */
         float t = 0.0f;
         int wall = level_nearest_wall(&e->level, world,
-                                      HIT_TOL_PX / e->camera.zoom, &t);
+                                      SPAN_GRAB_PX / e->camera.zoom, &t);
         if (wall >= 0) {
             begin_span(e, wall, t, world, mouse);
             return;
