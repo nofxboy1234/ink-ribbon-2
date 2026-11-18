@@ -9,16 +9,18 @@ One sokol window titled `Ink Ribbon Level Editor`, 1280 by 800 initial size, nea
 The frame builds a full-viewport ImGui layout:
 
 - A main menu bar at the top: File, Edit, View, Help.
-- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the tool buttons, then Grid, Snap, and Show grid, then only the options the active tool uses.
+- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the six tool buttons, the Q lock row, then Grid, Snap, and Show grid, then only the active tool's settings.
 - A right inspector panel, 300 px wide, same vertical span.
-- A canvas filling the middle. Canvas rect is stored in the editor so the mouse can be converted between screen and world.
+- A canvas filling the middle. The canvas rect is stored in the editor so the mouse can be converted between screen and world.
 - A one-line status strip overlaid at the bottom of the canvas. It shows the active tool hint, cursor world coordinates, zoom, the current snap size or `snap off`, and the latest action or error.
 
 Panels use `ImGuiWindowFlags_NoTitleBar | NoResize | NoMove | NoCollapse | NoScrollbar`. Positions and sizes come from `igGetIO()->DisplaySize` and the menu bar height each frame.
 
 ## Visual language
 
-Match the reference. Near-black canvas `#0b0c0e`. Grid lines at the selected Grid size, subtle at `#333b45` with low alpha, a brighter line every 4 cells and the brightest every 16. The grid gets coarser only when the fine lines would be closer than 4 screen pixels. Walls `#8b9097`, 2 screen pixels wide. Fill blue `#2b3f50`, fill red `#4a2028`, both opaque. A closed wall shape can also use None, which draws no fill. Fills are ear-clipped into triangles, so a shape fills its own outline and never its bounding rectangle. Doors white `#f2f2f2`, red `#b3323b`, blue `#3d7fb5`. Labels `#e6e6e6`. Stairs `#767d85` treads on a slightly lighter footprint fill. Selection accent `#5aa0c8` with a 2 px outline or handles.
+One look. Near-black canvas `#040404`. Grid lines at the selected Grid size, subtle at `#333b45` with low alpha, a brighter line every 4 cells and the brightest every 16. The grid gets coarser only when the fine lines would be closer than 4 screen pixels.
+
+Walls `#8b9097`, 2 screen pixels wide, at alpha 70 everywhere. There is no bright wall state, no fill, and no room colour. Doors are always white `#f2f2f2`. Labels are `#e6e6e6`. Stair treads are `#c8ccd2` with a fade that starts at one end of the run and no footprint fill. Selection uses accent `#5aa0c8` with a 2 px outline or handles. Nothing in the editor paints a filled polygon.
 
 Dark ImGui theme: window background `#101114`, panel `#16181c`, frame `#1d2025`, borders `#2a2e34`, text `#d9dadd`, accent `#4e7f9e`. Rounded corners 3 px. Sentence-case headings.
 
@@ -26,7 +28,7 @@ The embedded scalable ImGui default font at 15 px is fine. Do not depend on syst
 
 ## Canvas transform and navigation
 
-Camera stores a world-space center and a zoom in screen pixels per world unit. World y grows down. `screen_to_world` and `world_to_screen` are the only transforms.
+The camera stores a world-space center and a zoom in screen pixels per world unit. World y grows down. `screen_to_world` and `world_to_screen` are the only transforms.
 
 ImGui clears the pointer position to `-FLT_MAX` when the window loses focus. Never feed that value into `screen_to_world` or into a preview. Check `mouse_available` first, draw no preview without a pointer, and release any drag at its last applied position.
 
@@ -35,46 +37,77 @@ ImGui clears the pointer position to `-FLT_MAX` when the window loses focus. Nev
 - `F` or View > Fit frames the level bounds with margin. If the level is empty, center 0,0 at zoom 1.
 - On startup, load `levels/re2-library.lvl` if it exists, then fit.
 
-## Tools and gestures
+## Tools, keys, and auto-select
 
-Tools: Select, Line, Label, Room. Number keys 1, 2, 3, 4. Line is the default. Switching tools ends any open chain without committing it.
+Exactly six tools, in this order and on these keys:
 
-### Line
+1. Select
+2. Line
+3. Rectangle
+4. Door
+5. Stairs
+6. Label
+
+Select is the default. The tool is the only owner of which gesture a press starts, so there is no second mode flag.
+
+After one drawing action the editor switches to Select unless Q is held when the action completes. A drawing action is one completed rectangle drag, one closed line chain, one placed door, one placed stair, or one placed label. An open line chain does not switch. The switch keeps the action's status message. A small `Q lock: tool stays` row in the left panel lights while Q is held. The row is always present so the panel does not jump. Typing Q into a label field is not a lock.
+
+Switching tools ends any open chain without committing it. A drag that was live restores the last committed snapshot.
+
+## Line
 
 Click sets points. Each click appends an orthogonal segment that continues from the last click.
 
 - The first click starts a chain at the grid-snapped point.
 - Each later click uses `snap_ortho(chain_last, cursor_world, grid)` so a segment is horizontal when `|dx| > |dy|`, vertical otherwise, and the free coordinate snaps to the grid.
 - The first click creates a shape with `level_add_shape`. Every later click calls `level_add_wall_to_shape`.
-- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, call `level_close_shape`, then `level_set_shape_fill` with the current Fill palette choice. End the chain. A close needs at least four walls; report that when it fails.
+- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, call `level_close_shape`, end the chain, and hand the tool back to Select. A close needs at least four walls; report that when it fails.
 - `Enter` also closes the chain when it has at least three points. `Esc` ends it open, keeping only the walls already added.
 - `Backspace` removes the last wall added in the current chain and moves the chain tip back. That is a live document mutation; commit history after it.
-- A plain drag does nothing. `Shift` plus drag starts a marquee and clips every crossed wall to the dragged box.
-- Show a preview segment from the last point to the constrained cursor, the first-point marker with a "close" highlight when near, and small vertex dots.
+- A plain drag does nothing. There is no Shift marquee.
+- Show a preview segment from the last point to the constrained cursor, the first-point marker with a `close` highlight when near, and small vertex dots.
 - Chain points are bounded by the wall pool and the shape pool; a failed add reports why in the status strip.
 
-### Line context menu
+## Rectangle
 
-Right-click in Line mode opens a menu built from the last marquee or the click:
+Drag an axis-aligned rectangle. Both corners snap to the current grid on press and release whether or not Snap is on, because a rectangle is a grid cell and its outline is what later rectangles join. A drag under one grid cell on either axis is rejected and does not complete an action.
 
-- Door appears when the marquee clipped at least one wall. White, Red, and Blue add a door to each covered wall span. A span already contained in a longer span is skipped, so a painted fill border drawn over the same line does not add a second door.
-- Mode appears inside a closed shape when the marquee selected no wall. Blue, Red, Floor Blue, Floor Red, Hole, and Empty set the shape fill and become the current palette choice. Fills are ear-clipped to the shape's own loop.
-- Stairs appears when the marquee box is at least one grid cell wide and tall, even when it touches a wall. The drag's dominant axis picks the direction, the run is divided by `STAIR_STEP_DEPTH`, and the lower edge is the bottom of the run.
-- Clear selection empties the marquee and the object selection.
+On release the rectangle tries to join a closed shape. Candidate shapes are examined from newest to oldest, and only shapes whose bounds overlap the rectangle are tried. `level_union_rect` returns:
 
-### Room
+- `LEVEL_UNION_OK` when the rectangle shares an edge or an area with the shape. The shape's walls are replaced by the union loop, the shape id stays, and the action commits as `Rectangle joined`. Doors on walls that survive are re-hosted at the same world centre. Doors on walls that become interior are dropped and the count is reported.
+- `LEVEL_UNION_DISJOINT` when the rectangle only touches a corner or does not touch the shape. The editor tries the next shape, then creates a new closed four-wall shape with `level_add_rect_shape` and commits `Rectangle added`.
 
-Drag an axis-aligned rectangle on the grid. On release, `create_rect_room` adds a closed shape whose four walls are the rectangle and sets the current Fill palette choice. A rectangle needs at least one grid cell on each axis. The Fill palette paints Blue and Red in creation order, Floor Blue in an underlay pass, Floor Red in creation order, Hole in the canvas colour, and Empty as no fill with a faint outline.
+The union is the shape's own geometry, not a stored rectangle list. It survives save and load as ordinary walls.
 
-Alt+drag a closed shape starts `GESTURE_ROOM_COPY` with that shape's polygon; the release creates the same polygon translated by the drag delta. A copy keeps the source shape's fill. Right-click any closed shape and pick Mode to change it after creation.
+Alt+drag starts on a closed shape: `level_shape_rect_at` returns the largest rectangle of the shape's area that contains the press point. The drag previews that rectangle translated by the drag. On release the copy is unioned into the source shape at the offset. A copy that does not join becomes a new shape, and the status says so.
 
-### Label
+The rectangle preview and the stair preview draw an accent outline. The empty look never fills them.
 
-Click places a label at the snapped point with the left panel's label size, selects it, and focuses the inspector text field so typing immediately renames it. `Enter` commits the text. The inspector also edits size and position.
+## Door
 
-### Select
+The Door tool uses the wall under the pointer. The search radius is 22 screen pixels converted to world units. The projected point gives the centre parameter. With Snap on, the parameter snaps along the wall only, so the ghost stays on the wall line.
 
-Click hit-tests in this order: door, label, stairs, wall, room. Tolerance is 7 screen pixels for walls and doors. Labels use their measured text rect. Stairs use `level_stairs_rect`. Rooms use `level_room_at`.
+A ghost bar draws at the panel door width, centred on the snapped point and clamped so it stays on the wall. It shows the door a click will place. Click places a white door with `level_add_door`, selects it, and commits `Door added`. The tool then returns to Select unless Q is held. Clicking away from every wall reports `Hover a wall to place a door` and does not complete an action.
+
+There is no marquee door workflow and no door colour menu. The inspector slides the door along its wall and changes its width. Dragging either end with Select resizes it.
+
+## Stairs
+
+Drag a rectangle. Both corners snap with the same rule as the Rectangle tool. The release needs at least one grid cell on each axis, or `STAIR_MIN_SIZE` when Snap is off.
+
+The stair takes the panel's direction and step count and the panel's Flip flag. Flip sets which end of the run the tread fade starts from. The stair is selected, the action commits `Stairs added`, and the tool returns to Select unless Q is held.
+
+Treads draw as faint neutral lines, faint at the start of the fade and brighter at the far end. There is no footprint fill. Dragging a stair edge with Select resizes the footprint. The inspector changes direction, steps, and Flip for the selected stair, and each change commits.
+
+There is no marquee stairs workflow.
+
+## Label
+
+Click places a label at the snapped point with the left panel's label size, selects it, and focuses the inspector text field so typing immediately renames it. `Enter` commits the text. The inspector also edits size and position. The tool returns to Select unless Q is held, and the label stays selected.
+
+## Select
+
+Click hit-tests in this order: door, label, stairs, wall, closed shape interior. Tolerance is 7 screen pixels for walls and doors. Labels use their measured text rect. Stairs use `level_stairs_rect`.
 
 A wall hit selects that edge. Clicking inside a closed shape selects all of its edges. Dragging a selected wall starts a reshape: a horizontal wall slides in y, a vertical one in x, the drag snaps to the grid, and `level_slide_edges` carries every coincident endpoint so connected lines stretch and opposite lines stay. The gesture commits one snapshot on release and restores the previous snapshot on Esc.
 
@@ -83,40 +116,44 @@ Selection is a bounded set per object kind plus a primary reference. Walls are s
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out. Neither starts a drag.
 - Plain press on empty canvas clears the selection and starts a marquee. Shift-press starts an additive marquee. Travel under 4 screen pixels is a click.
-- On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap, rooms use polygon intersection. An empty marquee box of at least one grid cell is also offered to the Stairs menu.
-- Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes. This is the reshape mode.
-- Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, rooms, labels, and stairs by their own move calls, and doors follow their host wall. This is the move mode.
+- On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap.
+- Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes.
+- Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, labels and stairs by their own move calls, and doors follow their host wall.
 - A release without movement collapses a multi-selection to the pressed object.
-- Right-click opens the same context menu from the current selection or click. Selected walls feed Door, a closed shape under the click feeds Fill, and the last empty marquee feeds Stairs.
+- There is no right-click menu. Right-click does nothing.
 - `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.
-- `Esc` clears selection, cancels a draft, or restores a live drag.
+- `Esc` clears the selection, cancels a draft, or restores a live drag.
 
 ## Inspector
 
 Show properties for the selected object, all edits through `level.*` and committed once on `igIsItemDeactivatedAfterEdit`:
 
-- Wall: id, axis, length, endpoints, Delete, and an Add door button that places a door at the wall midpoint.
-- Room: color selector Blue/Red, vertex count, Delete.
-- Door: color White/Red/Blue, position slider over the host t range, width slider from `DOOR_MIN_WIDTH` to host length, Delete.
+- Wall: shape id, closed state, wall count, edge index, Delete.
+- Door: wall id, position slider over the host t range, width slider from `DOOR_MIN_WIDTH` to host length, Delete.
 - Label: single-line text input, size slider 8 to 48, position, Delete.
-- Stairs: direction Horizontal/Vertical, step count slider `STAIR_MIN_STEPS` to `STAIR_MAX_STEPS`, position, Delete.
+- Stairs: direction buttons, step count slider `STAIR_MIN_STEPS` to `STAIR_MAX_STEPS`, Flip checkbox, size, position, Delete.
 
 When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
 
 ## Tool options in the left panel
 
-Below the tool buttons:
+Below the six tool buttons and the Q lock row:
 
-- Grid size: combo 4, 8, 16, 32; default 8. A snap toggle, default on.
-- Line: None / Blue / Red fill swatches, applied when the chain closes.
-- Label: a size slider for new labels.
-- Select: hints for click, Shift, Ctrl, marquee, reshape, and the right-click menu.
+- Grid size: combo 4, 8, 16, 32; default 8. A Snap toggle, default on. A Show grid toggle, default on.
+- Select: no settings.
+- Line: a hint.
+- Rectangle: a hint that overlaps union, and that Alt+drag copies.
+- Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 32.
+- Stairs: direction buttons, a steps slider, a Flip checkbox, and a hint.
+- Label: a size slider from 8 to 48.
+
+There is no Fill palette.
 
 ## File menu and persistence
 
 - New: `level_init`, `history_reset`, clear selection, fit, path `levels/untitled.lvl`.
 - Open: modal with a path input plus a small clickable list of `levels/*.lvl`. On load success, history_reset, clear selection, fit. On failure, show the error in the status strip and keep the current level.
-- The save format is `ink-level 3`. Version 1 and 2 files still load; their stair records stored a centre and a derived size, which is converted to the explicit min-corner box.
+- The save format is `ink-level 3`. The shape record keeps its fill column but writes 0, and the door record keeps its colour column but writes 0. A loaded fill or door colour is ignored. Room records from version 1 to 3 are read and skipped. Stair records keep the optional trailing fade-end flag.
 - Save writes to the current path. Save As opens a path modal with the current path prefilled and lists `levels/*.lvl`. Report success or the error in the status strip.
 - `Ctrl+S` saves, `Ctrl+Shift+S` opens Save As, `Ctrl+O` opens the Open modal.
 - `Ctrl+Z` undo, `Ctrl+Shift+Z` or `Ctrl+Y` redo, disabled while a drag is active.
@@ -125,25 +162,24 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Undo
 
-`History` stores whole-level snapshots. The UI commits after each completed mutation: add wall, close chain, add room, add door, add label, add stairs, delete, and a finished drag or inspector edit. Do not commit every mouse move. Undo/redo records the five pool counts. If any count changed, the selection clears. If counts are equal, it prunes invalid references.
+`History` stores whole-level snapshots. The UI commits after each completed mutation: add wall, close chain, add or join a rectangle, place a door, add a label, add stairs, delete, and a finished drag or inspector edit. Do not commit every mouse move. Undo/redo records the five pool counts. If any count changed, the selection clears. If counts are equal, it prunes invalid references.
 
 ## Keyboard summary
 
-1 to 4 tools, `Delete` delete the selection, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Q` held to keep the drawing tool, `Delete` delete the selection, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 
-The UI owner must verify all of these on the real X11 window and report the commands and screenshots:
+The UI owner must verify these on the real X11 window and report the commands and screenshots:
 
 1. `make` builds with no warnings from `src/`.
-2. Launch with the demo level. Screenshot shows blue and red fills, white/red/blue doors, labels, and hatched stairs. Sample pixels to prove the fill colors exist.
-3. Draw a closed four-click rectangle with the Line tool. Screenshot shows the walls, and the right-click Mode submenu adds a fill. Verify with `level_stats` text or pixel sampling.
-4. Switch to Select, click inside the new shape, press Delete, screenshot or status confirms removal.
-5. Shift-drag a wall section, right-click Door, add a door. Drag it along the wall, resize it, change its color in the inspector.
-6. Add a label with the Label tool, type in the inspector, move it. Shift-drag an empty box, right-click Stairs, change step count and direction.
-7. Save to a temp path, New, Open the temp path, confirm the same object counts.
-8. Undo and redo at least one add and one delete.
-9. Shift-click two objects, drag them, confirm the group moves and snaps, then delete both in one step.
-10. Drag a marquee across the level, delete all, undo, and confirm the counts return.
+2. Load a legacy level with fills, a room polygon, and a coloured door. Screenshot shows faint walls, a white door, and a black interior. Save it and confirm fill 0, door colour 0, and no room record.
+3. Press 1 to 6 and confirm one tool button lights per key and key 7 changes nothing.
+4. Draw two overlapping rectangles. The saved level has one shape with exactly the boundary walls, no interior lines, and the union area.
+5. Reload that saved level and compare every wall record.
+6. Hover a wall with the Door tool and confirm the ghost. Click and confirm a white door at the panel width and projected point. Confirm the next click does not add a door.
+7. Hold Q while placing a door and confirm the tool stays for the next click.
+8. Drag a stair with Flip set and confirm the saved flag. Toggle Flip in the inspector and confirm the saved flag changes.
+9. Lose focus during a line draft and confirm the editor redraws afterwards.
 
-Screenshots go to `/tmp/ink-ribbon-verify-*.png`. Do not commit them.
+Screenshots go to `/tmp/ink-ribbon-six-*.png`. Do not commit them.

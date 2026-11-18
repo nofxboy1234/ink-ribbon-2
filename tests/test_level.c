@@ -240,7 +240,7 @@ static void test_delete_edge_reopens_shape(void) {
     check(record && !record->closed, "deleting an edge reopens the shape");
     check(level_shape_polygon(&level, shape, NULL, 0) < 0 ||
               level_shape_polygon(&level, shape, NULL, 0) == -1,
-          "an open shape has no fill polygon");
+          "an open shape has no polygon");
     check(level_shape_at(&level, v2(50, 50)) < 0,
           "an open shape is not a click target");
 

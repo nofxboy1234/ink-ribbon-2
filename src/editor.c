@@ -1999,7 +1999,7 @@ static void begin_rect_drag(Editor* e, Vec2 world, ImVec2 mouse) {
 }
 
 /* The newest closed shape that the rect overlaps or touches takes the union.
-   Older shapes are left alone, so the last room drawn is the one you extend. */
+   Older shapes are left alone, so the last shape drawn is the one you extend. */
 static int union_rect_into_shapes(Editor* e, Rect r, int* dropped) {
     Vec2 polygon[LEVEL_MAX_WALLS];
     for (int i = e->level.shape_count - 1; i >= 0; i--) {
