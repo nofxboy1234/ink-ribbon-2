@@ -230,9 +230,8 @@ void level_init(Level* level) {
 }
 
 bool level_is_empty(const Level* level) {
-    return level->wall_count == 0 && level->room_count == 0 &&
-           level->door_count == 0 && level->label_count == 0 &&
-           level->stairs_count == 0;
+    return level->wall_count == 0 && level->door_count == 0 &&
+           level->label_count == 0 && level->stairs_count == 0;
 }
 
 Rect level_bounds(const Level* level) {
@@ -242,10 +241,6 @@ Rect level_bounds(const Level* level) {
     for (int i = 0; i < level->wall_count; i++) {
         rect_grow(&r, &has, level->walls[i].a);
         rect_grow(&r, &has, level->walls[i].b);
-    }
-    for (int i = 0; i < level->room_count; i++) {
-        const Room* room = &level->rooms[i];
-        for (int j = 0; j < room->count; j++) rect_grow(&r, &has, room->pts[j]);
     }
     for (int i = 0; i < level->label_count; i++) {
         const Label* label = &level->labels[i];
@@ -278,8 +273,7 @@ ShapeId level_add_shape(Level* level) {
     if (level->shape_count >= LEVEL_MAX_SHAPES) return 0;
 
     ShapeId id = level->next_shape_id++;
-    level->shapes[level->shape_count++] =
-        (Shape){ id, false, SHAPE_FILL_NONE };
+    level->shapes[level->shape_count++] = (Shape){ id, false };
     return id;
 }
 
@@ -293,14 +287,6 @@ const Shape* level_shape_by_id_const(const Level* level, ShapeId id) {
     return index < 0 ? NULL : &level->shapes[index];
 }
 
-bool level_set_shape_fill(Level* level, ShapeId id, ShapeFill fill) {
-    if (fill < SHAPE_FILL_NONE || fill > SHAPE_FILL_EMPTY) return false;
-    Shape* shape = level_shape_by_id(level, id);
-    if (!shape) return false;
-    shape->fill = fill;
-    return true;
-}
-
 int level_add_wall_to_shape(Level* level, ShapeId shape, Vec2 a, Vec2 b) {
     if (!level_shape_by_id(level, shape)) return -1;
     return append_wall(level, shape, a, b);
@@ -312,6 +298,36 @@ bool level_close_shape(Level* level, ShapeId id) {
     if (shape_loop(level, id, NULL, 0) < 3) return false;
     shape->closed = true;
     return true;
+}
+
+ShapeId level_add_rect_shape(Level* level, Rect rect) {
+    if (!level) return 0;
+    if (!isfinite(rect.min.x) || !isfinite(rect.min.y) ||
+        !isfinite(rect.max.x) || !isfinite(rect.max.y)) {
+        return 0;
+    }
+    if (!(rect.max.x > rect.min.x) || !(rect.max.y > rect.min.y)) return 0;
+    if (level->wall_count + 4 > LEVEL_MAX_WALLS) return 0;
+
+    Vec2 pts[4] = {
+        rect.min,
+        v2(rect.max.x, rect.min.y),
+        rect.max,
+        v2(rect.min.x, rect.max.y),
+    };
+    ShapeId id = level_add_shape(level);
+    if (id == 0) return 0;
+    for (int i = 0; i < 4; i++) {
+        if (level_add_wall_to_shape(level, id, pts[i], pts[(i + 1) % 4]) < 0) {
+            level_delete_shape(level, id);
+            return 0;
+        }
+    }
+    if (!level_close_shape(level, id)) {
+        level_delete_shape(level, id);
+        return 0;
+    }
+    return id;
 }
 
 int level_shape_wall_indices(const Level* level, ShapeId id, int* out, int cap) {
@@ -446,48 +462,6 @@ int level_nearest_wall(const Level* level, Vec2 p, float max_dist, float* out_t)
     if (best < 0) return -1;
     if (out_t) *out_t = best_t;
     return best;
-}
-
-int level_add_room(Level* level, const Vec2* pts, int count, RoomColor color) {
-    if (!pts || count < 3 || count > LEVEL_MAX_ROOM_PTS) return -1;
-    if (color != ROOM_BLUE && color != ROOM_RED) return -1;
-    if (level->room_count >= LEVEL_MAX_ROOMS) return -1;
-
-    Room* room = &level->rooms[level->room_count];
-    memcpy(room->pts, pts, (size_t)count * sizeof(Vec2));
-    room->count = polygon_simplify(room->pts, count);
-    if (room->count < 3) return -1;
-    room->color = color;
-    return level->room_count++;
-}
-
-bool level_delete_room(Level* level, int room_index) {
-    if (room_index < 0 || room_index >= level->room_count) return false;
-    memmove(&level->rooms[room_index], &level->rooms[room_index + 1],
-            (size_t)(level->room_count - room_index - 1) * sizeof(Room));
-    level->room_count--;
-    return true;
-}
-
-int level_room_at(const Level* level, Vec2 p) {
-    for (int i = level->room_count - 1; i >= 0; i--) {
-        if (point_in_polygon(level->rooms[i].pts, level->rooms[i].count, p)) return i;
-    }
-    return -1;
-}
-
-bool level_set_room_color(Level* level, int room_index, RoomColor color) {
-    if (room_index < 0 || room_index >= level->room_count) return false;
-    if (color != ROOM_BLUE && color != ROOM_RED) return false;
-    level->rooms[room_index].color = color;
-    return true;
-}
-
-bool level_move_room(Level* level, int room_index, Vec2 delta) {
-    if (room_index < 0 || room_index >= level->room_count) return false;
-    Room* room = &level->rooms[room_index];
-    for (int i = 0; i < room->count; i++) room->pts[i] = v2_add(room->pts[i], delta);
-    return true;
 }
 
 /* Coincident endpoints form one vertex group so they move as a unit. */
@@ -633,12 +607,12 @@ bool level_move_walls(Level* level, const bool* selected, int count, Vec2 delta)
     return moved;
 }
 
-int level_add_door(Level* level, WallId wall, float t, float width, DoorColor color) {
+int level_add_door(Level* level, WallId wall, float t, float width) {
     if (level->door_count >= LEVEL_MAX_DOORS) return -1;
     if (!level_wall_by_id_const(level, wall)) return -1;
 
     int index = level->door_count++;
-    level->doors[index] = (Door){ wall, t, width, color };
+    level->doors[index] = (Door){ wall, t, width };
     level_set_door_span(level, index, t, width);
     return index;
 }
@@ -668,12 +642,6 @@ bool level_set_door_span(Level* level, int door_index, float t, float width) {
 
     float half = width / (2.0f * len);
     door->t = half >= 0.5f ? 0.5f : clampf(t, half, 1.0f - half);
-    return true;
-}
-
-bool level_set_door_color(Level* level, int door_index, DoorColor color) {
-    if (door_index < 0 || door_index >= level->door_count) return false;
-    level->doors[door_index].color = color;
     return true;
 }
 
@@ -824,26 +792,18 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
 
     for (int i = 0; ok && i < level->shape_count; i++) {
         const Shape* shape = &level->shapes[i];
-        ok = fprintf(f, "shape %" PRIu32 " %d %d\n", shape->id,
-                     shape->closed ? 1 : 0, (int)shape->fill) >= 0;
+        ok = fprintf(f, "shape %" PRIu32 " %d 0\n", shape->id,
+                     shape->closed ? 1 : 0) >= 0;
     }
     for (int i = 0; ok && i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
         ok = fprintf(f, "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f\n",
                      w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
     }
-    for (int i = 0; ok && i < level->room_count; i++) {
-        const Room* room = &level->rooms[i];
-        ok = fprintf(f, "room %d %d", (int)room->color, room->count) >= 0;
-        for (int j = 0; ok && j < room->count; j++) {
-            ok = fprintf(f, " %.3f %.3f", room->pts[j].x, room->pts[j].y) >= 0;
-        }
-        if (ok) ok = fputc('\n', f) != EOF;
-    }
     for (int i = 0; ok && i < level->door_count; i++) {
         const Door* d = &level->doors[i];
-        ok = fprintf(f, "door %d %" PRIu32 " %.3f %.3f\n",
-                     (int)d->color, d->wall, d->t, d->width) >= 0;
+        ok = fprintf(f, "door 0 %" PRIu32 " %.3f %.3f\n",
+                     d->wall, d->t, d->width) >= 0;
     }
     for (int i = 0; ok && i < level->label_count; i++) {
         const Label* label = &level->labels[i];
@@ -964,10 +924,9 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 ok = fail_line(err, line_no, "bad shape closed flag");
                 break;
             }
-            if (fill < 0 || fill > SHAPE_FILL_EMPTY) {
-                ok = fail_line(err, line_no, "bad shape fill");
-                break;
-            }
+            /* The fill column is a legacy paint choice. The empty look
+               ignores it, so an old level loads with its outlines intact. */
+            (void)fill;
             if (tmp.shape_count >= LEVEL_MAX_SHAPES) {
                 ok = fail_line(err, line_no, "too many shapes");
                 break;
@@ -977,8 +936,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 break;
             }
             shape_lines[tmp.shape_count] = line_no;
-            tmp.shapes[tmp.shape_count++] =
-                (Shape){ id, closed != 0, (ShapeFill)fill };
+            tmp.shapes[tmp.shape_count++] = (Shape){ id, closed != 0 };
         } else if (strcmp(tag, "wall") == 0) {
             uint32_t id, shape = 0;
             float x1, y1, x2, y2;
@@ -1020,40 +978,10 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             wall_lines[tmp.wall_count] = line_no;
             tmp.walls[tmp.wall_count++] = (Wall){ id, shape, a, b };
         } else if (strcmp(tag, "room") == 0) {
-            int color, count;
-            if (!read_int(&save, &color) || !read_int(&save, &count)) {
-                ok = fail_line(err, line_no, "malformed room record");
-                break;
-            }
-            if (color < 0 || color > 1) {
-                ok = fail_line(err, line_no, "bad room color");
-                break;
-            }
-            if (count < 3 || count > LEVEL_MAX_ROOM_PTS) {
-                ok = fail_line(err, line_no, "bad room point count");
-                break;
-            }
-            if (tmp.room_count >= LEVEL_MAX_ROOMS) {
-                ok = fail_line(err, line_no, "too many rooms");
-                break;
-            }
-            Room* room = &tmp.rooms[tmp.room_count];
-            room->color = (RoomColor)color;
-            room->count = count;
-            bool coords_ok = true;
-            for (int i = 0; i < count; i++) {
-                float x, y;
-                if (!read_float(&save, &x) || !read_float(&save, &y)) {
-                    coords_ok = false;
-                    break;
-                }
-                room->pts[i] = v2(x, y);
-            }
-            if (!coords_ok || next_token(&save)) {
-                ok = fail_line(err, line_no, "malformed room record");
-                break;
-            }
-            tmp.room_count++;
+            /* Standalone room polygons were painted areas with a colour.
+               They have no place in the empty look, so the record is read
+               and ignored. */
+            continue;
         } else if (strcmp(tag, "door") == 0) {
             int color;
             uint32_t wall;
@@ -1064,17 +992,13 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 ok = fail_line(err, line_no, "malformed door record");
                 break;
             }
-            if (color < 0 || color > 2) {
-                ok = fail_line(err, line_no, "bad door color");
-                break;
-            }
+            (void)color;
             if (tmp.door_count >= LEVEL_MAX_DOORS) {
                 ok = fail_line(err, line_no, "too many doors");
                 break;
             }
             door_lines[tmp.door_count] = line_no;
-            tmp.doors[tmp.door_count++] =
-                (Door){ wall, t, width, (DoorColor)color };
+            tmp.doors[tmp.door_count++] = (Door){ wall, t, width };
         } else if (strcmp(tag, "label") == 0) {
             float x, y, size;
             if (!read_float(&save, &x) || !read_float(&save, &y) ||

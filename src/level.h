@@ -9,8 +9,6 @@
 
 #define LEVEL_MAX_WALLS 512
 #define LEVEL_MAX_SHAPES 512
-#define LEVEL_MAX_ROOMS 64
-#define LEVEL_MAX_ROOM_PTS 64
 #define LEVEL_MAX_DOORS 256
 #define LEVEL_MAX_LABELS 128
 #define LEVEL_MAX_STAIRS 64
@@ -28,25 +26,12 @@ typedef uint32_t WallId;
 typedef uint32_t ShapeId;
 
 /* A shape is one drawn wall outline: a chain of orthogonal walls that share
-   endpoints. A single wall is a shape of one wall. Closing a shape makes it a
-   loop whose inside can be filled. */
-typedef enum {
-    SHAPE_FILL_NONE = 0,
-    SHAPE_FILL_BLUE = 1,
-    SHAPE_FILL_RED = 2,
-    /* Room fills. FLOOR fills paint before every other fill so a hole drawn
-       over them cuts to the canvas. HOLE paints CANVAS_BG. EMPTY draws no
-       fill, only the shape's faint outline. */
-    SHAPE_FILL_FLOOR_BLUE = 3,
-    SHAPE_FILL_FLOOR_RED = 4,
-    SHAPE_FILL_HOLE = 5,
-    SHAPE_FILL_EMPTY = 6,
-} ShapeFill;
-
+   endpoints. A rectangle is a shape of four walls. The outline is the only
+   geometry the level stores, so a rectangle union, a reshape, and a save/load
+   round trip all land on the same four walls. */
 typedef struct {
     ShapeId id;
     bool closed;
-    ShapeFill fill;
 } Shape;
 
 typedef struct {
@@ -55,28 +40,12 @@ typedef struct {
     Vec2 a, b;
 } Wall;
 
-typedef enum {
-    ROOM_BLUE = 0,
-    ROOM_RED = 1,
-} RoomColor;
-
-typedef struct {
-    Vec2 pts[LEVEL_MAX_ROOM_PTS];
-    int count;
-    RoomColor color;
-} Room;
-
-typedef enum {
-    DOOR_WHITE = 0,
-    DOOR_RED = 1,
-    DOOR_BLUE = 2,
-} DoorColor;
-
+/* Doors are white and live on a wall: t is the centre parameter along the
+   host and width is the world length of the bar. */
 typedef struct {
     WallId wall;
     float t;
     float width;
-    DoorColor color;
 } Door;
 
 typedef struct {
@@ -94,7 +63,7 @@ typedef enum {
    be dragged. pos is the min corner. width and length are the world extents.
    dir picks which axis carries the treads; steps divides that run. bottom says
    the bottom of the run sits at the min end of that axis; the treads fade out
-   toward it. */
+   toward it, and the panel's Flip setting toggles that end. */
 typedef struct {
     Vec2 pos;
     float width;
@@ -112,9 +81,6 @@ typedef struct {
     Shape shapes[LEVEL_MAX_SHAPES];
     int shape_count;
     ShapeId next_shape_id;
-
-    Room rooms[LEVEL_MAX_ROOMS];
-    int room_count;
 
     Door doors[LEVEL_MAX_DOORS];
     int door_count;
@@ -142,7 +108,6 @@ int level_add_wall(Level* level, Vec2 a, Vec2 b);
 ShapeId level_add_shape(Level* level);
 Shape* level_shape_by_id(Level* level, ShapeId id);
 const Shape* level_shape_by_id_const(const Level* level, ShapeId id);
-bool level_set_shape_fill(Level* level, ShapeId id, ShapeFill fill);
 /* Adds a wall to an existing shape. The wall must be orthogonal and non-zero.
    Returns the wall index, or -1. */
 int level_add_wall_to_shape(Level* level, ShapeId shape, Vec2 a, Vec2 b);
@@ -157,6 +122,9 @@ int level_shape_wall_indices(const Level* level, ShapeId id, int* out, int cap);
 /* Polygon of a closed shape's vertices in wall order. Returns the point count,
    or -1 when the shape is missing, open, or its walls do not connect. */
 int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap);
+/* A new closed shape whose four walls are rect, in loop order. Returns 0 when
+   the rectangle is degenerate or the level is full. */
+ShapeId level_add_rect_shape(Level* level, Rect rect);
 /* Reshape: slide one wall along its normal by delta, carrying the endpoints of
    every wall that shares them. Clamps delta so no neighbor would collapse or
    flip. Returns true and writes the applied delta when it moved. */
@@ -184,16 +152,9 @@ bool wall_is_vertical(const Wall* wall);
    parameter to out_t. -1 when nothing is close enough. */
 int level_nearest_wall(const Level* level, Vec2 p, float max_dist, float* out_t);
 
-int level_add_room(Level* level, const Vec2* pts, int count, RoomColor color);
-bool level_delete_room(Level* level, int room_index);
-int level_room_at(const Level* level, Vec2 p);
-bool level_set_room_color(Level* level, int room_index, RoomColor color);
-bool level_move_room(Level* level, int room_index, Vec2 delta);
-
-int level_add_door(Level* level, WallId wall, float t, float width, DoorColor color);
+int level_add_door(Level* level, WallId wall, float t, float width);
 bool level_delete_door(Level* level, int door_index);
 bool level_set_door_span(Level* level, int door_index, float t, float width);
-bool level_set_door_color(Level* level, int door_index, DoorColor color);
 Vec2 level_door_center(const Level* level, const Door* door);
 void level_door_span(const Level* level, const Door* door, Vec2* out_a, Vec2* out_b);
 
