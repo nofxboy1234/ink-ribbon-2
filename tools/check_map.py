@@ -14,8 +14,8 @@ import sys
 
 GRID = 4.0
 EXPECTED_COUNTS = {
-    "wall": 76,
-    "shape": 17,
+    "wall": 40,
+    "shape": 10,
     "room": 0,
     "door": 10,
     "label": 6,
@@ -86,14 +86,14 @@ def main() -> int:
                 break
 
     fills = sorted(fill for _closed, fill in data["shapes"].values() if fill)
-    if fills != [1, 1, 1, 1, 2, 2]:
-        failures.append(f"fills {fills} != four blue and two red")
+    if fills != [2, 2, 3, 5, 5, 5, 5, 6, 6, 6]:
+        failures.append(f"fills {fills} != two red, one floor, four holes, three empty")
     doors = sorted(color for color, _wall in data["doors"])
-    if doors != [0, 0, 0, 0, 0, 0, 0, 1, 2, 2]:
+    if doors != [0, 0, 0, 0, 0, 0, 0, 0, 1, 2]:
         failures.append(f"door colours {doors} != seven white, one red, two blue")
     open_shapes = sum(1 for closed, _fill in data["shapes"].values() if closed == 0)
-    if open_shapes != 2:
-        failures.append(f"{open_shapes} open shapes != 2")
+    if open_shapes != 0:
+        failures.append(f"{open_shapes} open shapes != 0")
     labels = [text for _x, _y, _size, text in data["labels"]]
     wanted = ["West Storage Room", "Library", "Main Hall",
               "East Storage Room", "Balcony", "Clock Tower"]

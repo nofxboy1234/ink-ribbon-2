@@ -3562,7 +3562,7 @@ Editor* editor_create(const char* startup_path) {
     e->show_grid = true;
     /* Floor Blue is the base of the reference map; the palette changes it. */
     e->shape_fill = SHAPE_FILL_FLOOR_BLUE;
-    e->label_size = 19.0f;
+    e->label_size = 10.0f;
     e->fit_pending = true;
     e->modal = MODAL_NONE;
     e->request_modal = MODAL_NONE;

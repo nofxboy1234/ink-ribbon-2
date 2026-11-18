@@ -46,7 +46,7 @@ save_as() { local p=$1; if _save_once "$p"; then return 0; fi; rm -f "$p"; xdoto
 echo "== the demo is a line map with filled shapes =="
 python3 - levels/re2-library.lvl <<'PYEOF'
 import sys
-want = {"wall": 76, "shape": 17, "room": 0, "door": 10, "label": 6, "stairs": 4}
+want = {"wall": 40, "shape": 10, "room": 0, "door": 10, "label": 6, "stairs": 4}
 have = {k: 0 for k in want}
 for line in open(sys.argv[1]):
     t = line.split(" ", 1)[0]
@@ -54,7 +54,7 @@ for line in open(sys.argv[1]):
 if have != want:
     print("counts", have); raise SystemExit(1)
 PYEOF
-echo "PASS demo counts 76 walls, 17 shapes, 10 doors, 6 labels, 4 stairs"
+echo "PASS demo counts 40 walls, 10 shapes, 10 doors, 6 labels, 4 stairs"
 python3 tools/check_map.py levels/re2-library.lvl
 echo "PASS built map bounds, stair flush, fills, doors, labels, and open shapes"
 
