@@ -87,8 +87,6 @@ typedef enum {
     GESTURE_NONE = 0,
     GESTURE_CHAIN,
     GESTURE_MARQUEE,
-    /* Shift+drag in Select marks a section of one wall to cut. */
-    GESTURE_SPAN,
     GESTURE_MOVE,
     GESTURE_RESHAPE,
     GESTURE_DOOR_SLIDE,
@@ -234,7 +232,7 @@ static const char* TOOL_NAMES[TOOL_COUNT] = {
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click an object to select it, drag empty canvas to marquee, drag a wall edge to reshape, Shift+drag a wall to cut a section",
+    "click an object to select it, drag a box to mark wall sections, drag a wall edge to reshape",
     "click to add a wall; click the first point or press Enter to close the chain",
     "drag a rectangle; overlapping rectangles union into one outline",
     "hover a wall and click to place a door; drag its ends with Select to resize",
@@ -372,7 +370,6 @@ static bool gesture_is_drag(const Editor* e) {
            e->gesture.kind == GESTURE_RECT_DRAW ||
            e->gesture.kind == GESTURE_STAIRS_DRAW ||
            e->gesture.kind == GESTURE_LINE_PENDING ||
-           e->gesture.kind == GESTURE_SPAN ||
            e->gesture.kind == GESTURE_MARQUEE;
 }
 
@@ -728,8 +725,7 @@ static bool selection_walls_whole_shape(const Editor* e) {
 
 static void switch_tool(Editor* e, Tool tool) {
     if (e->tool == tool) return;
-    if (gesture_is_drag(e) && e->gesture.kind != GESTURE_MARQUEE &&
-        e->gesture.kind != GESTURE_SPAN) {
+    if (gesture_is_drag(e) && e->gesture.kind != GESTURE_MARQUEE) {
         history_restore_current(&e->history, &e->level);
         sel_prune(e);
     }
@@ -847,38 +843,34 @@ static Hit hit_test(const Editor* e, Vec2 world) {
     return hit;
 }
 
-static void delete_selection(Editor* e) {
-    sel_prune(e);
-    if (sel_count(&e->selection) == 0) return;
+/* Removes the selected doors, labels, and stairs. Walls go only when asked,
+   because a marked section owns the wall otherwise. */
+static void delete_selected_objects(Editor* e, bool with_walls, int* doors,
+                                    int* objects) {
     Selection* s = &e->selection;
     bool wall_delete[LEVEL_MAX_WALLS] = { false };
-    for (int i = 0; i < e->level.wall_count; i++) {
-        if (s->walls[i]) wall_delete[i] = true;
+    if (with_walls) {
+        for (int i = 0; i < e->level.wall_count; i++) {
+            if (s->walls[i]) wall_delete[i] = true;
+        }
     }
-    int deleted = 0;
+    *doors = 0;
+    *objects = 0;
     for (int i = e->level.door_count - 1; i >= 0; i--) {
         int wall = level_find_wall_index(&e->level, e->level.doors[i].wall);
         bool hosted = wall >= 0 && wall_delete[wall];
-        if ((s->doors[i] || hosted) && level_delete_door(&e->level, i)) deleted++;
+        if ((s->doors[i] || hosted) && level_delete_door(&e->level, i)) {
+            (*doors)++;
+        }
     }
     for (int i = e->level.label_count - 1; i >= 0; i--) {
-        if (s->labels[i] && level_delete_label(&e->level, i)) deleted++;
+        if (s->labels[i] && level_delete_label(&e->level, i)) (*objects)++;
     }
     for (int i = e->level.stairs_count - 1; i >= 0; i--) {
-        if (s->stairs[i] && level_delete_stairs(&e->level, i)) deleted++;
+        if (s->stairs[i] && level_delete_stairs(&e->level, i)) (*objects)++;
     }
     for (int i = e->level.wall_count - 1; i >= 0; i--) {
-        if (wall_delete[i] && level_delete_wall(&e->level, i)) deleted++;
-    }
-    sel_clear(e);
-    cancel_gesture(e);
-    if (deleted > 0) {
-        char message[64];
-        snprintf(message, sizeof message, "Deleted %d object%s", deleted,
-                 deleted == 1 ? "" : "s");
-        commit(e, message);
-    } else {
-        set_status(e, true, "Could not delete the selection");
+        if (wall_delete[i] && level_delete_wall(&e->level, i)) (*objects)++;
     }
 }
 
@@ -932,35 +924,65 @@ static int cut_spans(Editor* e, int* dropped_doors, int* failed) {
     return cuts;
 }
 
-/* Sections own Delete while any are marked. The cut is one history step, and
-   the selection is dropped because the cut can remove or renumber walls. */
-static void cut_selected_spans(Editor* e) {
-    if (e->span_count == 0) return;
+/* Delete acts on both selections. It cuts every marked section in one history
+   step, then removes the selected doors, labels, and stairs. Whole selected
+   walls go only when no section is marked, because a section owns its wall. */
+static void delete_selection(Editor* e) {
+    sel_prune(e);
     span_prune(e);
+    bool have_objects = sel_count(&e->selection) > 0;
+    bool have_sections = e->span_count > 0;
+    if (!have_objects && !have_sections) return;
+
     int doors = 0;
+    int objects = 0;
+    if (have_objects) {
+        delete_selected_objects(e, !have_sections, &doors, &objects);
+    }
+
+    int cuts = 0;
     int failed = 0;
-    int cuts = cut_spans(e, &doors, &failed);
+    if (have_sections) {
+        int cut_doors = 0;
+        cuts = cut_spans(e, &cut_doors, &failed);
+        doors += cut_doors;
+    }
+
     span_clear(e);
     sel_clear(e);
     cancel_gesture(e);
-    if (cuts == 0) {
+
+    if (cuts == 0 && have_sections) {
         set_status(e, true, "Could not cut the marked sections");
         return;
     }
-    char message[128];
-    if (failed > 0) {
-        snprintf(message, sizeof message,
-                 "Cut %d section%s; %d could not be cut", cuts,
-                 cuts == 1 ? "" : "s", failed);
-    } else if (doors == 0) {
-        snprintf(message, sizeof message, "Cut %d section%s, no doors", cuts,
-                 cuts == 1 ? "" : "s");
-    } else {
+    char message[192];
+    if (cuts > 0) {
         snprintf(message, sizeof message,
                  "Cut %d section%s and removed %d door%s", cuts,
                  cuts == 1 ? "" : "s", doors, doors == 1 ? "" : "s");
+        size_t n = strlen(message);
+        if (objects > 0) {
+            snprintf(message + n, sizeof message - n,
+                     ", deleted %d object%s", objects,
+                     objects == 1 ? "" : "s");
+            n = strlen(message);
+        }
+        if (failed > 0) {
+            snprintf(message + n, sizeof message - n,
+                     "; %d could not be cut", failed);
+        }
+        commit(e, message);
+        return;
     }
-    commit(e, message);
+    if (doors + objects > 0) {
+        int deleted = doors + objects;
+        snprintf(message, sizeof message, "Deleted %d object%s", deleted,
+                 deleted == 1 ? "" : "s");
+        commit(e, message);
+        return;
+    }
+    set_status(e, true, "Could not delete the selection");
 }
 
 typedef struct {
@@ -994,6 +1016,7 @@ static void do_undo(Editor* e) {
     cancel_gesture(e);
     history_undo(&e->history, &e->level);
     sel_after_history(e, before);
+    span_clear(e);
     e->label_buf_ready = false;
     set_status(e, false, "Undo");
 }
@@ -1005,6 +1028,7 @@ static void do_redo(Editor* e) {
     cancel_gesture(e);
     history_redo(&e->history, &e->level);
     sel_after_history(e, before);
+    span_clear(e);
     e->label_buf_ready = false;
     set_status(e, false, "Redo");
 }
@@ -1013,6 +1037,7 @@ static void new_level(Editor* e) {
     level_init(&e->level);
     history_reset(&e->history, &e->level);
     sel_clear(e);
+    span_clear(e);
     cancel_gesture(e);
     snprintf(e->current_path, sizeof e->current_path, "%s", "levels/untitled.lvl");
     e->fit_pending = true;
@@ -1043,6 +1068,7 @@ static bool open_level(Editor* e, const char* path) {
     }
     history_reset(&e->history, &e->level);
     sel_clear(e);
+    span_clear(e);
     cancel_gesture(e);
     snprintf(e->current_path, sizeof e->current_path, "%s", path);
     e->fit_pending = true;
@@ -1848,37 +1874,58 @@ static void begin_stairs_resize(Editor* e, int idx, int edge, Vec2 world) {
     set_status(e, false, "Drag the stair edge to resize");
 }
 
-/* A shift drag that stays close to one wall marks a section of it. The press
-   often lands a few pixels off the line, so the wall is chosen from the drag
-   itself rather than only from the press point. Returns true when a section was
-   marked. */
-static bool span_from_marquee(Editor* e, const Gesture* g) {
-    Vec2 a = g->press_world;
-    Vec2 b = g->cur_world;
-    float tol = (HIT_TOL_PX + 6.0f) / e->camera.zoom;
-    float mid_x = (a.x + b.x) * 0.5f;
-    float mid_y = (a.y + b.y) * 0.5f;
-    float t_mid = 0.0f;
-    int wall = level_nearest_wall(&e->level, v2(mid_x, mid_y), tol, &t_mid);
-    if (wall < 0) return false;
-    const Wall* w = &e->level.walls[wall];
-    float t0 = point_segment_t(a, w->a, w->b);
-    float t1 = point_segment_t(b, w->a, w->b);
-    if (e->snap) t1 = snap_wall_t(w, t1, e->grid_size);
-    if (t0 > t1) { float tmp = t0; t0 = t1; t1 = tmp; }
-    float length = wall_length(w) * (t1 - t0);
-    if (length < 1e-3f) return false;
-    if (e->snap && length < e->grid_size) {
-        set_status(e, true, "Span shorter than one grid cell");
-        return false;
+/* The part of a wall the box crosses, in wall parameters. The box must pass
+   over the wall line, not only touch it, so a snapped box edge that lands on a
+   wall does not mark the whole line. */
+static bool wall_section_in_rect(const Wall* wall, Rect box, float* out_t0,
+                                 float* out_t1) {
+    float len = wall_length(wall);
+    if (len <= 1e-3f) return false;
+    float lo, hi;
+    if (wall_is_vertical(wall)) {
+        float x = wall->a.x;
+        if (!(box.min.x < x - 1e-3f && x + 1e-3f < box.max.x)) return false;
+        lo = fmaxf(fminf(wall->a.y, wall->b.y), box.min.y);
+        hi = fminf(fmaxf(wall->a.y, wall->b.y), box.max.y);
+        if (hi - lo < 1e-3f) return false;
+        *out_t0 = point_segment_t(v2(x, lo), wall->a, wall->b);
+        *out_t1 = point_segment_t(v2(x, hi), wall->a, wall->b);
+    } else {
+        float y = wall->a.y;
+        if (!(box.min.y < y - 1e-3f && y + 1e-3f < box.max.y)) return false;
+        lo = fmaxf(fminf(wall->a.x, wall->b.x), box.min.x);
+        hi = fminf(fmaxf(wall->a.x, wall->b.x), box.max.x);
+        if (hi - lo < 1e-3f) return false;
+        *out_t0 = point_segment_t(v2(lo, y), wall->a, wall->b);
+        *out_t1 = point_segment_t(v2(hi, y), wall->a, wall->b);
     }
-    span_clear(e);
-    span_add(e, w->id, t0, t1);
-    if (e->span_count == 0) return false;
-    set_status(e, false, "Section of %.0f units marked, press Delete", length);
-    return true;
+    if (*out_t0 > *out_t1) {
+        float swap = *out_t0;
+        *out_t0 = *out_t1;
+        *out_t1 = swap;
+    }
+    /* A stub shorter than the level's minimum wall would make the cut fail, so
+       a section that nearly reaches an end takes the whole end. */
+    if (*out_t0 * len < 1e-3f) *out_t0 = 0.0f;
+    if ((1.0f - *out_t1) * len < 1e-3f) *out_t1 = 1.0f;
+    return (*out_t1 - *out_t0) * len >= 1e-3f;
 }
 
+/* Marks every wall the box crosses. The box corners are already snapped when
+   Snap is on, and nothing else is snapped, so each section is exactly the part
+   of the wall inside the box. */
+static void collect_sections(Editor* e, Rect box, bool additive) {
+    if (!additive) span_clear(e);
+    for (int i = 0; i < e->level.wall_count; i++) {
+        float t0, t1;
+        if (!wall_section_in_rect(&e->level.walls[i], box, &t0, &t1)) continue;
+        span_add(e, e->level.walls[i].id, t0, t1);
+    }
+}
+
+/* A marquee selects whole non-wall objects inside the box and marks the
+   crossed part of every wall. Walls are never selected whole by a box, because
+   Delete acts on the marked sections instead. */
 static void marquee_select(Editor* e, Rect rect, bool additive) {
     if (!additive) sel_clear(e);
     for (int i = 0; i < e->level.door_count; i++) {
@@ -1898,18 +1945,22 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
             sel_add(e, SEL_STAIRS, i);
         }
     }
-    for (int i = 0; i < e->level.wall_count; i++) {
-        if (!segment_intersects_rect(e->level.walls[i].a, e->level.walls[i].b,
-                                     rect)) {
-            continue;
-        }
-        sel_add(e, SEL_WALL, i);
-    }
     if (!sel_has(&e->selection, e->selection.primary.kind, e->selection.primary.index)) {
         sel_promote(e);
     }
-    int n = sel_count(&e->selection);
-    set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
+    collect_sections(e, rect, additive);
+    int objects = sel_count(&e->selection);
+    if (e->span_count > 0 && objects > 0) {
+        set_status(e, false, "%d section%s and %d object%s selected",
+                   e->span_count, e->span_count == 1 ? "" : "s", objects,
+                   objects == 1 ? "" : "s");
+    } else if (e->span_count > 0) {
+        set_status(e, false, "%d section%s marked, press Delete", e->span_count,
+                   e->span_count == 1 ? "" : "s");
+    } else {
+        set_status(e, false, "%d object%s selected", objects,
+                   objects == 1 ? "" : "s");
+    }
 }
 
 /* ---- Line tool ------------------------------------------------------- */
@@ -1948,94 +1999,18 @@ static void update_drag(Editor* e, bool have_pointer) {
                 cancel_gesture(e);
                 break;
             }
-            g->cur_world = world;
+            g->cur_world = snapped(e, world);
             if (screen_dist(io->MousePos, v2_to_im(g->press_screen)) >= 4.0f) {
                 g->moved = true;
             }
             if (down) break;
             if (g->moved) {
-                /* A thin shift drag is a section of a wall, not a marquee. The
-                   press only has to be near the line, because a drag started a
-                   few pixels off it would otherwise select whole walls. */
-                bool thin = false;
-                if (g->additive) {
-                    ImVec2 ps = v2_to_im(g->press_screen);
-                    float dx = fabsf(io->MousePos.x - ps.x);
-                    float dy = fabsf(io->MousePos.y - ps.y);
-                    thin = (dx < 12.0f || dy < 12.0f);
-                }
-                if (thin && span_from_marquee(e, g)) {
-                    cancel_gesture(e);
-                    break;
-                }
                 marquee_select(e, rect_from_points(g->press_world, g->cur_world),
                                g->additive);
             } else {
                 int n = sel_count(&e->selection);
                 if (n == 0) set_status(e, false, "Selection cleared");
                 else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
-            }
-            cancel_gesture(e);
-            break;
-        }
-        case GESTURE_SPAN: {
-            const Wall* wall =
-                e->span_count == 1
-                    ? level_wall_by_id_const(&e->level, e->spans[0].wall)
-                    : NULL;
-            if (!wall) {
-                span_clear(e);
-                cancel_gesture(e);
-                break;
-            }
-            if (down) {
-                if (have_pointer &&
-                    screen_dist(io->MousePos, v2_to_im(g->press_screen)) >= 4.0f) {
-                    g->moved = true;
-                }
-                float t = point_segment_t(world, wall->a, wall->b);
-                if (e->snap) t = snap_wall_t(wall, t, e->grid_size);
-                e->spans[0].t1 = t;
-                break;
-            }
-            if (!g->moved) {
-                /* A shift press that stayed put is the shift-click selection
-                   it has always been, at the object under the press. */
-                Hit hit = hit_test(e, g->press_world);
-                Target target;
-                target_from_hit(e, hit, &target);
-                span_clear(e);
-                if (target.kind != SEL_NONE &&
-                    !(target.kind == SEL_WALL && target.wall_count <= 0)) {
-                    target_add(e, &target);
-                    if (target.index >= 0) {
-                        sel_set_primary(e, target.kind, target.index);
-                    }
-                    int n = sel_count(&e->selection);
-                    set_status(e, false, "%d object%s selected", n,
-                               n == 1 ? "" : "s");
-                }
-                cancel_gesture(e);
-                break;
-            }
-            float t0 = e->spans[0].t0;
-            float t1 = e->spans[0].t1;
-            if (t0 > t1) {
-                float swap = t0;
-                t0 = t1;
-                t1 = swap;
-            }
-            float length = wall_length(wall) * (t1 - t0);
-            WallId id = wall->id;
-            span_clear(e);
-            if (length < 1e-3f) {
-                set_status(e, true, "Span too short to cut");
-            } else if (e->snap && length < e->grid_size) {
-                set_status(e, true, "Span shorter than one grid cell");
-            } else {
-                span_add(e, id, t0, t1);
-                set_status(e, false, "Section of %.0f units marked, press Delete",
-                           length);
             }
             cancel_gesture(e);
             break;
@@ -2464,50 +2439,14 @@ static void draw_shape_preview(const Editor* e) {
     ImDrawList_AddRectEx(dl, a, b, col32(ACCENT_COL), 0.0f, 1.0f, 0);
 }
 
-/* Shift+drag marks a section of the wall under the press. The start is the
-   projected parameter; the drag moves the other end along the same wall, and
-   Snap locks that coordinate to the grid. */
-#define SPAN_GRAB_PX 14.0f
-
-static void begin_span(Editor* e, int wall_index, float t, Vec2 world,
-                       ImVec2 mouse) {
-    Gesture* g = &e->gesture;
-    span_clear(e);
-    cancel_gesture(e);
-    g->kind = GESTURE_SPAN;
-    g->object_index = wall_index;
-    g->fixed_t = t;
-    g->press_world = world;
-    g->cur_world = world;
-    g->press_screen = v2(mouse.x, mouse.y);
-    g->moved = false;
-    e->spans[0] = (Span){ e->level.walls[wall_index].id, t, t };
-    e->span_count = 1;
-    set_status(e, false, "Drag along the wall to mark a section");
-}
-
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     ImGuiIO* io = igGetIO();
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
 
-    /* Shift+drag on a wall starts a span. A shift press that never travels
-       still adds the object under it to the selection, and a shift drag off a
-       wall stays the additive marquee. Any other press clears the old span
-       first and then runs the normal selection path. */
-    if (shift && !ctrl) {
-        /* The press has to be near the line, not exactly on it, because a
-           hand-placed press a few pixels off would otherwise start a marquee
-           and select whole walls. */
-        float t = 0.0f;
-        int wall = level_nearest_wall(&e->level, world,
-                                      SPAN_GRAB_PX / e->camera.zoom, &t);
-        if (wall >= 0) {
-            begin_span(e, wall, t, world, mouse);
-            return;
-        }
-    }
-    span_clear(e);
+    /* A plain press drops the marked sections. Shift and Ctrl presses keep
+       them, because those add to the selection instead of starting over. */
+    if (!shift && !ctrl) span_clear(e);
 
     Hit hit = hit_test(e, world);
     if (hit.kind == HIT_NONE) {
@@ -2527,8 +2466,8 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         if (!shift) sel_clear(e);
         Gesture* g = &e->gesture;
         g->kind = GESTURE_MARQUEE;
-        g->press_world = world;
-        g->cur_world = world;
+        g->press_world = snapped(e, world);
+        g->cur_world = g->press_world;
         g->press_screen = v2(mouse.x, mouse.y);
         g->additive = shift;
         g->moved = false;
@@ -2875,10 +2814,16 @@ static void draw_menu(Editor* e) {
             if (igMenuItemEx("Undo", "Ctrl+Z", false, undo_ok)) do_undo(e);
             if (igMenuItemEx("Redo", "Ctrl+Shift+Z", false, redo_ok)) do_redo(e);
             igSeparator();
-            if (igMenuItemEx("Delete", "Del", false, sel_count(&e->selection) > 0))
+            bool has_marks = e->span_count > 0;
+            if (igMenuItemEx("Delete", "Del", false,
+                             has_marks || sel_count(&e->selection) > 0)) {
                 delete_selection(e);
-            if (igMenuItemEx("Deselect", "Esc", false, sel_count(&e->selection) > 0))
+            }
+            if (igMenuItemEx("Deselect", "Esc", false,
+                             has_marks || sel_count(&e->selection) > 0)) {
                 sel_clear(e);
+                span_clear(e);
+            }
             igEndMenu();
         }
         if (igBeginMenu("View")) {
@@ -2991,7 +2936,7 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_SELECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Shift+drag along a wall to mark a section, then press Delete to cut it out.");
+            small_note("Drag a box across walls to mark their crossed sections, then press Delete to cut them out.");
             break;
         case TOOL_COUNT:
         default:
@@ -3183,7 +3128,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("1 Select, 2 Line, 3 Rectangle, 4 Door, 5 Stairs, 6 Label");
         igTextDisabled("F fit level, G toggle grid");
         igTextDisabled("Shift-click adds; Ctrl-click toggles");
-        igTextDisabled("Drag empty canvas to marquee");
+        igTextDisabled("Drag a box to mark wall sections for cutting");
         igTextDisabled("Drag selected edges to reshape them");
         igTextDisabled("Drag a stair edge to resize its footprint");
         igTextDisabled("Drag a group to move walls, doors, labels, or stairs");
@@ -3276,7 +3221,7 @@ static void draw_help_modal(Editor* e) {
     igBullet();
     igText("Shift-click adds to the selection; Ctrl-click toggles an object.");
     igBullet();
-    igText("Drag empty canvas to marquee a group.");
+    igText("Drag a box to select objects and mark wall sections.");
     igBullet();
     igText("Drag selected edges to reshape them.");
     igBullet();
@@ -3494,8 +3439,7 @@ static void handle_shortcuts(Editor* e) {
     if (igIsKeyPressedEx(ImGuiKey_H, false)) open_path_modal(e, MODAL_HELP);
     if (igIsKeyPressedEx(ImGuiKey_Delete, false)) {
         if (gesture_is_drag(e)) return;
-        if (e->span_count > 0) cut_selected_spans(e);
-        else delete_selection(e);
+        delete_selection(e);
     }
     if (igIsKeyPressedEx(ImGuiKey_Backspace, false)) {
         if (e->gesture.kind == GESTURE_CHAIN) {
