@@ -80,7 +80,7 @@ xdotool key --clearmodifiers Escape; sleep 0.3
 shot "$out-before.png"
 rclick 685 512
 pick 725 529
-pick 890 529
+pick 890 550
 xdotool key --clearmodifiers Escape; sleep 0.3
 shot "$out-filled.png"
 save_as /tmp/ink-ribbon-line-fill.lvl
@@ -90,19 +90,13 @@ shapes = [l.split() for l in open(sys.argv[1]) if l.startswith("shape ")]
 if len(shapes) != 1 or shapes[0][2] != "1" or shapes[0][3] != "2":
     print("wrong shape", shapes); raise SystemExit(1)
 PYEOF
-before=$(convert "$out-before.png" -format "%[hex:p{700,412}]" info:)
-after=$(convert "$out-filled.png" -format "%[hex:p{700,412}]" info:)
-if ! python3 - "$before" "$after" <<'PYEOF'
-import sys
-def lum(h):
-    h = h.strip("#")
-    return int(h[0:2], 16) + int(h[2:4], 16) + int(h[4:6], 16)
-if lum(sys.argv[2]) <= lum(sys.argv[1]):
-    print(f"bright wall pixels did not increase: {sys.argv[1]} -> {sys.argv[2]}")
-    raise SystemExit(1)
-PYEOF
-then echo "FAIL filled walls are not brighter"; exit 1; fi
-echo "PASS fill menu closed the shape red and its walls brightened ($before -> $after)"
+before=$(convert "$out-before.png" -format "%[hex:p{700,450}]" info:)
+after=$(convert "$out-filled.png" -format "%[hex:p{700,450}]" info:)
+if [ "$before" != "172832" ] || [ "$after" != "391010" ]; then
+    echo "FAIL fill mode did not paint the shape red: $before -> $after"
+    exit 1
+fi
+echo "PASS Mode menu closed the shape red and its fill changed ($before -> $after)"
 
 echo "== marquee a line section and add a white door =="
 xdotool keydown shift; drag 620 400 720 430; xdotool keyup shift
@@ -196,4 +190,4 @@ cleanup
 overflow=$(test_leftovers)
 [ -z "$overflow" ] || { echo "FAIL leftover:"; echo "$overflow"; exit 1; }
 echo "PASS no leftover processes"
-echo "ALL THREE-TOOL CHECKS PASSED"
+echo "ALL FOUR-TOOL CHECKS PASSED"

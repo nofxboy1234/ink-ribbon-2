@@ -1280,7 +1280,7 @@ static void test_save_load_shapes(void) {
 
     check(write_text_file(bad_path,
                           "ink-level 2\n"
-                          "shape 1 0 3\n"),
+                          "shape 1 0 7\n"),
           "write a bad-fill fixture");
     check(!level_load(&intact, bad_path, &err),
           "load rejects an out-of-range fill");

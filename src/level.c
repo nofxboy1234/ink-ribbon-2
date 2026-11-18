@@ -294,10 +294,7 @@ const Shape* level_shape_by_id_const(const Level* level, ShapeId id) {
 }
 
 bool level_set_shape_fill(Level* level, ShapeId id, ShapeFill fill) {
-    if (fill != SHAPE_FILL_NONE && fill != SHAPE_FILL_BLUE &&
-        fill != SHAPE_FILL_RED) {
-        return false;
-    }
+    if (fill < SHAPE_FILL_NONE || fill > SHAPE_FILL_EMPTY) return false;
     Shape* shape = level_shape_by_id(level, id);
     if (!shape) return false;
     shape->fill = fill;
@@ -967,7 +964,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 ok = fail_line(err, line_no, "bad shape closed flag");
                 break;
             }
-            if (fill < 0 || fill > 2) {
+            if (fill < 0 || fill > SHAPE_FILL_EMPTY) {
                 ok = fail_line(err, line_no, "bad shape fill");
                 break;
             }

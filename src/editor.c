@@ -21,15 +21,19 @@
 #define DOOR_TOL_PX 7.0f
 #define CLOSE_TOL_PX 12.0f
 #define DRAG_END_PX 8.0f
-#define CANVAS_BG 0x0b0c0e
+/* Measured on the reference screenshot: floor blue #172832, red #391010,
+   canvas black #040404. The wall colour stays as shipped. */
+#define CANVAS_BG 0x040404
 #define WALL_COL 0x8b9097
-#define ROOM_BLUE_COL 0x2b3f50
-#define ROOM_RED_COL 0x4a2028
+#define ROOM_BLUE_COL 0x172832
+#define ROOM_RED_COL 0x391010
 #define DOOR_WHITE_COL 0xf2f2f2
 #define DOOR_RED_COL 0xb3323b
 #define DOOR_BLUE_COL 0x3d7fb5
 #define LABEL_COL 0xe6e6e6
-#define STAIR_COL 0x767d85
+/* The reference stair treads read as a warm tan (#5b534f in the compressed
+   screenshot, dimmed by JPEG); this is that tan at the wall's brightness. */
+#define STAIR_COL 0x9a8770
 #define STAIR_FILL 0x1c2026
 #define ACCENT_COL 0x5aa0c8
 #define SELECT_COL 0x5aa0c8
@@ -43,15 +47,39 @@
 #define BORDER_COL 0x2a2e34
 #define ACCENT_UI 0x4e7f9e
 
-/* Three tools own the mouse. Select edits what is there, Line draws walls,
-   Label places text. The tool is the only owner of which gesture a press
-   starts, so there is no second mode flag to keep in sync. */
+/* Four tools own the mouse. Select edits what is there, Line draws walls,
+   Label places text, Room drags a rectangle. The tool is the only owner of
+   which gesture a press starts, so there is no second mode flag to keep in
+   sync. */
 typedef enum {
     TOOL_SELECT = 0,
     TOOL_LINE,
     TOOL_LABEL,
+    TOOL_ROOM,
     TOOL_COUNT,
 } Tool;
+
+/* The Fill palette. One table drives the left panel swatches, the context Mode
+   menu, and the fill a closing Line loop takes. Floor fills paint in pass 0
+   under every room; the rest paint in creation order. */
+typedef struct {
+    const char* id;
+    const char* label;
+    ShapeFill fill;
+    unsigned rgb;
+    bool crossed;
+} FillChoice;
+
+static const FillChoice FILL_CHOICES[] = {
+    { "##fillblue", "Blue", SHAPE_FILL_BLUE, ROOM_BLUE_COL, false },
+    { "##fillred", "Red", SHAPE_FILL_RED, ROOM_RED_COL, false },
+    { "##fillfloorblue", "Floor Blue", SHAPE_FILL_FLOOR_BLUE, ROOM_BLUE_COL, false },
+    { "##fillfloorred", "Floor Red", SHAPE_FILL_FLOOR_RED, ROOM_RED_COL, false },
+    { "##fillhole", "Hole", SHAPE_FILL_HOLE, CANVAS_BG, false },
+    { "##fillempty", "Empty", SHAPE_FILL_EMPTY, CANVAS_BG, true },
+};
+
+#define FILL_CHOICE_COUNT ((int)(sizeof FILL_CHOICES / sizeof FILL_CHOICES[0]))
 
 /* One clipped piece of a wall kept from the last marquee. Wall ids are stable
    across wall deletes, so a span survives an unrelated edit. */
@@ -96,6 +124,9 @@ typedef enum {
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
     GESTURE_STAIRS_RESIZE,
+    /* The Room tool drags a new rectangle, or Alt+drag copies one. */
+    GESTURE_ROOM_DRAW,
+    GESTURE_ROOM_COPY,
     /* A Line press waits for the release to tell a click from a plain drag. */
     GESTURE_LINE_PENDING,
 } GestureKind;
@@ -241,13 +272,14 @@ typedef struct {
 } Span;
 
 static const char* TOOL_NAMES[TOOL_COUNT] = {
-    "Select", "Line", "Label",
+    "Select", "Line", "Label", "Room",
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
     "click an object to select it, drag empty canvas to marquee, drag a wall to reshape",
-    "click-click draws, Shift+drag marquees, right-click for Fill, Door, and Stairs",
+    "click-click draws, Shift+drag marquees, right-click for Mode, Door, and Stairs",
     "click to place a label, then type its text",
+    "drag an axis-aligned rectangle; right-click a room for Mode",
 };
 
 static ImU32 col32(unsigned rgb) {
@@ -271,6 +303,16 @@ static ImU32 room_color(RoomColor c) {
     return col32(c == ROOM_RED ? ROOM_RED_COL : ROOM_BLUE_COL);
 }
 
+/* Only Floor Blue is an underlay. Floor Red paints in creation order so a red
+   room can sit on top of a hole, as the reference's West Storage Room does. */
+static bool shape_fill_is_floor(ShapeFill f) {
+    return f == SHAPE_FILL_FLOOR_BLUE;
+}
+
+static bool shape_fill_paints(ShapeFill f) {
+    return f != SHAPE_FILL_NONE && f != SHAPE_FILL_EMPTY;
+}
+
 static ImU32 door_color(DoorColor c) {
     switch (c) {
         case DOOR_RED: return col32(DOOR_RED_COL);
@@ -282,8 +324,12 @@ static ImU32 door_color(DoorColor c) {
 
 static ImU32 shape_fill_color(ShapeFill fill) {
     switch (fill) {
-        case SHAPE_FILL_BLUE: return col32(ROOM_BLUE_COL);
-        case SHAPE_FILL_RED: return col32(ROOM_RED_COL);
+        case SHAPE_FILL_BLUE:
+        case SHAPE_FILL_FLOOR_BLUE: return col32(ROOM_BLUE_COL);
+        case SHAPE_FILL_RED:
+        case SHAPE_FILL_FLOOR_RED: return col32(ROOM_RED_COL);
+        case SHAPE_FILL_HOLE: return col32(CANVAS_BG);
+        case SHAPE_FILL_EMPTY:
         case SHAPE_FILL_NONE:
         default: return 0;
     }
@@ -404,6 +450,8 @@ static bool gesture_is_drag(const Editor* e) {
            e->gesture.kind == GESTURE_DOOR_SLIDE ||
            e->gesture.kind == GESTURE_DOOR_RESIZE ||
            e->gesture.kind == GESTURE_STAIRS_RESIZE ||
+           e->gesture.kind == GESTURE_ROOM_DRAW ||
+           e->gesture.kind == GESTURE_ROOM_COPY ||
            e->gesture.kind == GESTURE_LINE_PENDING ||
            e->gesture.kind == GESTURE_MARQUEE;
 }
@@ -1139,13 +1187,28 @@ static void fill_world_polygon(const Editor* e, const Vec2* pts, int count,
 
 static void draw_shape_fills(const Editor* e) {
     Vec2 polygon[LEVEL_MAX_WALLS];
-    for (int i = 0; i < e->level.shape_count; i++) {
-        const Shape* shape = &e->level.shapes[i];
-        if (!shape->closed || shape->fill == SHAPE_FILL_NONE) continue;
-        int count = level_shape_polygon(&e->level, shape->id, polygon, LEVEL_MAX_WALLS);
-        if (count < 3) continue;
-        fill_world_polygon(e, polygon, count, shape_fill_color(shape->fill));
+    /* Pass 0 paints the floor, pass 1 paints rooms and holes in creation
+       order, so a hole sits on the floor and a red room can sit on a hole. */
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < e->level.shape_count; i++) {
+            const Shape* shape = &e->level.shapes[i];
+            if (!shape->closed || !shape_fill_paints(shape->fill)) continue;
+            if ((pass == 0) != shape_fill_is_floor(shape->fill)) continue;
+            int count = level_shape_polygon(&e->level, shape->id, polygon, LEVEL_MAX_WALLS);
+            if (count < 3) continue;
+            fill_world_polygon(e, polygon, count, shape_fill_color(shape->fill));
+        }
     }
+}
+
+static void draw_polygon_outline(const Editor* e, const Vec2* pts, int count,
+                                 ImU32 col, float thickness) {
+    if (count < 2) return;
+    ImVec2 screen[LEVEL_MAX_ROOM_PTS + 1];
+    if (count > LEVEL_MAX_ROOM_PTS) count = LEVEL_MAX_ROOM_PTS;
+    for (int i = 0; i < count; i++) screen[i] = world_to_screen(e, pts[i]);
+    screen[count] = screen[0];
+    ImDrawList_AddPolyline(igGetWindowDrawList(), screen, count + 1, col, thickness, 0);
 }
 
 static void draw_rooms(const Editor* e) {
@@ -1154,6 +1217,32 @@ static void draw_rooms(const Editor* e) {
         if (room->count < 3) continue;
         fill_world_polygon(e, room->pts, room->count, room_color(room->color));
     }
+}
+
+/* ---- Room tool shapes ------------------------------------------------ */
+
+static ShapeId create_shape_from_polygon(Editor* e, const Vec2* pts, int count,
+                                         ShapeFill fill) {
+    if (count < 3 || count > LEVEL_MAX_ROOM_PTS) return 0;
+    ShapeId id = level_add_shape(&e->level);
+    if (!id) return 0;
+    for (int i = 0; i < count; i++) {
+        if (level_add_wall_to_shape(&e->level, id, pts[i], pts[(i + 1) % count]) < 0) {
+            level_delete_shape(&e->level, id);
+            return 0;
+        }
+    }
+    if (!level_close_shape(&e->level, id)) {
+        level_delete_shape(&e->level, id);
+        return 0;
+    }
+    level_set_shape_fill(&e->level, id, fill);
+    return id;
+}
+
+static ShapeId create_rect_room(Editor* e, Vec2 a, Vec2 b, ShapeFill fill) {
+    Vec2 pts[4] = { v2(a.x, a.y), v2(b.x, a.y), v2(b.x, b.y), v2(a.x, b.y) };
+    return create_shape_from_polygon(e, pts, 4, fill);
 }
 
 static void draw_stairs(const Editor* e) {
@@ -1254,6 +1343,7 @@ static void draw_wall_segment(const Editor* e, ImDrawList* dl, const Wall* wall,
    draws them at full opacity. */
 static unsigned wall_alpha_for(const Editor* e, const Wall* w) {
     const Shape* shape = level_shape_by_id_const(&e->level, w->shape);
+    if (shape && shape->fill == SHAPE_FILL_EMPTY) return 70;
     if (shape && shape->closed && shape->fill != SHAPE_FILL_NONE) return 255;
     return 140;
 }
@@ -2181,6 +2271,105 @@ static void cancel_transient(Editor* e) {
     }
 }
 
+/* ---- Room tool -------------------------------------------------------- */
+
+static void begin_room_drag(Editor* e, Vec2 world, ImVec2 mouse) {
+    ImGuiIO* io = igGetIO();
+    Gesture* g = &e->gesture;
+    cancel_gesture(e);
+    g->kind = GESTURE_ROOM_DRAW;
+    g->press_world = snapped(e, world);
+    g->cur_world = g->press_world;
+    g->press_screen = v2(mouse.x, mouse.y);
+    if (io->KeyAlt) {
+        int idx = level_shape_at(&e->level, world);
+        if (idx >= 0 && e->level.shapes[idx].closed) {
+            Vec2 poly[LEVEL_MAX_WALLS];
+            int n = level_shape_polygon(&e->level, e->level.shapes[idx].id, poly,
+                                        LEVEL_MAX_WALLS);
+            if (n >= 3 && n <= LEVEL_MAX_ROOM_PTS) {
+                memcpy(g->pts, poly, (size_t)n * sizeof(Vec2));
+                g->point_count = n;
+                g->shape = e->level.shapes[idx].id;
+                g->kind = GESTURE_ROOM_COPY;
+                set_status(e, false, "Alt+drag: copy room");
+                return;
+            }
+        }
+    }
+    set_status(e, false, "Drag a rectangle room");
+}
+
+static void finish_room_drag(Editor* e, bool have_pointer) {
+    Gesture* g = &e->gesture;
+    if (g->kind != GESTURE_ROOM_DRAW && g->kind != GESTURE_ROOM_COPY) return;
+    if (have_pointer) {
+        g->cur_world = snapped(e, screen_to_world(e, igGetIO()->MousePos));
+    }
+    Vec2 a = snapped(e, g->press_world);
+    Vec2 b = snapped(e, g->cur_world);
+    float min_size = e->snap ? e->grid_size : 1.0f;
+    if (g->kind == GESTURE_ROOM_DRAW) {
+        if (fabsf(b.x - a.x) < min_size || fabsf(b.y - a.y) < min_size) {
+            set_status(e, true, "Rectangle needs two grid points");
+            cancel_gesture(e);
+            return;
+        }
+        Rect r = rect_from_points(a, b);
+        ShapeId id = create_rect_room(e, r.min, r.max, e->shape_fill);
+        if (id) commit(e, "Rectangle room added");
+        else set_status(e, true, "Could not add the room");
+    } else {
+        Shape* src = level_shape_by_id(&e->level, g->shape);
+        ShapeFill fill = src ? src->fill : e->shape_fill;
+        Vec2 delta = v2_sub(b, a);
+        if (fabsf(delta.x) < min_size && fabsf(delta.y) < min_size) {
+            set_status(e, true, "Drag to place the copy");
+            cancel_gesture(e);
+            return;
+        }
+        Vec2 moved[LEVEL_MAX_ROOM_PTS];
+        for (int i = 0; i < g->point_count; i++) {
+            moved[i] = v2_add(g->pts[i], delta);
+        }
+        ShapeId id = create_shape_from_polygon(e, moved, g->point_count, fill);
+        if (id) commit(e, "Room duplicated");
+        else set_status(e, true, "Could not duplicate the room");
+    }
+    cancel_gesture(e);
+}
+
+static void update_room_drag(Editor* e, bool have_pointer) {
+    Gesture* g = &e->gesture;
+    if (g->kind != GESTURE_ROOM_DRAW && g->kind != GESTURE_ROOM_COPY) return;
+    bool down = have_pointer && igGetIO()->MouseDown[0];
+    if (down) {
+        if (have_pointer) {
+            g->cur_world = snapped(e, screen_to_world(e, igGetIO()->MousePos));
+        }
+        return;
+    }
+    finish_room_drag(e, have_pointer);
+}
+
+static void draw_room_preview(const Editor* e) {
+    const Gesture* g = &e->gesture;
+    if (g->kind != GESTURE_ROOM_DRAW && g->kind != GESTURE_ROOM_COPY) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    if (g->kind == GESTURE_ROOM_DRAW) {
+        Rect r = rect_from_points(g->press_world, g->cur_world);
+        ImVec2 a = world_to_screen(e, r.min);
+        ImVec2 b = world_to_screen(e, r.max);
+        ImDrawList_AddRectFilledEx(dl, a, b, col32a(0x5aa0c8, 34), 0.0f, 0);
+        ImDrawList_AddRectEx(dl, a, b, col32(ACCENT_COL), 0.0f, 1.0f, 0);
+    } else {
+        Vec2 moved[LEVEL_MAX_ROOM_PTS];
+        Vec2 delta = v2_sub(g->cur_world, g->press_world);
+        for (int i = 0; i < g->point_count; i++) moved[i] = v2_add(g->pts[i], delta);
+        draw_polygon_outline(e, moved, g->point_count, col32(ACCENT_COL), 1.0f);
+    }
+}
+
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     ImGuiIO* io = igGetIO();
     bool shift = io->KeyShift;
@@ -2449,16 +2638,17 @@ static void open_context_menu(Editor* e, Vec2 world) {
     c->open = true;
 }
 
-static void context_set_fill(Editor* e, ShapeFill fill) {
+/* Applies a palette fill to the closed shape under the last right-click, and
+   makes it the current choice so the next shape starts the same way. */
+static void context_set_mode(Editor* e, ShapeFill fill) {
     Shape* shape = level_shape_by_id(&e->level, e->ctx.fill_shape);
     if (!shape) {
         set_status(e, true, "No closed shape under the click");
         return;
     }
     level_set_shape_fill(&e->level, shape->id, fill);
-    commit(e, fill == SHAPE_FILL_RED ? "Filled red"
-                                     : fill == SHAPE_FILL_BLUE ? "Filled blue"
-                                                               : "Fill cleared");
+    e->shape_fill = fill;
+    commit(e, "Room mode changed");
 }
 
 /* A thin door marquee can cross a short collinear wall that ends inside its
@@ -2547,18 +2737,12 @@ static void context_menu(Editor* e) {
         }
         igEndMenu();
     }
-    if (c->can_fill && igBeginMenu("Fill")) {
-        if (igMenuItemEx("Red", NULL, false, true)) {
-            context_set_fill(e, SHAPE_FILL_RED);
-            igCloseCurrentPopup();
-        }
-        if (igMenuItemEx("Blue", NULL, false, true)) {
-            context_set_fill(e, SHAPE_FILL_BLUE);
-            igCloseCurrentPopup();
-        }
-        if (igMenuItemEx("None", NULL, false, true)) {
-            context_set_fill(e, SHAPE_FILL_NONE);
-            igCloseCurrentPopup();
+    if (c->can_fill && igBeginMenu("Mode")) {
+        for (int i = 0; i < FILL_CHOICE_COUNT; i++) {
+            if (igMenuItemEx(FILL_CHOICES[i].label, NULL, false, true)) {
+                context_set_mode(e, FILL_CHOICES[i].fill);
+                igCloseCurrentPopup();
+            }
         }
         igEndMenu();
     }
@@ -2626,6 +2810,7 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     }
 
     update_drag(e, true);
+    update_room_drag(e, have_pointer);
 
     if (hovered && igIsMouseClicked(1)) {
         if (e->tool == TOOL_LABEL) cancel_transient(e);
@@ -2637,6 +2822,7 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
             case TOOL_SELECT: begin_select(e, world, io->MousePos); break;
             case TOOL_LINE: line_press(e, world, io->MousePos); break;
             case TOOL_LABEL: begin_label_click(e, world); break;
+            case TOOL_ROOM: begin_room_drag(e, world, io->MousePos); break;
             default: break;
         }
     }
@@ -2678,6 +2864,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_grid(e);
     draw_shape_fills(e);
     draw_rooms(e);
+    draw_room_preview(e);
     draw_stairs(e);
     draw_walls(e);
     draw_doors(e);
@@ -2753,26 +2940,22 @@ static void draw_menu(Editor* e) {
     }
 }
 
-/* The variant chip names the variant and its select gesture. */
-static void line_chip(Editor* e) {
-    float w = igGetContentRegionAvail().x;
-    float h = 62.0f;
-    ImVec2 p = igGetCursorScreenPos();
-    ImVec2 q = { p.x + w, p.y + h };
-    ImDrawList* dl = igGetWindowDrawList();
-    ImDrawList_AddRectFilledEx(dl, p, q, col32(0x1a2531), 4.0f, 0);
-    ImDrawList_AddRectEx(dl, p, q, col32a(ACCENT_COL, 200), 4.0f, 1.0f, 0);
-
-    const char* line1 = "Lines";
-    const char* line2 = "click-click draws";
-    const char* line3 = "Shift+drag marquees";
-    ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 14.0f, (ImVec2){ p.x + 9.0f, p.y + 7.0f },
-                                  col32(ACCENT_COL), line1, NULL, 0.0f, NULL);
-    ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 10.0f, (ImVec2){ p.x + 9.0f, p.y + 25.0f },
-                                  col32(TEXT_COL), line2, NULL, 0.0f, NULL);
-    ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 10.0f, (ImVec2){ p.x + 9.0f, p.y + 40.0f },
-                                  col32(MUTED_COL), line3, NULL, 0.0f, NULL);
-    igDummy((ImVec2){ w, h + 4.0f });
+/* One palette for the whole editor. The left panel sets the fill a new shape
+   or rectangle takes; the inspector sets the selected shape's fill. Both draw
+   the same table, so the choices cannot drift. Returns SHAPE_FILL_NONE when
+   nothing was clicked. */
+static ShapeFill fill_palette(ShapeFill current) {
+    float half = (igGetContentRegionAvail().x - 8.0f) * 0.5f;
+    ShapeFill chosen = SHAPE_FILL_NONE;
+    for (int i = 0; i < FILL_CHOICE_COUNT; i++) {
+        const FillChoice* choice = &FILL_CHOICES[i];
+        if (swatch_button(choice->id, choice->label, col32(choice->rgb),
+                          current == choice->fill, choice->crossed, half)) {
+            chosen = choice->fill;
+        }
+        if (i % 2 == 0) igSameLineEx(0.0f, 8.0f);
+    }
+    return chosen;
 }
 
 static void draw_left_panel(Editor* e) {
@@ -2790,12 +2973,6 @@ static void draw_left_panel(Editor* e) {
     for (int i = 0; i < TOOL_COUNT; i++) {
         if (tool_button(e, (Tool)i)) switch_tool(e, (Tool)i);
     }
-    if (e->tool == TOOL_LINE) {
-        igDummy((ImVec2){ 0.0f, 4.0f });
-        heading("Line");
-        line_chip(e);
-    }
-
     igDummy((ImVec2){ 0.0f, 4.0f });
     heading("Tool options");
 
@@ -2812,28 +2989,17 @@ static void draw_left_panel(Editor* e) {
     igSameLineEx(0.0f, 12.0f);
     igCheckbox("Show grid", &e->show_grid);
 
+    igDummy((ImVec2){ 0.0f, 4.0f });
+    heading("Fill");
+    ShapeFill chosen = fill_palette(e->shape_fill);
+    if (chosen != SHAPE_FILL_NONE) e->shape_fill = chosen;
+    small_note("Hole cuts to the canvas. Floor paints under the rooms.");
+
     switch (e->tool) {
-        case TOOL_LINE: {
+        case TOOL_LINE:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            igTextDisabled("Fill color");
-            float third = (igGetContentRegionAvail().x - 12.0f) / 3.0f;
-            if (swatch_button("##shapenone", "None", col32(CANVAS_BG),
-                              e->shape_fill == SHAPE_FILL_NONE, true, third)) {
-                e->shape_fill = SHAPE_FILL_NONE;
-            }
-            igSameLineEx(0.0f, 6.0f);
-            if (swatch_button("##shapeblue", "Blue", col32(ROOM_BLUE_COL),
-                              e->shape_fill == SHAPE_FILL_BLUE, false, third)) {
-                e->shape_fill = SHAPE_FILL_BLUE;
-            }
-            igSameLineEx(0.0f, 6.0f);
-            if (swatch_button("##shapered", "Red", col32(ROOM_RED_COL),
-                              e->shape_fill == SHAPE_FILL_RED, false, third)) {
-                e->shape_fill = SHAPE_FILL_RED;
-            }
-            small_note("A closed chain takes this fill. None leaves it empty.");
+            small_note("A closed chain takes the Fill choice.");
             break;
-        }
         case TOOL_LABEL: {
             igDummy((ImVec2){ 0.0f, 3.0f });
             igSetNextItemWidth(120.0f);
@@ -2846,7 +3012,12 @@ static void draw_left_panel(Editor* e) {
             small_note("Click an object to select it. Shift adds, Ctrl toggles.");
             small_note("Drag a wall edge to reshape it; drag a group to move it.");
             small_note("Drag empty canvas to marquee. Drag a stair edge to resize.");
-            small_note("Right-click for Fill, Door, or Stairs.");
+            small_note("Right-click for Mode, Door, or Stairs.");
+            break;
+        case TOOL_ROOM:
+            igDummy((ImVec2){ 0.0f, 3.0f });
+            small_note("Drag an axis-aligned rectangle to add a room.");
+            small_note("Alt+drag a room to duplicate it. Right-click one for Mode.");
             break;
         case TOOL_COUNT:
         default: break;
@@ -2887,23 +3058,11 @@ static void inspector_edge(Editor* e, int idx) {
     igText("Shape %u", (unsigned)shape->id);
     igText("%s", shape->closed ? "Closed" : "Open");
     igText("Walls %d", walls);
-    igTextDisabled("Fill color");
-    float third = (igGetContentRegionAvail().x - 12.0f) / 3.0f;
-    if (swatch_button("##shapenone", "None", col32(CANVAS_BG),
-                      shape->fill == SHAPE_FILL_NONE, true, third)) {
-        level_set_shape_fill(&e->level, shape->id, SHAPE_FILL_NONE);
-        commit(e, "Shape fill changed");
-    }
-    igSameLineEx(0.0f, 6.0f);
-    if (swatch_button("##shapeblue", "Blue", col32(ROOM_BLUE_COL),
-                      shape->fill == SHAPE_FILL_BLUE, false, third)) {
-        level_set_shape_fill(&e->level, shape->id, SHAPE_FILL_BLUE);
-        commit(e, "Shape fill changed");
-    }
-    igSameLineEx(0.0f, 6.0f);
-    if (swatch_button("##shapered", "Red", col32(ROOM_RED_COL),
-                      shape->fill == SHAPE_FILL_RED, false, third)) {
-        level_set_shape_fill(&e->level, shape->id, SHAPE_FILL_RED);
+    igTextDisabled("Fill");
+    ShapeFill chosen = fill_palette(shape->fill);
+    if (chosen != SHAPE_FILL_NONE) {
+        level_set_shape_fill(&e->level, shape->id, chosen);
+        e->shape_fill = chosen;
         commit(e, "Shape fill changed");
     }
     igText("Edge %d of %d", edge, walls);
@@ -2915,7 +3074,7 @@ static void inspector_room(Editor* e, int idx) {
     Room* room = &e->level.rooms[idx];
     heading("Room");
     igText("Room %d of %d", idx + 1, e->level.room_count);
-    igTextDisabled("Fill color");
+    igTextDisabled("Room color");
     bool red = room->color == ROOM_RED;
     float half = (igGetContentRegionAvail().x - 6.0f) * 0.5f;
     if (swatch_button("##roomblue", "Blue", col32(ROOM_BLUE_COL), !red, false, half)) {
@@ -3401,8 +3560,8 @@ Editor* editor_create(const char* startup_path) {
     e->grid_size = 8.0f;
     e->snap = true;
     e->show_grid = true;
-    /* A drawn shape starts unfilled; the context menu applies a fill. */
-    e->shape_fill = SHAPE_FILL_NONE;
+    /* Floor Blue is the base of the reference map; the palette changes it. */
+    e->shape_fill = SHAPE_FILL_FLOOR_BLUE;
     e->label_size = 19.0f;
     e->fit_pending = true;
     e->modal = MODAL_NONE;

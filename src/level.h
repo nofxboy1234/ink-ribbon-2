@@ -34,6 +34,13 @@ typedef enum {
     SHAPE_FILL_NONE = 0,
     SHAPE_FILL_BLUE = 1,
     SHAPE_FILL_RED = 2,
+    /* Room fills. FLOOR fills paint before every other fill so a hole drawn
+       over them cuts to the canvas. HOLE paints CANVAS_BG. EMPTY draws no
+       fill, only the shape's faint outline. */
+    SHAPE_FILL_FLOOR_BLUE = 3,
+    SHAPE_FILL_FLOOR_RED = 4,
+    SHAPE_FILL_HOLE = 5,
+    SHAPE_FILL_EMPTY = 6,
 } ShapeFill;
 
 typedef struct {
