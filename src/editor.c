@@ -194,6 +194,7 @@ struct Editor {
        uses them. */
     float door_width;
     float label_size;
+    bool tool_locked;
     StairsDir stair_dir;
     int stair_steps;
     bool stair_flip;
@@ -674,19 +675,25 @@ static void switch_tool(Editor* e, Tool tool) {
     set_status(e, false, "%s tool", TOOL_NAMES[tool]);
 }
 
-/* True while the user is holding Q, which keeps the active drawing tool after
-   an action instead of handing back to Select. Typing Q into a label field is
-   not a lock. */
-static bool q_lock_held(void) {
+/* Q toggles the lock that keeps the active drawing tool after an action
+   instead of handing back to Select. Typing Q into a label field is not a
+   lock. The toggle lives on the Editor so it survives between actions. */
+static bool q_lock_held(const Editor* e) {
+    return e->tool_locked;
+}
+
+static void q_lock_toggle(Editor* e) {
     ImGuiIO* io = igGetIO();
-    return !io->WantTextInput && igIsKeyDown(ImGuiKey_Q);
+    if (io->WantTextInput) return;
+    e->tool_locked = !e->tool_locked;
+    set_status(e, false, e->tool_locked ? "Tool locked" : "Tool lock off");
 }
 
 /* Called once a drawing action has committed and its gesture is cancelled. It
    assigns the tool directly, like a switch, but keeps the action's message in
    the status strip. */
 static void auto_select_after_action(Editor* e) {
-    if (q_lock_held()) return;
+    if (q_lock_held(e)) return;
     e->tool = TOOL_SELECT;
 }
 
@@ -745,8 +752,15 @@ static Hit hit_test(const Editor* e, Vec2 world) {
             return hit;
         }
     }
+    /* A small stair inside a big room loses to the room's interior hit unless
+       its box is grabbable from just outside, so the box is inflated by the
+       hit tolerance before the containment test. */
+    float stair_pad = tol;
     for (int i = e->level.stairs_count - 1; i >= 0; i--) {
-        if (rect_contains(level_stairs_rect(&e->level.stairs[i]), world)) {
+        Rect r = level_stairs_rect(&e->level.stairs[i]);
+        r.min.x -= stair_pad; r.min.y -= stair_pad;
+        r.max.x += stair_pad; r.max.y += stair_pad;
+        if (rect_contains(r, world)) {
             hit.kind = HIT_STAIRS;
             hit.index = i;
             return hit;
@@ -1998,8 +2012,9 @@ static void begin_rect_drag(Editor* e, Vec2 world, ImVec2 mouse) {
     set_status(e, false, "Drag a rectangle");
 }
 
-/* The newest closed shape that the rect overlaps or touches takes the union.
-   Older shapes are left alone, so the last shape drawn is the one you extend. */
+/* The newest closed shape whose area the rect overlaps takes the union. A rect
+   that only touches an edge keeps its own outline, so two rooms that share a
+   wall draw that wall once from each side instead of merging into one. */
 static int union_rect_into_shapes(Editor* e, Rect r, int* dropped) {
     Vec2 polygon[LEVEL_MAX_WALLS];
     for (int i = e->level.shape_count - 1; i >= 0; i--) {
@@ -2008,7 +2023,7 @@ static int union_rect_into_shapes(Editor* e, Rect r, int* dropped) {
         int count = level_shape_polygon(&e->level, shape->id, polygon,
                                         LEVEL_MAX_WALLS);
         if (count < 3) continue;
-        if (!rect_overlaps(polygon_bounds(polygon, count), r)) continue;
+        if (!rect_overlaps_area(r, polygon_bounds(polygon, count))) continue;
         if (level_union_rect(&e->level, shape->id, r, dropped) == LEVEL_UNION_OK) {
             return 1;
         }
@@ -2578,9 +2593,9 @@ static void draw_left_panel(Editor* e) {
 
     /* The Q lock row is always present so the panel does not jump while the
        key is held; it lights up when the drawing tool will stay active. */
-    bool locked = q_lock_held();
+    bool locked = q_lock_held(e);
     igPushStyleColorImVec4(ImGuiCol_Text, v4c(locked ? ACCENT_COL : MUTED_COL, 1.0f));
-    igTextUnformatted(locked ? "Q lock: tool stays" : "Hold Q to keep tool");
+    igTextUnformatted(locked ? "Q lock: on" : "Q lock: off");
     igPopStyleColorEx(1);
 
     igDummy((ImVec2){ 0.0f, 4.0f });
@@ -2606,7 +2621,7 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_RECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Drag a grid-aligned rectangle. It joins a shape it overlaps or touches, so the outline stays one closed loop.");
+            small_note("Drag a grid-aligned rectangle. Overlapping rectangles union; one that only touches keeps its own outline.");
             small_note("Alt+drag copies the rectangle under the cursor.");
             break;
         case TOOL_DOOR:
@@ -2912,7 +2927,7 @@ static void draw_help_modal(Editor* e) {
     igText("F fits the level, G toggles the grid.");
     igText("Editing");
     igBullet();
-    igText("Rectangle drags union overlapping rectangles into one outline.");
+    igText("Rectangle drags union overlapping rectangles. Touching rectangles keep a shared wall.");
     igBullet();
     igText("Door hovers a wall; click places a white door.");
     igBullet();
@@ -3023,6 +3038,75 @@ static void draw_modals(Editor* e) {
     }
 }
 
+/* Ctrl+D copies every selected object one grid cell down-right and selects the
+   copies, in one history step. */
+static void duplicate_selection(Editor* e) {
+    sel_prune(e);
+    Selection* sel = &e->selection;
+    if (sel_count(sel) == 0) {
+        set_status(e, true, "Nothing selected to duplicate");
+        return;
+    }
+    Vec2 off = v2(e->grid_size, e->grid_size);
+    int made = 0;
+
+    for (int i = e->level.stairs_count - 1; i >= 0; i--) {
+        if (!sel->stairs[i]) continue;
+        Rect r = level_stairs_rect(&e->level.stairs[i]);
+        Rect copy = { v2_add(r.min, off), v2_add(r.max, off) };
+        int idx = level_add_stairs(&e->level, copy, e->level.stairs[i].dir,
+                                   e->level.stairs[i].steps);
+        if (idx < 0) break;
+        e->level.stairs[idx].bottom = e->level.stairs[i].bottom;
+        sel_only(e, SEL_STAIRS, idx);
+        made++;
+    }
+    for (int i = e->level.label_count - 1; i >= 0; i--) {
+        if (!sel->labels[i]) continue;
+        const Label* src = &e->level.labels[i];
+        int idx = level_add_label(&e->level, v2_add(src->pos, off), src->text,
+                                  src->size);
+        if (idx < 0) break;
+        sel_add(e, SEL_LABEL, idx);
+        made++;
+    }
+    for (int i = e->level.shape_count - 1; i >= 0; i--) {
+        const Shape* shape = &e->level.shapes[i];
+        int count = level_shape_wall_indices(&e->level, shape->id, NULL, 0);
+        if (count <= 0) continue;
+        int indices[LEVEL_MAX_WALLS];
+        level_shape_wall_indices(&e->level, shape->id, indices, count);
+        bool hit = false;
+        for (int k = 0; k < count; k++) {
+            if (sel->walls[indices[k]]) { hit = true; break; }
+        }
+        if (!hit) continue;
+        ShapeId copy = level_add_shape(&e->level);
+        if (copy == 0) break;
+        for (int k = 0; k < count; k++) {
+            const Wall* w = &e->level.walls[indices[k]];
+            level_add_wall_to_shape(&e->level, copy, v2_add(w->a, off),
+                                    v2_add(w->b, off));
+        }
+        if (shape->closed) level_close_shape(&e->level, copy);
+        int copy_count = level_shape_wall_indices(&e->level, copy, NULL, 0);
+        int copy_idx[LEVEL_MAX_WALLS];
+        level_shape_wall_indices(&e->level, copy, copy_idx, copy_count);
+        for (int k = 0; k < copy_count; k++) sel_add(e, SEL_WALL, copy_idx[k]);
+        made++;
+    }
+    if (made == 0) {
+        set_status(e, true, "Nothing selected to duplicate");
+        return;
+    }
+    if (made == 1) commit(e, "Duplicated 1 object");
+    else {
+        char msg[64];
+        snprintf(msg, sizeof msg, "Duplicated %d objects", made);
+        commit(e, msg);
+    }
+}
+
 static void handle_shortcuts(Editor* e) {
     ImGuiIO* io = igGetIO();
     if (e->modal != MODAL_NONE) return;
@@ -3043,6 +3127,10 @@ static void handle_shortcuts(Editor* e) {
             if (shift) open_path_modal(e, MODAL_SAVE_AS);
             else if (e->current_path[0]) save_level_as(e, e->current_path);
             else open_path_modal(e, MODAL_SAVE_AS);
+            return;
+        }
+        if (igIsKeyPressedEx(ImGuiKey_D, false)) {
+            duplicate_selection(e);
             return;
         }
         if (igIsKeyPressedEx(ImGuiKey_O, false)) {
@@ -3087,10 +3175,17 @@ static void handle_shortcuts(Editor* e) {
             }
         }
     }
+    if (igIsKeyPressedEx(ImGuiKey_Q, false)) q_lock_toggle(e);
     if (igIsKeyPressedEx(ImGuiKey_Enter, false)) {
         if (e->gesture.kind == GESTURE_CHAIN) close_wall_chain(e, true);
     }
     if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
+        if (e->tool == TOOL_LINE && !gesture_is_drag(e)) {
+            cancel_transient(e);
+            e->tool = TOOL_SELECT;
+            set_status(e, false, "Select tool");
+            return;
+        }
         if (gesture_is_drag(e)) {
             cancel_transient(e);
         } else if (sel_count(&e->selection) > 0) {

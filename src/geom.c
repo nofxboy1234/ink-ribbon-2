@@ -73,6 +73,14 @@ bool rect_overlaps(Rect a, Rect b) {
            a.min.y <= b.max.y && b.min.y <= a.max.y;
 }
 
+bool rect_overlaps_area(Rect a, Rect b) {
+    float x0 = a.min.x > b.min.x ? a.min.x : b.min.x;
+    float y0 = a.min.y > b.min.y ? a.min.y : b.min.y;
+    float x1 = a.max.x < b.max.x ? a.max.x : b.max.x;
+    float y1 = a.max.y < b.max.y ? a.max.y : b.max.y;
+    return x1 > x0 && y1 > y0;
+}
+
 Rect rect_from_points(Vec2 a, Vec2 b) {
     return (Rect){
         { fminf(a.x, b.x), fminf(a.y, b.y) },

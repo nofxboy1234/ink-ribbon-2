@@ -31,6 +31,8 @@ Vec2 snap_grid(Vec2 p, float grid);
 
 bool rect_contains(Rect r, Vec2 p);
 bool rect_overlaps(Rect a, Rect b);
+/* Strict overlap: a shared edge or corner is not an overlap. */
+bool rect_overlaps_area(Rect a, Rect b);
 bool segment_intersects_rect(Vec2 a, Vec2 b, Rect r);
 Rect rect_from_points(Vec2 a, Vec2 b);
 
