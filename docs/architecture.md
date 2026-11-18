@@ -27,7 +27,10 @@ walls were added, so the loop polygon is a traversal, not a second geometry
 copy. The Rectangle tool adds its four walls in loop order and the union writes
 its loop in traversal order. There is no vertex pool: corners meet because the
 Line tool starts each segment at the previous endpoint, and a reshape carries
-every endpoint that coincides with the moved line. `level_add_wall` rejects a
+every endpoint that coincides with the moved line. A corner drag groups the
+coincident endpoints by coordinate in `level_move_vertex`, moves the grabbed
+group, and carries each vertex that must follow along its wall's axis so every
+wall stays orthogonal and the outline stays connected. `level_add_wall` rejects a
 zero-length or non-orthogonal segment, so every stored wall is drawable and
 every door host has a well-defined axis.
 
@@ -87,14 +90,18 @@ direction, steps, and fade end, and the fade end is saved.
 Selection is UI state in `editor.c`, not part of `Level`. It is four bounded
 per-kind sets plus a primary reference. Walls are selected as edges, and
 hitting a wall selects that edge; clicking inside a closed shape selects all of
-its edges. Shift-click adds, Ctrl-click toggles, a marquee replaces or adds, and
-Delete removes every selected object in one snapshot. A drag has two modes. When
+its edges. Shift-click adds, Ctrl-click toggles, a box replaces or adds, and
+Delete removes every selected object in one snapshot. A box skips whole walls
+and instead marks the crossed part of each wall as a canonical `Span` list, so
+Delete cuts every marked section through `level_cut_wall_span` in that same
+snapshot. A drag has two modes. When
 the selection is edges that are not exactly a whole shape, `GESTURE_RESHAPE`
 slides each selected edge along its own normal through `level_slide_edges`, so
 corners between two selected edges take both axes and unselected neighbours
 stretch. When the selection mixes kinds or is exactly a whole shape,
 `GESTURE_MOVE` translates the selected walls with `level_move_walls` and moves
-labels and stairs. A door stores a wall id and a normalized position, so it
+labels and stairs. `GESTURE_VERTEX` starts within 7 screen pixels of a wall
+endpoint and calls `level_move_vertex` on each drag step. A door stores a wall id and a normalized position, so it
 follows its host wall and cannot be translated independently.
 
 Snap applies to placement, reshaping, and label, stair, door, and group drags.

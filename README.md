@@ -47,8 +47,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
 - Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
-- Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step. Dragging a wall edge reshapes its shape, and dragging labels or stairs moves them together.
-- Shift-drag along a wall to mark a section, then press Delete to cut it out. The wall splits and the rest of the shape stays. A door inside the section goes with it.
+- Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
@@ -62,14 +61,15 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
 | Drag a wall edge | Reshape the shape by sliding that edge and stretching its neighbours |
+| Drag a wall corner | Resize the walls that meet at that corner |
 | Drag a stair edge | Resize the stair footprint on the grid |
-| Drag on empty canvas | Marquee select; Shift adds to the selection |
+| Drag on empty canvas | Marquee select and mark crossed wall sections; Shift adds to the selection |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
 | Enter | Close a line chain |
 | Esc | Clear the selection, cancel a draft, or cancel a drag |
 | Backspace | Remove the last wall in the current chain |
-| Delete | Delete every selected object |
+| Delete | Cut every marked wall section and delete the selected objects |
 | F | Fit the level |
 | G | Toggle the grid |
 | Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z | Undo, redo |
@@ -85,7 +85,7 @@ A shape stores only its wall loop and a closed flag. The Rectangle tool adds a r
 
 Labels store a position, a size, and a string. Stairs store a min-corner box, a direction, a step count, and which end of the run the fade starts from. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size. The stair flag is the optional last field of the stair record.
 
-Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a marquee replaces or adds to the set, and Delete removes every selected object with one undo step. Dragging a wall edge reshapes its shape. Selected labels and stairs move as a group when dragged. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
+Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a box replaces or adds to the set, and Delete removes every selected object with one undo step. A box also marks the crossed part of each wall it passes over as a section, and Delete cuts every marked section in the same step. Dragging a wall edge reshapes its shape, and dragging a wall corner moves that corner and every shared vertex that must follow. Selected labels and stairs move as a group when dragged. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
 
 Snap applies to line points, labels, stair boxes and edges, door centres, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 

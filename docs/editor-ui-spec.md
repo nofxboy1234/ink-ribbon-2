@@ -113,16 +113,17 @@ Selection is a bounded set per object kind plus a primary reference. Walls are s
 
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out.
-- Shift-drag on a wall marks a span to cut. A shift press that travels under 4 screen pixels is still a shift-click on the object under the press.
-- Plain press on empty canvas clears the selection and starts a marquee. Shift-press on empty canvas starts an additive marquee. Travel under 4 screen pixels is a click.
-- On marquee release, select every object intersecting the rectangle. Walls and doors use segment intersection, labels and stairs use rect overlap.
+- A plain press within 7 screen pixels of a wall endpoint starts a corner drag. The level moves the shared vertex and every vertex that must follow, so attached walls stay orthogonal and the outline stays connected. Snap puts the corner on the grid. Select draws hollow squares at wall endpoints as handles.
+- Plain press on empty canvas clears the selection and the marked sections, then starts a marquee. Shift-press on empty canvas starts an additive marquee. Travel under 4 screen pixels is a click.
+- On marquee release, select whole non-wall objects inside the rectangle. Doors use segment intersection, labels and stairs use rect overlap. Walls are never selected whole by a box. The crossed part of every wall is marked as a section instead, clipped in wall parameters to the snapped box.
 - Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes.
 - Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, labels and stairs by their own move calls, and doors follow their host wall.
 - A release without movement collapses a multi-selection to the pressed object.
 - There is no right-click menu. Right-click does nothing.
 - `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.
-- A span is a wall id plus two ordered parameters. Shift-drag projects the press and the cursor onto the wall; Snap snaps the moving end to the grid. The span draws over its wall at double width in the accent colour with a square at each end. `Delete` cuts it through `level_cut_wall_span` in one history snapshot and reports the removed length and the doors dropped. The span takes precedence over the selection, and a press elsewhere or a tool switch clears it.
-- `Esc` clears the span first, then the selection, cancels a draft, or restores a live drag.
+- The marked sections are a `Span` list of wall id plus two ordered parameters, canonical per wall: intervals merge when they overlap and are cut from the far end back. Each section draws over its wall at double width in the accent colour with a square at each end.
+- `Delete` cuts every marked section through `level_cut_wall_span` in one history snapshot and reports the section and door counts. A selected door, label, or stair still deletes in the same press. Whole selected walls delete only when no section is marked.
+- A press elsewhere or a tool switch clears the marked sections. `Esc` clears them first, then the selection, cancels a draft, or restores a live drag.
 
 ## Inspector
 
@@ -140,7 +141,7 @@ When exactly one object is selected, show its properties. When more than one is 
 Below the six tool buttons and the Q lock row:
 
 - Grid size: combo 4, 8, 16, 32; default 8. A Snap toggle, default on. A Show grid toggle, default on.
-- Select: a hint that Shift+drag on a wall marks a section to cut.
+- Select: a hint that a box across walls marks their crossed sections to cut, and that a wall corner drags to resize.
 - Line: a hint.
 - Rectangle: a hint that overlapping rectangles union.
 - Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 32.
@@ -166,7 +167,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 6 tools, `Q` held to keep the drawing tool, `Delete` delete the selection or cut the marked span, `Shift` plus click add to selection, `Shift` plus drag on a wall mark a span, `Ctrl` plus click toggle, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Q` held to keep the drawing tool, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 
@@ -181,6 +182,6 @@ The UI owner must verify these on the real X11 window and report the commands an
 7. Hold Q while placing a door and confirm the tool stays for the next click.
 8. Drag a stair with Flip set and confirm the saved flag. Toggle Flip in the inspector and confirm the saved flag changes.
 9. Lose focus during a line draft and confirm the editor redraws afterwards.
-10. Shift-drag along the top wall of a rectangle and confirm the accent highlight. Press Delete and save. The level has five walls with a gap where the span was. A door inside the span is gone and a door outside keeps its saved world centre.
+10. Drag a box from above the top wall of a rectangle to below it and confirm the accent highlight on the crossed part. Press Delete and save. The level has five walls with a gap where the box crossed. A door inside the gap is gone and a door outside keeps its saved world centre. Drag a rectangle corner and confirm both walls at that corner share the new endpoint and every saved wall is still horizontal or vertical.
 
 Screenshots go to `/tmp/ink-ribbon-six-*.png`. Do not commit them.
