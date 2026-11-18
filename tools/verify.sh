@@ -456,6 +456,43 @@ print("five walls, one shape, the top wall split with a 80 unit gap, one door "
 PYEOF
 echo "PASS a marquee marks the crossed section, Delete splits the wall, the inside door goes and the outside door keeps its centre"
 
+echo "== a shift marquee adds a second section on the same wall =="
+new_level
+key 3
+drag 385 315 585 515
+key 1
+drag 420 250 480 380
+xdotool keydown shift; sleep 0.2
+drag 500 250 530 380
+xdotool keyup shift; sleep 0.3
+shot "$out-span-two.png"
+two_a=$(px "$out-span-two.png" 450 315)
+two_b=$(px "$out-span-two.png" 515 315)
+[ "${two_a^^}" = "5AA0C8" ] && [ "${two_b^^}" = "5AA0C8" ] || {
+    echo "FAIL the two sections are $two_a and $two_b, not the accent colour"
+    exit 1
+}
+key Delete
+save_as "$out-span-two.lvl"
+python3 - "$out-span-two.lvl" <<'PYEOF'
+import sys
+lines = [l.split() for l in open(sys.argv[1])]
+walls = [l for l in lines if l[0] == "wall"]
+if len(walls) != 6:
+    print(f"two cuts on one wall left {len(walls)} walls, want 6")
+    raise SystemExit(1)
+top = [w for w in walls
+       if float(w[4]) == -96.0 and float(w[6]) == -96.0]
+pieces = sorted((min(float(w[3]), float(w[5])), max(float(w[3]), float(w[5])))
+                for w in top)
+want = [(-200.0, -168.0), (-104.0, -88.0), (-56.0, 0.0)]
+if pieces != want:
+    print(f"the two gaps are not [-168,-104] and [-88,-56]: {pieces}")
+    raise SystemExit(1)
+print("one wall cut at two disjoint sections, three pieces left")
+PYEOF
+echo "PASS a shift marquee adds a second section and Delete cuts both on one wall"
+
 echo "== a marquee with Snap off keeps the free box corners =="
 new_level
 key 3
