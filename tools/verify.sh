@@ -375,6 +375,94 @@ metric=$(compare -metric AE "$out-focus-b.png" "$out-focus-c.png" null: 2>&1 || 
 if [ "${metric%% *}" = "0" ]; then echo "FAIL no redraw after focus"; exit 1; fi
 echo "PASS focus loss survived (rss=${rss} KB)"
 
+echo "== shift+drag cuts a section out of a wall =="
+new_level
+key 3
+drag 385 315 585 515
+# A door inside the section that will be cut, and one outside it.
+key 4; hover 465 315; click 465 315
+key 4; hover 561 315; click 561 315
+key 1
+xdotool keydown shift; sleep 0.2
+drag 445 315 525 315
+xdotool keyup shift; sleep 0.3
+shot "$out-span.png"
+span=$(px "$out-span.png" 485 315)
+[ "${span^^}" = "5AA0C8" ] || { echo "FAIL the span highlight is $span, not the accent colour"; exit 1; }
+key Delete
+save_as "$out-span.lvl"
+python3 - "$out-span.lvl" <<'PYEOF'
+import sys
+lines = [l.split() for l in open(sys.argv[1])]
+walls = [l for l in lines if l[0] == "wall"]
+shapes = [l for l in lines if l[0] == "shape"]
+doors = [l for l in lines if l[0] == "door"]
+if len(walls) != 5 or len(shapes) != 1 or len(doors) != 1:
+    print(f"cut level is {len(walls)} walls, {len(shapes)} shapes, {len(doors)} doors")
+    raise SystemExit(1)
+top = [w for w in walls
+       if float(w[4]) == -96.0 and float(w[6]) == -96.0]
+if len(top) != 2:
+    print(f"the top wall is {len(top)} pieces, want 2")
+    raise SystemExit(1)
+pieces = sorted((min(float(w[3]), float(w[5])), max(float(w[3]), float(w[5])))
+                for w in top)
+if pieces[0][1] >= pieces[1][0]:
+    print(f"the top wall has no gap: {pieces}")
+    raise SystemExit(1)
+if abs(pieces[0][1] + 140.0) > 0.01 or abs(pieces[1][0] + 64.0) > 0.01:
+    print(f"the gap is not from -140 to -64: {pieces}")
+    raise SystemExit(1)
+by_id = {w[1]: w for w in walls}
+door = doors[0]
+w = by_id[door[2]]
+ax, ay, bx, by = float(w[3]), float(w[4]), float(w[5]), float(w[6])
+t = float(door[3])
+cx, cy = ax + (bx - ax) * t, ay + (by - ay) * t
+if abs(cx + 24.0) > 0.01 or abs(cy + 96.0) > 0.01:
+    print(f"the surviving door moved to {(cx, cy)}, not (-24, -96)")
+    raise SystemExit(1)
+print("five walls, one shape, the top wall split with a 76 unit gap, one door "
+      "inside gone and one outside at (-24, -96)")
+PYEOF
+echo "PASS shift+drag marks a section, Delete splits the wall, the inside door goes and the outside door keeps its centre"
+
+echo "== shift+drag with Snap off cuts a free-form span =="
+new_level
+key 3
+drag 385 315 585 515
+click 21 316
+key 1
+xdotool keydown shift; sleep 0.2
+drag 445 315 525 315
+xdotool keyup shift; sleep 0.3
+shot "$out-span-free.png"
+span=$(px "$out-span-free.png" 485 315)
+[ "${span^^}" = "5AA0C8" ] || { echo "FAIL the free span highlight is $span"; exit 1; }
+key Delete
+save_as "$out-span-free.lvl"
+python3 - "$out-span-free.lvl" <<'PYEOF'
+import sys
+lines = [l.split() for l in open(sys.argv[1])]
+walls = [l for l in lines if l[0] == "wall"]
+shapes = [l for l in lines if l[0] == "shape"]
+if len(walls) != 5 or len(shapes) != 1:
+    print(f"free cut level is {len(walls)} walls and {len(shapes)} shapes")
+    raise SystemExit(1)
+top = [w for w in walls
+       if float(w[4]) == -96.0 and float(w[6]) == -96.0]
+pieces = sorted((min(float(w[3]), float(w[5])), max(float(w[3]), float(w[5])))
+                for w in top)
+if len(top) != 2 or pieces[0][1] >= pieces[1][0]:
+    print(f"the free cut left {len(top)} top pieces: {pieces}")
+    raise SystemExit(1)
+if abs(pieces[0][1] + 140.0) > 0.01 or abs(pieces[1][0] + 60.0) > 0.01:
+    print(f"the free gap is not the drag's -140 to -60: {pieces}")
+    raise SystemExit(1)
+print("free-form drag left a gap from -140 to -60 with no grid snap")
+PYEOF
+echo "PASS Snap off keeps the free-form span endpoints"
+
 echo "== no leftovers =="
 cleanup
 overflow=$(test_leftovers)
