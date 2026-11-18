@@ -1518,6 +1518,21 @@ static int moved_objects(const Editor* e, int* left_behind) {
 /* Two rectangle rooms that now overlap after a move or a resize become one
    shape. Rectangles are the only drawing primitive, so the moved shape's
    bounds are the rect to union in; the emptied shape is then deleted. */
+/* True when the rect covers real area of the polygon, not just its bounding
+   box. Every shape is built from grid cells, so a positive overlap of two
+   grid-aligned outlines always contains a full cell; a rect that only touches
+   an edge contains none. */
+static bool rect_covers_shape_area(const Editor* e, Rect r, const Vec2* pts,
+                                   int count) {
+    float g = e->grid_size > 1.0f ? e->grid_size : 1.0f;
+    for (float y = r.min.y + g * 0.5f; y < r.max.y; y += g) {
+        for (float x = r.min.x + g * 0.5f; x < r.max.x; x += g) {
+            if (point_in_polygon(pts, count, v2(x, y))) return true;
+        }
+    }
+    return false;
+}
+
 static int merge_overlapping_shapes(Editor* e) {
     Vec2 poly[LEVEL_MAX_WALLS];
     int merges = 0;
@@ -1532,6 +1547,10 @@ static int merge_overlapping_shapes(Editor* e) {
             Rect rb = polygon_bounds(poly, level_shape_polygon(&e->level, b->id, poly,
                                                                LEVEL_MAX_WALLS));
             if (!rect_overlaps_area(ra, rb)) continue;
+            /* Bounds alone would treat the empty corner of an L as filled, so
+               the moved rect must cover real area of the other outline. */
+            int an = level_shape_polygon(&e->level, a->id, poly, LEVEL_MAX_WALLS);
+            if (an < 3 || !rect_covers_shape_area(e, rb, poly, an)) continue;
             ShapeId loser = b->id;
             int dropped = 0;
             if (level_union_rect(&e->level, a->id, rb, &dropped) != LEVEL_UNION_OK) {
@@ -2056,7 +2075,7 @@ static int union_rect_into_shapes(Editor* e, Rect r, int* dropped) {
         int count = level_shape_polygon(&e->level, shape->id, polygon,
                                         LEVEL_MAX_WALLS);
         if (count < 3) continue;
-        if (!rect_overlaps_area(r, polygon_bounds(polygon, count))) continue;
+        if (!rect_covers_shape_area(e, r, polygon, count)) continue;
         if (level_union_rect(&e->level, shape->id, r, dropped) == LEVEL_UNION_OK) {
             return 1;
         }
