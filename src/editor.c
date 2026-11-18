@@ -1039,34 +1039,38 @@ static void draw_grid(Editor* e) {
     }
 }
 
+/* Tread lines across a stair box, faint at the start of the fade and
+   brighter at the far end. bottom says the fade starts at the min end of the
+   run; the Flip setting moves it to the max end. */
+static void stair_treads(const Editor* e, ImDrawList* dl, Rect r, StairsDir dir,
+                         int steps, bool bottom, unsigned rgb) {
+    ImVec2 a = world_to_screen(e, r.min);
+    ImVec2 b = world_to_screen(e, r.max);
+    bool horizontal = dir == STAIRS_H;
+    float run = horizontal ? r.max.x - r.min.x : r.max.y - r.min.y;
+    float spacing = steps > 0 ? run / (float)steps : run;
+    for (int k = 0; k <= steps; k++) {
+        float offset = (float)k * spacing;
+        float frac = run > 0.0001f ? offset / run : 1.0f;
+        if (!bottom) frac = 1.0f - frac;
+        float alpha = 0.18f + 0.50f * frac;
+        ImU32 tread = col32a(rgb, (unsigned)(alpha * 255.0f));
+        if (horizontal) {
+            ImVec2 p = world_to_screen(e, v2(r.min.x + offset, r.min.y));
+            ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, tread, 1.0f, 0);
+        } else {
+            ImVec2 p = world_to_screen(e, v2(r.min.x, r.min.y + offset));
+            ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, tread, 1.0f, 0);
+        }
+    }
+}
+
 static void draw_stairs(const Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     for (int i = 0; i < e->level.stairs_count; i++) {
         const Stairs* s = &e->level.stairs[i];
-        Rect r = level_stairs_rect(s);
-        ImVec2 a = world_to_screen(e, r.min);
-        ImVec2 b = world_to_screen(e, r.max);
-        /* steps + 1 tread lines across the box, drawn as faint neutral lines
-           with no fill. The run axis takes width/steps for a horizontal run
-           and length/steps for a vertical one. The fade starts at the run's
-           bottom end, and the Flip setting moves that end. */
-        bool horizontal = s->dir == STAIRS_H;
-        float run = horizontal ? s->width : s->length;
-        float spacing = run / (float)s->steps;
-        for (int k = 0; k <= s->steps; k++) {
-            float offset = (float)k * spacing;
-            float frac = run > 0.0001f ? offset / run : 1.0f;
-            if (!s->bottom) frac = 1.0f - frac;
-            float alpha = 0.18f + 0.50f * frac;
-            ImU32 tread = col32a(STAIR_COL, (unsigned)(alpha * 255.0f));
-            if (horizontal) {
-                ImVec2 p = world_to_screen(e, v2(r.min.x + offset, r.min.y));
-                ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, tread, 1.0f, 0);
-            } else {
-                ImVec2 p = world_to_screen(e, v2(r.min.x, r.min.y + offset));
-                ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, tread, 1.0f, 0);
-            }
-        }
+        stair_treads(e, dl, level_stairs_rect(s), s->dir, s->steps, s->bottom,
+                     STAIR_COL);
     }
 }
 
@@ -2129,25 +2133,6 @@ static void update_shape_drag(Editor* e, bool have_pointer) {
     else finish_rect_drag(e, have_pointer);
 }
 
-static void stair_treads(const Editor* e, ImDrawList* dl, Rect r, StairsDir dir,
-                         int steps, ImU32 col, float thickness) {
-    ImVec2 a = world_to_screen(e, r.min);
-    ImVec2 b = world_to_screen(e, r.max);
-    bool horizontal = dir == STAIRS_H;
-    float run = horizontal ? r.max.x - r.min.x : r.max.y - r.min.y;
-    float spacing = steps > 0 ? run / (float)steps : run;
-    for (int k = 0; k <= steps; k++) {
-        float offset = (float)k * spacing;
-        if (horizontal) {
-            ImVec2 p = world_to_screen(e, v2(r.min.x + offset, r.min.y));
-            ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, col, thickness, 0);
-        } else {
-            ImVec2 p = world_to_screen(e, v2(r.min.x, r.min.y + offset));
-            ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, col, thickness, 0);
-        }
-    }
-}
-
 static void draw_shape_preview(const Editor* e) {
     const Gesture* g = &e->gesture;
     if (g->kind != GESTURE_RECT_DRAW && g->kind != GESTURE_RECT_COPY &&
@@ -2163,8 +2148,8 @@ static void draw_shape_preview(const Editor* e) {
     ImVec2 a = world_to_screen(e, r.min);
     ImVec2 b = world_to_screen(e, r.max);
     if (g->kind == GESTURE_STAIRS_DRAW) {
-        stair_treads(e, dl, r, e->stair_dir, e->stair_steps,
-                     col32a(ACCENT_COL, 150), 1.0f);
+        stair_treads(e, dl, r, e->stair_dir, e->stair_steps, e->stair_flip,
+                     ACCENT_COL);
     }
     ImDrawList_AddRectEx(dl, a, b, col32(ACCENT_COL), 0.0f, 1.0f, 0);
 }

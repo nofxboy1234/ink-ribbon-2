@@ -531,6 +531,46 @@ static void test_rect_union_save_load(void) {
     remove(path);
 }
 
+static void test_stairs_flip(void) {
+    Level level;
+    level_init(&level);
+    check(level_add_stairs(&level, (Rect){ { 0, 0 }, { 100, 50 } }, STAIRS_H, 6) ==
+              0,
+          "add a stair for the flip roundtrip");
+    check(!level.stairs[0].bottom, "a new stair starts with the fade at the min end");
+    level.stairs[0].bottom = true;
+
+    char path[256];
+    snprintf(path, sizeof path, "/tmp/ink_ribbon_flip_%ld.lvl", (long)getpid());
+    LevelError err;
+    check(level_save(&level, path, &err), "save a flipped stair");
+
+    char file[2048] = { 0 };
+    FILE* f = fopen(path, "rb");
+    if (f) {
+        size_t got = fread(file, 1, sizeof file - 1, f);
+        file[got] = '\0';
+        fclose(f);
+    }
+    check(strstr(file, "stairs 0.000 0.000 0 6 100.000 50.000 1\n") != NULL,
+          "the saved stair carries the flip flag");
+
+    Level loaded;
+    level_init(&loaded);
+    check(level_load(&loaded, path, &err) && loaded.stairs_count == 1,
+          "load the flipped stair");
+    check(loaded.stairs[0].bottom && loaded.stairs[0].steps == 6 &&
+              nearf(loaded.stairs[0].width, 100) &&
+              nearf(loaded.stairs[0].length, 50),
+          "the flip flag and footprint survive save and load");
+    level.stairs[0].bottom = false;
+    check(level_save(&level, path, &err), "save an unflipped stair");
+    level_init(&loaded);
+    check(level_load(&loaded, path, &err) && !loaded.stairs[0].bottom,
+          "the unflipped flag survives save and load");
+    remove(path);
+}
+
 static void test_save_load(void) {
     Level src;
     level_init(&src);
@@ -1412,6 +1452,7 @@ int main(void) {
     test_doors();
     test_labels();
     test_stairs();
+    test_stairs_flip();
     test_rect_union();
     test_rect_union_save_load();
     test_save_load();
