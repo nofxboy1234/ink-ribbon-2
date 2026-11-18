@@ -931,8 +931,8 @@ static int cut_spans(Editor* e, int* dropped_doors, int* failed) {
     return cuts;
 }
 
-/* Delete acts on both selections. It cuts every marked section in one history
-   step, then removes the selected doors, labels, and stairs. Whole selected
+/* Delete acts on both selections. It cuts every marked section and removes the
+   selected doors, labels, and stairs, all in one history step. Whole selected
    walls go only when no section is marked, because a section owns its wall. */
 static void delete_selection(Editor* e) {
     sel_prune(e);
@@ -955,14 +955,24 @@ static void delete_selection(Editor* e) {
         doors += cut_doors;
     }
 
-    span_clear(e);
-    sel_clear(e);
-    cancel_gesture(e);
-
     if (cuts == 0 && have_sections) {
+        /* Keep the marks so Delete can be tried again, and still record the
+           objects that did go. No cut changes the level when it fails. */
+        if (doors + objects > 0) {
+            int deleted = doors + objects;
+            char msg[96];
+            snprintf(msg, sizeof msg, "Deleted %d object%s; sections not cut",
+                     deleted, deleted == 1 ? "" : "s");
+            commit(e, msg);
+        }
+        sel_clear(e);
+        cancel_gesture(e);
         set_status(e, true, "Could not cut the marked sections");
         return;
     }
+    span_clear(e);
+    sel_clear(e);
+    cancel_gesture(e);
     char message[192];
     if (cuts > 0) {
         snprintf(message, sizeof message,
