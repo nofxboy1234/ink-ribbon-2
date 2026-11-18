@@ -87,6 +87,8 @@ typedef enum {
     GESTURE_NONE = 0,
     GESTURE_CHAIN,
     GESTURE_MARQUEE,
+    /* Alt+drag in Select marks a section of one wall to cut. */
+    GESTURE_SPAN,
     GESTURE_MOVE,
     GESTURE_RESHAPE,
     GESTURE_DOOR_SLIDE,
@@ -184,6 +186,13 @@ struct Editor {
     Tool tool;
     Selection selection;
     Gesture gesture;
+    /* The section of one wall that Select marked with Alt+drag. It sits beside
+       the selection instead of inside it, so selecting, reshaping, and cutting
+       never share a flag. */
+    WallId span_wall;
+    float span_t0;
+    float span_t1;
+    bool span_active;
     bool fit_pending;
     bool pan_active;
 
@@ -221,7 +230,7 @@ static const char* TOOL_NAMES[TOOL_COUNT] = {
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click an object to select it, drag empty canvas to marquee, drag a wall edge to reshape",
+    "click an object to select it, drag empty canvas to marquee, drag a wall edge to reshape, Alt+drag a wall to cut a section",
     "click to add a wall; click the first point or press Enter to close the chain",
     "drag a rectangle; overlapping rectangles union into one outline",
     "hover a wall and click to place a door; drag its ends with Select to resize",
@@ -360,11 +369,21 @@ static bool gesture_is_drag(const Editor* e) {
            e->gesture.kind == GESTURE_RECT_COPY ||
            e->gesture.kind == GESTURE_STAIRS_DRAW ||
            e->gesture.kind == GESTURE_LINE_PENDING ||
+           e->gesture.kind == GESTURE_SPAN ||
            e->gesture.kind == GESTURE_MARQUEE;
 }
 
 static void cancel_gesture(Editor* e) {
     memset(&e->gesture, 0, sizeof e->gesture);
+}
+
+/* A span is one wall plus two parameters, so wall id 0 is the empty value and
+   there is no fourth flag that could disagree with span_active. */
+static void span_clear(Editor* e) {
+    e->span_wall = 0;
+    e->span_t0 = 0.0f;
+    e->span_t1 = 0.0f;
+    e->span_active = false;
 }
 
 /* A chain creates its shape on the first click, so a chain cancelled before
@@ -665,12 +684,14 @@ static bool selection_walls_whole_shape(const Editor* e) {
 
 static void switch_tool(Editor* e, Tool tool) {
     if (e->tool == tool) return;
-    if (gesture_is_drag(e) && e->gesture.kind != GESTURE_MARQUEE) {
+    if (gesture_is_drag(e) && e->gesture.kind != GESTURE_MARQUEE &&
+        e->gesture.kind != GESTURE_SPAN) {
         history_restore_current(&e->history, &e->level);
         sel_prune(e);
     }
     if (e->gesture.kind == GESTURE_CHAIN) discard_empty_chain_shape(e);
     cancel_gesture(e);
+    span_clear(e);
     e->tool = tool;
     set_status(e, false, "%s tool", TOOL_NAMES[tool]);
 }
@@ -1187,6 +1208,33 @@ static void draw_doors(const Editor* e) {
         level_door_span(&e->level, d, &a, &b);
         draw_door_bar(dl, e, w, a, b, col32(DOOR_WHITE_COL), 0.0f);
     }
+}
+
+/* The marked section draws over its wall in the accent colour at double the
+   wall width, with a square at each end. The wall itself is untouched. */
+static void draw_span(const Editor* e) {
+    if (!e->span_active && e->gesture.kind != GESTURE_SPAN) return;
+    const Wall* wall = level_wall_by_id_const(&e->level, e->span_wall);
+    if (!wall) return;
+    float t0 = e->span_t0;
+    float t1 = e->span_t1;
+    if (t0 > t1) {
+        float swap = t0;
+        t0 = t1;
+        t1 = swap;
+    }
+    if (t1 - t0 <= 0.0f) return;
+
+    ImDrawList* dl = igGetWindowDrawList();
+    ImU32 col = col32(ACCENT_COL);
+    ImVec2 a = world_to_screen(e, segment_point(wall->a, wall->b, t0));
+    ImVec2 b = world_to_screen(e, segment_point(wall->a, wall->b, t1));
+    ImDrawList_AddLineEx(dl, a, b, col, 4.0f, 0);
+    const float h = 4.0f;
+    ImDrawList_AddRectFilledEx(dl, (ImVec2){ a.x - h, a.y - h },
+                               (ImVec2){ a.x + h, a.y + h }, col, 0.0f, 0);
+    ImDrawList_AddRectFilledEx(dl, (ImVec2){ b.x - h, b.y - h },
+                               (ImVec2){ b.x + h, b.y + h }, col, 0.0f, 0);
 }
 
 /* The wall under the pointer and the centre parameter a door would take.
@@ -1758,6 +1806,44 @@ static void update_drag(Editor* e, bool have_pointer) {
             cancel_gesture(e);
             break;
         }
+        case GESTURE_SPAN: {
+            const Wall* wall = level_wall_by_id_const(&e->level, e->span_wall);
+            if (!wall) {
+                span_clear(e);
+                cancel_gesture(e);
+                break;
+            }
+            if (down) {
+                float t = point_segment_t(world, wall->a, wall->b);
+                if (e->snap) t = snap_wall_t(wall, t, e->grid_size);
+                e->span_t1 = t;
+                g->moved = true;
+                break;
+            }
+            float t0 = e->span_t0;
+            float t1 = e->span_t1;
+            if (t0 > t1) {
+                float swap = t0;
+                t0 = t1;
+                t1 = swap;
+            }
+            float length = wall_length(wall) * (t1 - t0);
+            span_clear(e);
+            if (length < 1e-3f) {
+                set_status(e, true, "Span too short to cut");
+            } else if (e->snap && length < e->grid_size) {
+                set_status(e, true, "Span shorter than one grid cell");
+            } else {
+                e->span_wall = wall->id;
+                e->span_t0 = t0;
+                e->span_t1 = t1;
+                e->span_active = true;
+                set_status(e, false, "Section of %.0f units marked, press Delete",
+                           length);
+            }
+            cancel_gesture(e);
+            break;
+        }
         case GESTURE_MOVE: {
             if (down) {
                 Vec2 raw = v2_sub(world, g->press_world);
@@ -2227,10 +2313,46 @@ static void draw_shape_preview(const Editor* e) {
     ImDrawList_AddRectEx(dl, a, b, col32(ACCENT_COL), 0.0f, 1.0f, 0);
 }
 
+/* Alt+drag marks a section of the wall under the press. The start is the
+   projected parameter; the drag moves the other end along the same wall, and
+   Snap locks that coordinate to the grid. */
+static void begin_span(Editor* e, int wall_index, float t, Vec2 world,
+                       ImVec2 mouse) {
+    Gesture* g = &e->gesture;
+    span_clear(e);
+    cancel_gesture(e);
+    g->kind = GESTURE_SPAN;
+    g->object_index = wall_index;
+    g->fixed_t = t;
+    g->press_world = world;
+    g->cur_world = world;
+    g->press_screen = v2(mouse.x, mouse.y);
+    g->moved = false;
+    e->span_wall = e->level.walls[wall_index].id;
+    e->span_t0 = t;
+    e->span_t1 = t;
+    set_status(e, false, "Drag along the wall to mark a section");
+}
+
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     ImGuiIO* io = igGetIO();
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
+
+    /* Alt+drag on a wall starts a span. Any other press clears the old span
+       first and then runs the normal selection path, so the two never claim
+       the same click. */
+    if (io->KeyAlt && !shift && !ctrl) {
+        float t = 0.0f;
+        int wall = level_nearest_wall(&e->level, world,
+                                      HIT_TOL_PX / e->camera.zoom, &t);
+        if (wall >= 0) {
+            begin_span(e, wall, t, world, mouse);
+            return;
+        }
+    }
+    span_clear(e);
+
     Hit hit = hit_test(e, world);
     if (hit.kind == HIT_NONE) {
         /* A press just outside a stair box still grabs its edge, the way a wall
@@ -2555,6 +2677,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_stairs(e);
     draw_walls(e);
     draw_doors(e);
+    draw_span(e);
     if (e->tool == TOOL_DOOR && e->cursor_valid && !gesture_active(e)) {
         draw_door_ghost(e);
     }
@@ -2712,6 +2835,9 @@ static void draw_left_panel(Editor* e) {
             small_note("Click the canvas to place a label, then type its text.");
             break;
         case TOOL_SELECT:
+            igDummy((ImVec2){ 0.0f, 3.0f });
+            small_note("Alt+drag along a wall to mark a section, then press Delete to cut it out.");
+            break;
         case TOOL_COUNT:
         default:
             break;
