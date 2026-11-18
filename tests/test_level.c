@@ -1561,6 +1561,113 @@ static void test_cut_wall_span(void) {
           "a non-finite parameter is rejected and changes nothing");
 }
 
+static bool has_wall(const Level* level, Vec2 a, Vec2 b) {
+    for (int i = 0; i < level->wall_count; i++) {
+        const Wall* w = &level->walls[i];
+        if ((nearv(w->a, a) && nearv(w->b, b)) ||
+            (nearv(w->a, b) && nearv(w->b, a))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_move_vertex(void) {
+    Level level;
+    level_init(&level);
+    int walls[4];
+    ShapeId rect = add_rectangle(&level, v2(0, 0), 100, 100, walls);
+    check(level_close_shape(&level, rect), "close the rectangle before a corner move");
+    check(level_move_vertex(&level, v2(0, 0), v2(20, 30)),
+          "move a rectangle corner in both axes");
+    check(nearv(level.walls[walls[0]].a, v2(20, 30)) &&
+              nearv(level.walls[walls[0]].b, v2(100, 30)),
+          "the top wall follows the corner on its free axis");
+    check(nearv(level.walls[walls[3]].a, v2(20, 100)) &&
+              nearv(level.walls[walls[3]].b, v2(20, 30)),
+          "the left wall follows the corner on its free axis");
+    check(nearv(level.walls[walls[1]].a, v2(100, 30)) &&
+              nearv(level.walls[walls[2]].b, v2(20, 100)),
+          "the walls across the rectangle stay joined to the moved sides");
+    bool orthogonal = true;
+    for (int i = 0; i < level.wall_count; i++) {
+        float dx = fabsf(level.walls[i].b.x - level.walls[i].a.x);
+        float dy = fabsf(level.walls[i].b.y - level.walls[i].a.y);
+        if (dx > 1e-3f && dy > 1e-3f) orthogonal = false;
+    }
+    const Shape* record = level_shape_by_id_const(&level, rect);
+    check(orthogonal && record && record->closed,
+          "a corner move keeps every wall orthogonal and the shape closed");
+    int at_corner = 0;
+    for (int i = 0; i < level.wall_count; i++) {
+        if (nearv(level.walls[i].a, v2(20, 30)) ||
+            nearv(level.walls[i].b, v2(20, 30))) {
+            at_corner++;
+        }
+    }
+    check(at_corner == 2,
+          "the moved corner is shared by the two walls that meet there");
+
+    /* A move that would collapse the left wall is rejected whole. */
+    Level snapshot = level;
+    check(!level_move_vertex(&level, v2(20, 30), v2(20, 100)) &&
+              memcmp(&level, &snapshot, sizeof level) == 0,
+          "a corner move that would collapse a wall is rejected and changes nothing");
+
+    /* A T junction moves every wall at the shared point. */
+    level_init(&level);
+    level_add_wall(&level, v2(-50, 0), v2(0, 0));
+    level_add_wall(&level, v2(0, 0), v2(50, 0));
+    level_add_wall(&level, v2(0, 0), v2(0, 50));
+    check(level_move_vertex(&level, v2(0, 0), v2(10, 10)),
+          "move the shared corner of a T junction");
+    int joined = 0;
+    for (int i = 0; i < level.wall_count; i++) {
+        if (nearv(level.walls[i].a, v2(10, 10)) ||
+            nearv(level.walls[i].b, v2(10, 10))) {
+            joined++;
+        }
+    }
+    check(joined == 3 && nearv(level.walls[0].a, v2(-50, 10)) &&
+              nearv(level.walls[1].b, v2(50, 10)) &&
+              nearv(level.walls[2].b, v2(10, 50)),
+          "all three walls at the corner stay joined and orthogonal");
+    check(!level_move_vertex(&level, v2(200, 200), v2(210, 210)),
+          "a corner move with no wall at the point is rejected");
+}
+
+static void test_cut_two_walls(void) {
+    Level level;
+    level_init(&level);
+    int horizontal = level_add_wall(&level, v2(0, 0), v2(100, 0));
+    WallId horizontal_id = level.walls[horizontal].id;
+    int vertical = level_add_wall(&level, v2(50, -50), v2(50, 50));
+    WallId vertical_id = level.walls[vertical].id;
+
+    /* The editor's Delete finds each wall by id because a cut appends a tail
+       and can renumber what follows. */
+    WallId ids[2] = { horizontal_id, vertical_id };
+    bool cut = true;
+    for (int i = 0; i < 2; i++) {
+        int index = level_find_wall_index(&level, ids[i]);
+        int dropped = 0;
+        if (index < 0 ||
+            !level_cut_wall_span(&level, index, 0.2f, 0.6f, &dropped)) {
+            cut = false;
+        }
+    }
+    check(cut && level.wall_count == 4,
+          "two spans on two walls cut in one call pattern leave four pieces");
+    check(has_wall(&level, v2(0, 0), v2(20, 0)) &&
+              has_wall(&level, v2(60, 0), v2(100, 0)) &&
+              has_wall(&level, v2(50, -50), v2(50, -30)) &&
+              has_wall(&level, v2(50, 10), v2(50, 50)),
+          "both walls keep the pieces outside their spans");
+    check(level_wall_by_id_const(&level, horizontal_id) &&
+              level_wall_by_id_const(&level, vertical_id),
+          "each cut wall keeps its id on the near piece");
+}
+
 int main(void) {
     test_geometry();
     test_polygon();
@@ -1582,6 +1689,8 @@ int main(void) {
     test_move_walls();
     test_shape_at();
     test_cut_wall_span();
+    test_cut_two_walls();
+    test_move_vertex();
     test_delete_edge_reopens_shape();
     test_save_load_shapes();
 

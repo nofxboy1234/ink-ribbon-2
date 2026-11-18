@@ -405,7 +405,7 @@ print("eight walls, two closed shapes, the copy offset by (8, 8)")
 PYEOF
 echo "PASS Ctrl+D duplicates the selected shape at one grid offset"
 
-echo "== shift+drag cuts a section out of a wall =="
+echo "== a marquee marks the crossed part of a wall =="
 new_level
 key 3
 drag 385 315 585 515
@@ -413,12 +413,11 @@ drag 385 315 585 515
 key 4; hover 465 315; click 465 315
 key 4; hover 561 315; click 561 315
 key 1
-xdotool keydown shift; sleep 0.2
-drag 445 315 525 315
-xdotool keyup shift; sleep 0.3
+# Start well above the top wall and end below it, so the box crosses the line.
+drag 445 250 525 380
 shot "$out-span.png"
 span=$(px "$out-span.png" 485 315)
-[ "${span^^}" = "5AA0C8" ] || { echo "FAIL the span highlight is $span, not the accent colour"; exit 1; }
+[ "${span^^}" = "5AA0C8" ] || { echo "FAIL the section highlight is $span, not the accent colour"; exit 1; }
 key Delete
 save_as "$out-span.lvl"
 python3 - "$out-span.lvl" <<'PYEOF'
@@ -440,8 +439,8 @@ pieces = sorted((min(float(w[3]), float(w[5])), max(float(w[3]), float(w[5])))
 if pieces[0][1] >= pieces[1][0]:
     print(f"the top wall has no gap: {pieces}")
     raise SystemExit(1)
-if abs(pieces[0][1] + 140.0) > 0.01 or abs(pieces[1][0] + 64.0) > 0.01:
-    print(f"the gap is not from -140 to -64: {pieces}")
+if abs(pieces[0][1] + 144.0) > 0.01 or abs(pieces[1][0] + 64.0) > 0.01:
+    print(f"the snapped box gap is not from -144 to -64: {pieces}")
     raise SystemExit(1)
 by_id = {w[1]: w for w in walls}
 door = doors[0]
@@ -452,23 +451,21 @@ cx, cy = ax + (bx - ax) * t, ay + (by - ay) * t
 if abs(cx + 24.0) > 0.01 or abs(cy + 96.0) > 0.01:
     print(f"the surviving door moved to {(cx, cy)}, not (-24, -96)")
     raise SystemExit(1)
-print("five walls, one shape, the top wall split with a 76 unit gap, one door "
+print("five walls, one shape, the top wall split with a 80 unit gap, one door "
       "inside gone and one outside at (-24, -96)")
 PYEOF
-echo "PASS shift+drag marks a section, Delete splits the wall, the inside door goes and the outside door keeps its centre"
+echo "PASS a marquee marks the crossed section, Delete splits the wall, the inside door goes and the outside door keeps its centre"
 
-echo "== shift+drag with Snap off cuts a free-form span =="
+echo "== a marquee with Snap off keeps the free box corners =="
 new_level
 key 3
 drag 385 315 585 515
 click 21 316
 key 1
-xdotool keydown shift; sleep 0.2
-drag 445 315 525 315
-xdotool keyup shift; sleep 0.3
+drag 445 250 525 380
 shot "$out-span-free.png"
 span=$(px "$out-span-free.png" 485 315)
-[ "${span^^}" = "5AA0C8" ] || { echo "FAIL the free span highlight is $span"; exit 1; }
+[ "${span^^}" = "5AA0C8" ] || { echo "FAIL the free section highlight is $span"; exit 1; }
 key Delete
 save_as "$out-span-free.lvl"
 python3 - "$out-span-free.lvl" <<'PYEOF'
@@ -487,11 +484,113 @@ if len(top) != 2 or pieces[0][1] >= pieces[1][0]:
     print(f"the free cut left {len(top)} top pieces: {pieces}")
     raise SystemExit(1)
 if abs(pieces[0][1] + 140.0) > 0.01 or abs(pieces[1][0] + 60.0) > 0.01:
-    print(f"the free gap is not the drag's -140 to -60: {pieces}")
+    print(f"the free gap is not the box's -140 to -60: {pieces}")
     raise SystemExit(1)
-print("free-form drag left a gap from -140 to -60 with no grid snap")
+print("free-form box left a gap from -140 to -60 with no grid snap")
 PYEOF
-echo "PASS Snap off keeps the free-form span endpoints"
+echo "PASS Snap off keeps the free-form box corners"
+
+echo "== drag a wall corner to resize the walls that meet there =="
+new_level
+# The free-form section above turned Snap off; the corner drag snaps.
+click 21 316
+key 3
+drag 385 315 585 515
+key 1
+drag 385 315 417 347
+save_as "$out-vertex.lvl"
+shot "$out-vertex.png"
+python3 - "$out-vertex.lvl" <<'PYEOF'
+import sys
+lines = [l.split() for l in open(sys.argv[1])]
+walls = [(float(l[3]), float(l[4]), float(l[5]), float(l[6]))
+         for l in lines if l[0] == "wall"]
+shapes = [l for l in lines if l[0] == "shape"]
+if len(walls) != 4 or len(shapes) != 1 or shapes[0][2] != "1":
+    print(f"corner move is {len(walls)} walls and shapes {shapes}, want 4 closed")
+    raise SystemExit(1)
+for x0, y0, x1, y1 in walls:
+    if abs(x0 - x1) > 0.01 and abs(y0 - y1) > 0.01:
+        print(f"a wall went diagonal: {(x0, y0, x1, y1)}")
+        raise SystemExit(1)
+corner = (-168.0, -64.0)
+at_corner = [w for w in walls
+             if (abs(w[0] - corner[0]) < 0.01 and abs(w[1] - corner[1]) < 0.01)
+             or (abs(w[2] - corner[0]) < 0.01 and abs(w[3] - corner[1]) < 0.01)]
+if len(at_corner) != 2:
+    print(f"{len(at_corner)} walls meet at the dragged corner, want 2")
+    raise SystemExit(1)
+xs = [c for w in walls for c in (w[0], w[2])]
+ys = [c for w in walls for c in (w[1], w[3])]
+if (min(xs), min(ys), max(xs), max(ys)) != (-168.0, -64.0, 0.0, 104.0):
+    print(f"the resized rectangle is {(min(xs), min(ys), max(xs), max(ys))}")
+    raise SystemExit(1)
+print("four orthogonal walls, one closed shape, both walls at (-168, -64)")
+PYEOF
+echo "PASS a corner drag moves the shared endpoint on both walls and keeps the shape closed"
+
+echo "== Esc restores the corner drag snapshot =="
+new_level
+key 3
+drag 385 315 585 515
+key 1
+xdotool mousemove --sync $((WX + 385)) $((WY + 315)); xdotool mousedown 1; sleep 0.2
+xdotool mousemove --sync $((WX + 417)) $((WY + 347)); sleep 0.3
+# keydown and keyup: a plain xdotool key drops the held mouse button state.
+xdotool keydown Escape; sleep 0.3; xdotool keyup Escape; sleep 0.3
+xdotool mouseup 1; sleep 0.4
+save_as "$out-vertex-esc.lvl"
+python3 - "$out-vertex-esc.lvl" <<'PYEOF'
+import sys
+lines = [l.split() for l in open(sys.argv[1])]
+walls = sorted(" ".join(l[3:7]) for l in lines if l[0] == "wall")
+want = sorted(["-200.000 -96.000 0.000 -96.000",
+               "0.000 -96.000 0.000 104.000",
+               "0.000 104.000 -200.000 104.000",
+               "-200.000 104.000 -200.000 -96.000"])
+if walls != want:
+    print("Esc did not restore the rectangle after a corner drag")
+    for w in walls: print(" have", w)
+    raise SystemExit(1)
+PYEOF
+echo "PASS Esc restores the corner snapshot"
+
+echo "== a marquee still deletes a label and a stair =="
+new_level
+key 3
+drag 385 315 585 515
+key 5
+drag 410 400 470 370
+key 6
+click 435 412
+# Leave the label text field and clear its selection with a plain click outside.
+click 350 250
+key 1
+drag 350 250 500 450
+shot "$out-objects.png"
+key Delete
+save_as "$out-objects.lvl"
+python3 - "$out-objects.lvl" <<'PYEOF'
+import sys
+lines = [l.split() for l in open(sys.argv[1])]
+labels = [l for l in lines if l[0] == "label"]
+stairs = [l for l in lines if l[0] == "stairs"]
+walls = [l for l in lines if l[0] == "wall"]
+if labels or stairs:
+    print(f"Delete left {len(labels)} labels and {len(stairs)} stairs")
+    raise SystemExit(1)
+if len(walls) != 4:
+    print(f"the two cuts left {len(walls)} walls, want 4")
+    raise SystemExit(1)
+have = {(round(float(l[3]), 3), round(float(l[4]), 3),
+         round(float(l[5]), 3), round(float(l[6]), 3)) for l in walls}
+for want in [(-88.0, -96.0, 0.0, -96.0), (-200.0, 104.0, -200.0, 40.0)]:
+    if want not in have:
+        print(f"missing the cut piece {want}")
+        raise SystemExit(1)
+print("the label, the stair, and both crossed wall sections are gone")
+PYEOF
+echo "PASS a marquee Delete removes a label and a stair and cuts the crossed sections"
 
 echo "== no leftovers =="
 cleanup
