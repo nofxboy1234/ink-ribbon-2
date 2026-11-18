@@ -838,6 +838,38 @@ static void delete_selection(Editor* e) {
     }
 }
 
+/* A span owns Delete while it is active. The cut is one history step, and the
+   selection is dropped because the cut can remove or renumber walls. */
+static void cut_span(Editor* e) {
+    if (!e->span_active) return;
+    int index = level_find_wall_index(&e->level, e->span_wall);
+    if (index < 0) {
+        span_clear(e);
+        set_status(e, true, "The marked wall is gone");
+        return;
+    }
+    float length = wall_length(&e->level.walls[index]) *
+                   fabsf(e->span_t1 - e->span_t0);
+    int doors = 0;
+    if (!level_cut_wall_span(&e->level, index, e->span_t0, e->span_t1, &doors)) {
+        set_status(e, true, "Could not cut the section");
+        return;
+    }
+    span_clear(e);
+    sel_clear(e);
+    cancel_gesture(e);
+    char message[96];
+    if (doors == 0) {
+        snprintf(message, sizeof message, "Cut %.0f units of wall, no doors",
+                 length);
+    } else {
+        snprintf(message, sizeof message,
+                 "Cut %.0f units of wall and removed %d door%s", length, doors,
+                 doors == 1 ? "" : "s");
+    }
+    commit(e, message);
+}
+
 typedef struct {
     int walls, shapes, doors, labels, stairs;
 } LevelCounts;
@@ -3337,7 +3369,8 @@ static void handle_shortcuts(Editor* e) {
     if (igIsKeyPressedEx(ImGuiKey_H, false)) open_path_modal(e, MODAL_HELP);
     if (igIsKeyPressedEx(ImGuiKey_Delete, false)) {
         if (gesture_is_drag(e)) return;
-        delete_selection(e);
+        if (e->span_active) cut_span(e);
+        else delete_selection(e);
     }
     if (igIsKeyPressedEx(ImGuiKey_Backspace, false)) {
         if (e->gesture.kind == GESTURE_CHAIN) {
@@ -3364,6 +3397,11 @@ static void handle_shortcuts(Editor* e) {
         if (e->gesture.kind == GESTURE_CHAIN) close_wall_chain(e, true);
     }
     if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
+        if (e->span_active) {
+            span_clear(e);
+            set_status(e, false, "Section cleared");
+            return;
+        }
         if (e->tool == TOOL_LINE && !gesture_is_drag(e)) {
             cancel_transient(e);
             e->tool = TOOL_SELECT;
