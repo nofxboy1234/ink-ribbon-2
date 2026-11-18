@@ -1515,6 +1515,36 @@ static int moved_objects(const Editor* e, int* left_behind) {
     return moved;
 }
 
+/* Two rectangle rooms that now overlap after a move or a resize become one
+   shape. Rectangles are the only drawing primitive, so the moved shape's
+   bounds are the rect to union in; the emptied shape is then deleted. */
+static int merge_overlapping_shapes(Editor* e) {
+    Vec2 poly[LEVEL_MAX_WALLS];
+    int merges = 0;
+    for (int i = 0; i < e->level.shape_count && merges < 8; i++) {
+        const Shape* a = &e->level.shapes[i];
+        if (!a->closed) continue;
+        Rect ra = polygon_bounds(poly, level_shape_polygon(&e->level, a->id, poly,
+                                                           LEVEL_MAX_WALLS));
+        for (int j = i + 1; j < e->level.shape_count; j++) {
+            const Shape* b = &e->level.shapes[j];
+            if (!b->closed) continue;
+            Rect rb = polygon_bounds(poly, level_shape_polygon(&e->level, b->id, poly,
+                                                               LEVEL_MAX_WALLS));
+            if (!rect_overlaps_area(ra, rb)) continue;
+            ShapeId loser = b->id;
+            int dropped = 0;
+            if (level_union_rect(&e->level, a->id, rb, &dropped) != LEVEL_UNION_OK) {
+                continue;
+            }
+            level_delete_shape(&e->level, loser);
+            merges++;
+            break;
+        }
+    }
+    return merges;
+}
+
 static void finish_move(Editor* e) {
     if (e->gesture.moved) {
         int left = 0;
@@ -1530,6 +1560,9 @@ static void finish_move(Editor* e) {
                      moved, moved == 1 ? "" : "s");
         }
         commit(e, message);
+        if (merge_overlapping_shapes(e) > 0) {
+            set_status(e, false, "Overlapping rectangles joined");
+        }
     }
     cancel_gesture(e);
 }
