@@ -1944,7 +1944,40 @@ static void begin_rect_drag(Editor* e, Vec2 world, ImVec2 mouse) {
     g->press_world = snap_grid(world, e->grid_size);
     g->cur_world = g->press_world;
     g->press_screen = v2(mouse.x, mouse.y);
+    if (igGetIO()->KeyAlt) {
+        int index = level_shape_at(&e->level, world);
+        Rect copy;
+        if (index >= 0 && level_shape_rect_at(&e->level,
+                                              e->level.shapes[index].id,
+                                              world, &copy)) {
+            g->kind = GESTURE_RECT_COPY;
+            g->shape = e->level.shapes[index].id;
+            g->pts[0] = copy.min;
+            g->pts[1] = copy.max;
+            g->point_count = 2;
+            set_status(e, false, "Alt+drag copies the rectangle under the cursor");
+            return;
+        }
+    }
     set_status(e, false, "Drag a rectangle");
+}
+
+/* The newest closed shape that the rect overlaps or touches takes the union.
+   Older shapes are left alone, so the last room drawn is the one you extend. */
+static int union_rect_into_shapes(Editor* e, Rect r, int* dropped) {
+    Vec2 polygon[LEVEL_MAX_WALLS];
+    for (int i = e->level.shape_count - 1; i >= 0; i--) {
+        const Shape* shape = &e->level.shapes[i];
+        if (!shape->closed) continue;
+        int count = level_shape_polygon(&e->level, shape->id, polygon,
+                                        LEVEL_MAX_WALLS);
+        if (count < 3) continue;
+        if (!rect_overlaps(polygon_bounds(polygon, count), r)) continue;
+        if (level_union_rect(&e->level, shape->id, r, dropped) == LEVEL_UNION_OK) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static void finish_rect_drag(Editor* e, bool have_pointer) {
@@ -1956,19 +1989,56 @@ static void finish_rect_drag(Editor* e, bool have_pointer) {
     }
     Vec2 a = g->press_world;
     Vec2 b = g->cur_world;
-    if (fabsf(b.x - a.x) < e->grid_size || fabsf(b.y - a.y) < e->grid_size) {
+    bool copy = g->kind == GESTURE_RECT_COPY;
+    ShapeId source = g->shape;
+    Rect source_rect = { g->pts[0], g->pts[1] };
+    if (!copy &&
+        (fabsf(b.x - a.x) < e->grid_size || fabsf(b.y - a.y) < e->grid_size)) {
         set_status(e, true, "Rectangle needs one grid cell on each axis");
         cancel_gesture(e);
         return;
     }
     Rect r = rect_from_points(a, b);
-    ShapeId id = level_add_rect_shape(&e->level, r);
     cancel_gesture(e);
-    if (id == 0) {
-        set_status(e, true, "Could not add the rectangle");
-        return;
+
+    int dropped = 0;
+    if (copy) {
+        Vec2 delta = v2_sub(b, a);
+        Rect moved = rect_from_points(v2_add(source_rect.min, delta),
+                                      v2_add(source_rect.max, delta));
+        LevelUnion result = level_union_rect(&e->level, source, moved, &dropped);
+        if (result == LEVEL_UNION_INVALID) {
+            set_status(e, true, "Could not copy the rectangle");
+            return;
+        }
+        if (result == LEVEL_UNION_DISJOINT) {
+            if (level_add_rect_shape(&e->level, moved) == 0) {
+                set_status(e, true, "Could not add the copied rectangle");
+                return;
+            }
+            commit(e, "Copied rectangle placed as a new shape");
+            auto_select_after_action(e);
+            return;
+        }
+    } else {
+        if (!union_rect_into_shapes(e, r, &dropped)) {
+            if (level_add_rect_shape(&e->level, r) == 0) {
+                set_status(e, true, "Could not add the rectangle");
+                return;
+            }
+            commit(e, "Rectangle added");
+            auto_select_after_action(e);
+            return;
+        }
     }
-    commit(e, "Rectangle added");
+
+    if (dropped > 0) {
+        set_status(e, false, "Rectangle joined; %d door%s dropped",
+                   dropped, dropped == 1 ? "" : "s");
+        commit(e, NULL);
+    } else {
+        commit(e, "Rectangle joined");
+    }
     auto_select_after_action(e);
 }
 
@@ -2053,6 +2123,10 @@ static void draw_shape_preview(const Editor* e) {
         return;
     }
     Rect r = rect_from_points(g->press_world, g->cur_world);
+    if (g->kind == GESTURE_RECT_COPY) {
+        Vec2 delta = v2_sub(g->cur_world, g->press_world);
+        r = rect_from_points(v2_add(g->pts[0], delta), v2_add(g->pts[1], delta));
+    }
     ImDrawList* dl = igGetWindowDrawList();
     ImVec2 a = world_to_screen(e, r.min);
     ImVec2 b = world_to_screen(e, r.max);

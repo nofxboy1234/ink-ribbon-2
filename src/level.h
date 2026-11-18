@@ -125,6 +125,26 @@ int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap);
 /* A new closed shape whose four walls are rect, in loop order. Returns 0 when
    the rectangle is degenerate or the level is full. */
 ShapeId level_add_rect_shape(Level* level, Rect rect);
+/* The result of adding a rectangle to a shape. A disjoint rectangle is the
+   normal way to start a second shape, so it is not an error. */
+typedef enum {
+    LEVEL_UNION_OK = 0,
+    LEVEL_UNION_DISJOINT,
+    LEVEL_UNION_INVALID,
+} LevelUnion;
+
+/* Rebuilds the shape's outline as the orthogonal union of its own area and
+   rect, as one closed loop with no interior walls. The union splits the
+   geometry on its own x and y coordinates, so it is exact for any
+   axis-aligned shape. LEVEL_UNION_DISJOINT means the rect shares no edge and
+   no area with the shape. Doors on walls the union keeps are re-hosted at the
+   same world centre; doors on walls that become interior are dropped and
+   counted in doors_dropped. */
+LevelUnion level_union_rect(Level* level, ShapeId shape, Rect rect,
+                            int* doors_dropped);
+/* The largest rectangle of the shape's area that contains p, with edges on
+   the shape's own coordinate lines. Used by Alt+drag on the Rectangle tool. */
+bool level_shape_rect_at(const Level* level, ShapeId shape, Vec2 p, Rect* out);
 /* Reshape: slide one wall along its normal by delta, carrying the endpoints of
    every wall that shares them. Clamps delta so no neighbor would collapse or
    flip. Returns true and writes the applied delta when it moved. */

@@ -352,6 +352,388 @@ int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap) {
     return shape_loop(level, id, out, cap);
 }
 
+/* ---- Orthogonal rectangle union --------------------------------------- */
+
+#define UNION_MAX_LINES (LEVEL_MAX_WALLS + 4)
+
+/* The shape's area plus an optional rectangle, cut into cells by every x and
+   y coordinate in the geometry. A cell is wholly inside or outside, so its
+   occupancy is exact and the union boundary needs no clipping code. */
+typedef struct {
+    float xs[UNION_MAX_LINES];
+    float ys[UNION_MAX_LINES];
+    int nx, ny;
+    unsigned char* cell;
+} CellMap;
+
+typedef struct {
+    Vec2 a, b;
+} Edge;
+
+static int cmp_float(const void* pa, const void* pb) {
+    float a = *(const float*)pa;
+    float b = *(const float*)pb;
+    return (a > b) - (a < b);
+}
+
+static int unique_sorted(float* values, int count) {
+    qsort(values, (size_t)count, sizeof values[0], cmp_float);
+    int kept = 0;
+    for (int i = 0; i < count; i++) {
+        if (kept > 0 && fabsf(values[i] - values[kept - 1]) <= ORTHO_EPS) continue;
+        values[kept++] = values[i];
+    }
+    return kept;
+}
+
+static void cell_map_free(CellMap* map) {
+    free(map->cell);
+    map->cell = NULL;
+}
+
+static bool cell_map_build(CellMap* map, const Vec2* polygon, int count,
+                           const Rect* extra) {
+    memset(map, 0, sizeof *map);
+    if (!polygon || count < 3 || count > LEVEL_MAX_WALLS) return false;
+
+    int nx = 0;
+    int ny = 0;
+    for (int i = 0; i < count; i++) {
+        map->xs[nx++] = polygon[i].x;
+        map->ys[ny++] = polygon[i].y;
+    }
+    if (extra) {
+        map->xs[nx++] = extra->min.x;
+        map->xs[nx++] = extra->max.x;
+        map->ys[ny++] = extra->min.y;
+        map->ys[ny++] = extra->max.y;
+    }
+    map->nx = unique_sorted(map->xs, nx);
+    map->ny = unique_sorted(map->ys, ny);
+    if (map->nx < 2 || map->ny < 2) return false;
+
+    int cw = map->nx - 1;
+    int ch = map->ny - 1;
+    size_t cells = (size_t)cw * (size_t)ch;
+    if (cells > (1u << 20)) return false;
+    map->cell = calloc(cells, 1);
+    if (!map->cell) return false;
+
+    for (int j = 0; j < ch; j++) {
+        for (int i = 0; i < cw; i++) {
+            Vec2 center = v2((map->xs[i] + map->xs[i + 1]) * 0.5f,
+                             (map->ys[j] + map->ys[j + 1]) * 0.5f);
+            bool inside = point_in_polygon(polygon, count, center);
+            if (!inside && extra && rect_contains(*extra, center)) inside = true;
+            if (inside) map->cell[i + j * cw] = 1;
+        }
+    }
+    return true;
+}
+
+/* Every occupied cell must be reachable from the first one by sharing a side.
+   A rectangle that only touches a corner fails this, so it starts a new shape
+   instead of producing a boundary that touches itself. */
+static bool cell_map_connected(const CellMap* map) {
+    int cw = map->nx - 1;
+    int ch = map->ny - 1;
+    size_t total = (size_t)cw * (size_t)ch;
+    int first = -1;
+    for (size_t i = 0; i < total; i++) {
+        if (map->cell[i]) {
+            first = (int)i;
+            break;
+        }
+    }
+    if (first < 0) return false;
+
+    unsigned char* seen = calloc(total, 1);
+    int* stack = malloc(total * sizeof(int));
+    if (!seen || !stack) {
+        free(seen);
+        free(stack);
+        return false;
+    }
+    int top = 0;
+    stack[top++] = first;
+    seen[first] = 1;
+    while (top > 0) {
+        int index = stack[--top];
+        int x = index % cw;
+        int y = index / cw;
+        static const int dx[4] = { 1, -1, 0, 0 };
+        static const int dy[4] = { 0, 0, 1, -1 };
+        for (int k = 0; k < 4; k++) {
+            int sx = x + dx[k];
+            int sy = y + dy[k];
+            if (sx < 0 || sy < 0 || sx >= cw || sy >= ch) continue;
+            int next = sx + sy * cw;
+            if (!map->cell[next] || seen[next]) continue;
+            seen[next] = 1;
+            stack[top++] = next;
+        }
+    }
+    bool connected = true;
+    for (size_t i = 0; i < total; i++) {
+        if (map->cell[i] && !seen[i]) {
+            connected = false;
+            break;
+        }
+    }
+    free(seen);
+    free(stack);
+    return connected;
+}
+
+/* Boundary runs with the inside on one fixed side, so the edges chain into a
+   loop. Consecutive unit edges on the same line merge into one wall, which is
+   what removes interior lines and doubled walls. */
+static int boundary_edges(const CellMap* map, Edge* out, int cap) {
+    int cw = map->nx - 1;
+    int ch = map->ny - 1;
+    int n = 0;
+
+    for (int i = 0; i < map->nx; i++) {
+        for (int j = 0; j < ch;) {
+            int left = i > 0 ? map->cell[(i - 1) + j * cw] : 0;
+            int right = i < cw ? map->cell[i + j * cw] : 0;
+            if (left == right) {
+                j++;
+                continue;
+            }
+            bool down = right != 0;
+            int j0 = j;
+            while (j < ch) {
+                left = i > 0 ? map->cell[(i - 1) + j * cw] : 0;
+                right = i < cw ? map->cell[i + j * cw] : 0;
+                if (left == right || (right != 0) != down) break;
+                j++;
+            }
+            if (n >= cap) return -1;
+            out[n++] = (Edge){ v2(map->xs[i], map->ys[down ? j0 : j]),
+                               v2(map->xs[i], map->ys[down ? j : j0]) };
+        }
+    }
+
+    for (int j = 0; j < map->ny; j++) {
+        for (int i = 0; i < cw;) {
+            int below = j < ch ? map->cell[i + j * cw] : 0;
+            int above = j > 0 ? map->cell[i + (j - 1) * cw] : 0;
+            if (below == above) {
+                i++;
+                continue;
+            }
+            bool leftward = below != 0;
+            int i0 = i;
+            while (i < cw) {
+                below = j < ch ? map->cell[i + j * cw] : 0;
+                above = j > 0 ? map->cell[i + (j - 1) * cw] : 0;
+                if (below == above || (below != 0) != leftward) break;
+                i++;
+            }
+            if (n >= cap) return -1;
+            out[n++] = (Edge){ v2(map->xs[leftward ? i : i0], map->ys[j]),
+                               v2(map->xs[leftward ? i0 : i], map->ys[j]) };
+        }
+    }
+    return n;
+}
+
+static int order_loop(const Edge* edges, int count, Vec2* out, int cap) {
+    if (count < 3 || count > cap || count > LEVEL_MAX_WALLS) return -1;
+    bool used[LEVEL_MAX_WALLS] = { false };
+    Vec2 start = edges[0].a;
+    Vec2 cursor = start;
+    int n = 0;
+    int hint = 0;
+    for (int step = 0; step < count; step++) {
+        int pick = -1;
+        for (int k = 0; k < count; k++) {
+            int index = (hint + k) % count;
+            if (!used[index] && v2_equal(edges[index].a, cursor, ORTHO_EPS)) {
+                pick = index;
+                break;
+            }
+        }
+        if (pick < 0) return -1;
+        used[pick] = true;
+        out[n++] = edges[pick].a;
+        cursor = edges[pick].b;
+        hint = pick + 1;
+    }
+    if (!v2_equal(cursor, start, ORTHO_EPS)) return -1;
+    return n;
+}
+
+LevelUnion level_union_rect(Level* level, ShapeId shape, Rect rect,
+                            int* doors_dropped) {
+    if (doors_dropped) *doors_dropped = 0;
+    if (!level || !isfinite(rect.min.x) || !isfinite(rect.min.y) ||
+        !isfinite(rect.max.x) || !isfinite(rect.max.y) ||
+        !(rect.max.x > rect.min.x) || !(rect.max.y > rect.min.y)) {
+        return LEVEL_UNION_INVALID;
+    }
+    const Shape* record = level_shape_by_id_const(level, shape);
+    if (!record || !record->closed) return LEVEL_UNION_INVALID;
+
+    Vec2 polygon[LEVEL_MAX_WALLS];
+    int count = level_shape_polygon(level, shape, polygon, LEVEL_MAX_WALLS);
+    if (count < 3) return LEVEL_UNION_INVALID;
+
+    CellMap map;
+    if (!cell_map_build(&map, polygon, count, &rect)) return LEVEL_UNION_INVALID;
+    bool connected = cell_map_connected(&map);
+    if (!connected) {
+        cell_map_free(&map);
+        return LEVEL_UNION_DISJOINT;
+    }
+
+    Edge edges[LEVEL_MAX_WALLS];
+    int edge_count = boundary_edges(&map, edges, LEVEL_MAX_WALLS);
+    cell_map_free(&map);
+    if (edge_count < 4) return LEVEL_UNION_INVALID;
+
+    Vec2 loop[LEVEL_MAX_WALLS];
+    int walls = order_loop(edges, edge_count, loop, LEVEL_MAX_WALLS);
+    if (walls < 4) return LEVEL_UNION_INVALID;
+    for (int i = 0; i < walls; i++) {
+        if (!wall_ok(loop[i], loop[(i + 1) % walls])) return LEVEL_UNION_INVALID;
+    }
+
+    int old_walls = 0;
+    for (int i = 0; i < level->wall_count; i++) {
+        if (level->walls[i].shape == shape) old_walls++;
+    }
+    if (level->wall_count - old_walls + walls > LEVEL_MAX_WALLS) {
+        return LEVEL_UNION_INVALID;
+    }
+
+    /* A door keeps its world centre when the union keeps its wall. A door on
+       a wall that becomes interior has no wall left to hang on and is dropped. */
+    typedef struct {
+        Vec2 center;
+        float width;
+        bool vertical;
+    } SavedDoor;
+    SavedDoor saved[LEVEL_MAX_DOORS];
+    int saved_count = 0;
+    for (int i = 0; i < level->door_count; i++) {
+        const Door* door = &level->doors[i];
+        const Wall* host = level_wall_by_id_const(level, door->wall);
+        if (!host || host->shape != shape) continue;
+        saved[saved_count].center = level_door_center(level, door);
+        saved[saved_count].width = door->width;
+        saved[saved_count].vertical = wall_is_vertical(host);
+        saved_count++;
+    }
+
+    for (int i = level->wall_count - 1; i >= 0; i--) {
+        if (level->walls[i].shape == shape) remove_wall_at(level, i);
+    }
+    for (int i = 0; i < walls; i++) {
+        level_add_wall_to_shape(level, shape, loop[i], loop[(i + 1) % walls]);
+    }
+    Shape* replacement = level_shape_by_id(level, shape);
+    if (replacement) replacement->closed = true;
+
+    int dropped = 0;
+    for (int i = 0; i < saved_count; i++) {
+        int best = -1;
+        float best_dist = DOOR_THICKNESS + ORTHO_EPS;
+        for (int w = 0; w < level->wall_count; w++) {
+            const Wall* wall = &level->walls[w];
+            if (wall->shape != shape) continue;
+            if (wall_is_vertical(wall) != saved[i].vertical) continue;
+            float d = point_segment_dist(saved[i].center, wall->a, wall->b);
+            if (d < best_dist) {
+                best_dist = d;
+                best = w;
+            }
+        }
+        if (best < 0) {
+            dropped++;
+            continue;
+        }
+        const Wall* wall = &level->walls[best];
+        float t = point_segment_t(saved[i].center, wall->a, wall->b);
+        if (level_add_door(level, wall->id, t, saved[i].width) < 0) dropped++;
+    }
+    if (doors_dropped) *doors_dropped = dropped;
+    return LEVEL_UNION_OK;
+}
+
+bool level_shape_rect_at(const Level* level, ShapeId shape, Vec2 p, Rect* out) {
+    if (!level || !out) return false;
+    const Shape* record = level_shape_by_id_const(level, shape);
+    if (!record || !record->closed) return false;
+
+    Vec2 polygon[LEVEL_MAX_WALLS];
+    int count = level_shape_polygon(level, shape, polygon, LEVEL_MAX_WALLS);
+    if (count < 3) return false;
+
+    CellMap map;
+    if (!cell_map_build(&map, polygon, count, NULL)) return false;
+    int cw = map.nx - 1;
+    int ch = map.ny - 1;
+
+    int cell = -1;
+    for (int j = 0; j < ch && cell < 0; j++) {
+        for (int i = 0; i < cw; i++) {
+            if (!map.cell[i + j * cw]) continue;
+            Rect box = { { map.xs[i], map.ys[j] },
+                         { map.xs[i + 1], map.ys[j + 1] } };
+            if (rect_contains(box, p)) {
+                cell = i + j * cw;
+                break;
+            }
+        }
+    }
+    if (cell < 0) {
+        cell_map_free(&map);
+        return false;
+    }
+
+    int x0 = cell % cw;
+    int x1 = x0;
+    int y0 = cell / cw;
+    int y1 = y0;
+    while (x0 > 0 && map.cell[(x0 - 1) + y0 * cw]) x0--;
+    while (x1 + 1 < cw && map.cell[(x1 + 1) + y0 * cw]) x1++;
+    for (;;) {
+        bool grown = false;
+        if (y0 > 0) {
+            bool solid = true;
+            for (int x = x0; x <= x1; x++) {
+                if (!map.cell[x + (y0 - 1) * cw]) {
+                    solid = false;
+                    break;
+                }
+            }
+            if (solid) {
+                y0--;
+                grown = true;
+            }
+        }
+        if (y1 + 1 < ch) {
+            bool solid = true;
+            for (int x = x0; x <= x1; x++) {
+                if (!map.cell[x + (y1 + 1) * cw]) {
+                    solid = false;
+                    break;
+                }
+            }
+            if (solid) {
+                y1++;
+                grown = true;
+            }
+        }
+        if (!grown) break;
+    }
+    *out = (Rect){ { map.xs[x0], map.ys[y0] }, { map.xs[x1 + 1], map.ys[y1 + 1] } };
+    cell_map_free(&map);
+    return true;
+}
+
 int level_shape_at(const Level* level, Vec2 p) {
     if (!level) return -1;
 

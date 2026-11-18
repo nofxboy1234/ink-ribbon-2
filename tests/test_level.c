@@ -351,6 +351,186 @@ static void test_stairs(void) {
           "reject stairs with unknown direction");
 }
 
+static bool wall_ok_for_test(const Wall* wall) {
+    float dx = fabsf(wall->b.x - wall->a.x);
+    float dy = fabsf(wall->b.y - wall->a.y);
+    return (dx <= 0.001f) != (dy <= 0.001f);
+}
+
+static void test_rect_union(void) {
+    Level level;
+    level_init(&level);
+
+    check(level_add_rect_shape(&level, (Rect){ { 0, 0 }, { 0, 10 } }) == 0,
+          "rect shape rejects a zero-width rectangle");
+    check(level_add_rect_shape(&level, (Rect){ { 0, 0 }, { INFINITY, 10 } }) == 0,
+          "rect shape rejects a non-finite rectangle");
+
+    Rect first = { { 0, 0 }, { 100, 100 } };
+    ShapeId shape = level_add_rect_shape(&level, first);
+    check(shape == 1 && level.wall_count == 4 && level.shape_count == 1 &&
+              level.shapes[0].closed,
+          "rect shape is one closed four-wall shape");
+    Vec2 polygon[LEVEL_MAX_WALLS];
+    check(level_shape_polygon(&level, shape, polygon, LEVEL_MAX_WALLS) == 4,
+          "rect shape has a four point polygon");
+
+    int dropped = -1;
+    check(level_union_rect(&level, shape, first, &dropped) == LEVEL_UNION_OK,
+          "union with its own rectangle keeps the shape");
+    check(level.wall_count == 4 && dropped == 0,
+          "a redundant union leaves the outline alone");
+
+    Level disjoint_before = level;
+    check(level_union_rect(&level, shape, (Rect){ { 200, 200 }, { 300, 300 } },
+                           &dropped) == LEVEL_UNION_DISJOINT,
+          "a separate rectangle is disjoint");
+    check(memcmp(&level, &disjoint_before, sizeof level) == 0,
+          "a disjoint union leaves the level byte-identical");
+
+    check(level_union_rect(&level, shape, (Rect){ { 100, 100 }, { 200, 200 } },
+                           &dropped) == LEVEL_UNION_DISJOINT,
+          "a corner-touching rectangle is disjoint");
+
+    Rect overlap = { { 60, 60 }, { 160, 160 } };
+    check(level_union_rect(&level, shape, overlap, &dropped) == LEVEL_UNION_OK,
+          "overlapping rectangles union");
+    check(level.shape_count == 1 && level.wall_count == 8,
+          "the union is one shape with a merged eight-wall outline");
+    int count = level_shape_polygon(&level, shape, polygon, LEVEL_MAX_WALLS);
+    check(count == 8 &&
+              nearf(polygon_area(polygon, count), 100.0f * 100.0f + 100.0f * 100.0f -
+                                                      40.0f * 40.0f),
+          "the union outline covers both rectangles once");
+
+    Level edge;
+    level_init(&edge);
+    ShapeId edge_shape = level_add_rect_shape(&edge, (Rect){ { 0, 0 }, { 100, 100 } });
+    check(level_union_rect(&edge, edge_shape, (Rect){ { 100, 0 }, { 200, 50 } },
+                           NULL) == LEVEL_UNION_OK,
+          "a rectangle sharing an edge unions");
+    check(edge.wall_count == 6 &&
+              level_shape_polygon(&edge, edge_shape, polygon, LEVEL_MAX_WALLS) == 6 &&
+              nearf(polygon_area(polygon, 6), 100.0f * 100.0f + 100.0f * 50.0f),
+          "the shared edge disappears and the union is one six-wall outline");
+
+    Level plus;
+    level_init(&plus);
+    ShapeId bar = level_add_rect_shape(&plus, (Rect){ { 40, 0 }, { 60, 100 } });
+    check(level_union_rect(&plus, bar, (Rect){ { 0, 40 }, { 100, 60 } }, NULL) ==
+              LEVEL_UNION_OK,
+          "the vertical bar takes the horizontal bar");
+    check(level_union_rect(&plus, bar, (Rect){ { 40, 40 }, { 60, 60 } }, NULL) ==
+              LEVEL_UNION_OK,
+          "a third overlapping rectangle joins the plus");
+    check(plus.wall_count == 12 &&
+              level_shape_polygon(&plus, bar, polygon, LEVEL_MAX_WALLS) == 12 &&
+              nearf(polygon_area(polygon, 12), 3600.0f),
+          "a plus built from three rectangles costs only its twelve-wall outline");
+    bool orthogonal = true;
+    for (int i = 0; i < plus.wall_count; i++) {
+        if (!wall_ok_for_test(&plus.walls[i])) orthogonal = false;
+    }
+    check(orthogonal, "every union wall stays orthogonal");
+
+    Rect arm;
+    check(level_shape_rect_at(&plus, bar, v2(50, 10), &arm) &&
+              nearv(arm.min, v2(40, 0)) && nearv(arm.max, v2(60, 100)),
+          "shape_rect_at returns the vertical bar under the point");
+    check(level_shape_rect_at(&plus, bar, v2(10, 50), &arm) &&
+              nearv(arm.min, v2(0, 40)) && nearv(arm.max, v2(100, 60)),
+          "shape_rect_at returns the horizontal bar under the point");
+    check(!level_shape_rect_at(&plus, bar, v2(500, 500), &arm),
+          "shape_rect_at rejects a point outside the shape");
+
+    /* Doors keep their world centre when their wall survives, and drop when
+       the wall becomes interior. */
+    Level doors;
+    level_init(&doors);
+    ShapeId door_shape = level_add_rect_shape(&doors, (Rect){ { 0, 0 }, { 100, 100 } });
+    int top = -1;
+    for (int i = 0; i < doors.wall_count; i++) {
+        if (fabsf(doors.walls[i].a.y) <= 0.001f &&
+            fabsf(doors.walls[i].b.y) <= 0.001f) {
+            top = i;
+        }
+    }
+    check(top >= 0, "find the top wall for the door test");
+    check(level_add_door(&doors, doors.walls[top].id, 0.3f, 20) == 0,
+          "add a door to the top wall");
+    check(level_union_rect(&doors, door_shape, (Rect){ { 0, 100 }, { 50, 200 } },
+                           &dropped) == LEVEL_UNION_OK &&
+              dropped == 0 && doors.door_count == 1,
+          "a union that keeps the host wall keeps its door");
+    check(nearv(level_door_center(&doors, &doors.doors[0]), v2(30, 0)),
+          "the re-hosted door keeps its world centre");
+
+    Level gone;
+    level_init(&gone);
+    ShapeId gone_shape = level_add_rect_shape(&gone, (Rect){ { 0, 0 }, { 100, 100 } });
+    int right = -1;
+    for (int i = 0; i < gone.wall_count; i++) {
+        if (wall_is_vertical(&gone.walls[i]) &&
+            fabsf(gone.walls[i].a.x - 100.0f) <= 0.001f) {
+            right = i;
+        }
+    }
+    check(right >= 0, "find the right wall for the drop test");
+    check(level_add_door(&gone, gone.walls[right].id, 0.5f, 20) == 0,
+          "add a door to the right wall");
+    check(level_union_rect(&gone, gone_shape, (Rect){ { 100, 0 }, { 200, 100 } },
+                           &dropped) == LEVEL_UNION_OK &&
+              dropped == 1 && gone.door_count == 0,
+          "a door whose wall becomes interior is dropped and counted");
+
+    Level free;
+    level_init(&free);
+    ShapeId free_shape = level_add_shape(&free);
+    level_add_wall_to_shape(&free, free_shape, v2(0, 0), v2(10, 0));
+    level_add_wall_to_shape(&free, free_shape, v2(10, 0), v2(10, 10));
+    level_add_wall_to_shape(&free, free_shape, v2(10, 10), v2(0, 10));
+    level_add_wall_to_shape(&free, free_shape, v2(0, 10), v2(0, 0));
+    check(level_close_shape(&free, free_shape), "close an off-grid shape");
+    check(level_union_rect(&free, free_shape, (Rect){ { 5, 5 }, { 15, 15 } },
+                           NULL) == LEVEL_UNION_OK &&
+              free.wall_count == 8 &&
+              level_shape_polygon(&free, free_shape, polygon, LEVEL_MAX_WALLS) == 8 &&
+              nearf(polygon_area(polygon, 8), 175.0f),
+          "the union works on coordinates that are not on the editor grid");
+}
+
+static void test_rect_union_save_load(void) {
+    Level level;
+    level_init(&level);
+    ShapeId shape = level_add_rect_shape(&level, (Rect){ { 0, 0 }, { 100, 100 } });
+    check(level_union_rect(&level, shape, (Rect){ { 60, 60 }, { 160, 160 } },
+                           NULL) == LEVEL_UNION_OK,
+          "prepare a union for the roundtrip");
+
+    char path[256];
+    snprintf(path, sizeof path, "/tmp/ink_ribbon_union_%ld.lvl", (long)getpid());
+    LevelError err;
+    check(level_save(&level, path, &err), "save a unioned level");
+
+    Level loaded;
+    level_init(&loaded);
+    check(level_load(&loaded, path, &err), "load a unioned level");
+    check(loaded.shape_count == 1 && loaded.wall_count == 8 &&
+              loaded.shapes[0].closed,
+          "the union survives save and load as one closed shape");
+    Vec2 polygon[LEVEL_MAX_WALLS];
+    check(level_shape_polygon(&loaded, loaded.shapes[0].id, polygon,
+                              LEVEL_MAX_WALLS) == 8 &&
+              nearf(polygon_area(polygon, 8), 18400.0f),
+          "the loaded union keeps its outline and area");
+    check(level_union_rect(&loaded, loaded.shapes[0].id,
+                           (Rect){ { -40, -40 }, { 20, 20 } }, NULL) ==
+              LEVEL_UNION_OK &&
+              loaded.wall_count == 12,
+          "a loaded union accepts the next rectangle");
+    remove(path);
+}
+
 static void test_save_load(void) {
     Level src;
     level_init(&src);
@@ -1232,6 +1412,8 @@ int main(void) {
     test_doors();
     test_labels();
     test_stairs();
+    test_rect_union();
+    test_rect_union_save_load();
     test_save_load();
     test_stair_migration();
     test_bounds();
