@@ -42,13 +42,13 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 
 - Press 1 to 6 for Select, Line, Rectangle, Door, Stairs, and Label. After a drawing action the editor returns to Select. Hold Q while the action completes to keep the tool.
 - Drag a rectangle with the Rectangle tool. A rectangle that overlaps or shares an edge with a shape joins it. The outline is rebuilt as one closed loop, so a plus or L shaped room built from several rectangles has no interior lines and no doubled walls. A rectangle that only touches a corner starts a new shape.
-- Alt+drag on the Rectangle tool copies the largest rectangle of the shape under the cursor and unions the copy at the drag offset.
 - Hover a wall with the Door tool. A white ghost shows the door at the panel width, centred on the point projected onto the wall and snapped along it. Click to place the door. Drag either end with Select to change its length.
 - Drag a rectangle with the Stairs tool. The run takes the panel's direction and step count. Flip reverses which end the tread fade starts from, and the flag is saved with the level. Drag any stair edge with Select to resize the footprint.
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
 - Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
 - Click to select, shift-click to add, Ctrl-click to remove, or drag from empty canvas to marquee select. Delete removes the whole selection in one step. Dragging a wall edge reshapes its shape, and dragging labels or stairs moves them together.
+- Shift-drag along a wall to mark a section, then press Delete to cut it out. The wall splits and the rest of the shape stays. A door inside the section goes with it.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
@@ -140,7 +140,7 @@ The script assumes a 1280x800 window and the default panel widths, and it uses i
 | `tools/verify.sh` | end-to-end X11 check with pixel and coordinate evidence |
 | `tools/shot.sh` | build, launch, drive, screenshot |
 | `tools/xvfb.sh` | private X display, per-run process tags, cleanup |
-| `tools/focus_drop.py` | drop X focus the way alt+tab does |
+| `tools/focus_drop.py` | drop X focus the way switching windows does |
 | `tools/gen_demo_map.py` | regenerate the demo level |
 | `tools/level_info.c` | print counts and bounds for a level file |
 
@@ -149,7 +149,7 @@ Only `main.c` and `editor.c` include sokol or ImGui headers. `make test` links t
 ## Limits
 
 - Walls are horizontal or vertical only, and an edge slides only along its normal, so a wall cannot be dragged diagonally or turned into a diagonal. Deleting an edge cascades its doors and reopens the shape if the loop breaks.
-- The union rebuilds a shape from its current outline, not from the rectangles that formed it. Alt+drag copies the largest rectangle of the current area under the cursor.
+- The union rebuilds a shape from its current outline, not from the rectangles that formed it.
 - A union drops a door whose wall becomes interior. The status strip reports how many doors were dropped.
 - Fixed capacities are 512 shapes, 512 walls, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
 - One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.

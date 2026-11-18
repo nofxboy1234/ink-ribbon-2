@@ -142,9 +142,6 @@ typedef enum {
    counted in doors_dropped. */
 LevelUnion level_union_rect(Level* level, ShapeId shape, Rect rect,
                             int* doors_dropped);
-/* The largest rectangle of the shape's area that contains p, with edges on
-   the shape's own coordinate lines. Used by Alt+drag on the Rectangle tool. */
-bool level_shape_rect_at(const Level* level, ShapeId shape, Vec2 p, Rect* out);
 /* Reshape: slide one wall along its normal by delta, carrying the endpoints of
    every wall that shares them. Clamps delta so no neighbor would collapse or
    flip. Returns true and writes the applied delta when it moved. */

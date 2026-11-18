@@ -433,16 +433,6 @@ static void test_rect_union(void) {
     }
     check(orthogonal, "every union wall stays orthogonal");
 
-    Rect arm;
-    check(level_shape_rect_at(&plus, bar, v2(50, 10), &arm) &&
-              nearv(arm.min, v2(40, 0)) && nearv(arm.max, v2(60, 100)),
-          "shape_rect_at returns the vertical bar under the point");
-    check(level_shape_rect_at(&plus, bar, v2(10, 50), &arm) &&
-              nearv(arm.min, v2(0, 40)) && nearv(arm.max, v2(100, 60)),
-          "shape_rect_at returns the horizontal bar under the point");
-    check(!level_shape_rect_at(&plus, bar, v2(500, 500), &arm),
-          "shape_rect_at rejects a point outside the shape");
-
     /* Doors keep their world centre when their wall survives, and drop when
        the wall becomes interior. */
     Level doors;

@@ -70,10 +70,6 @@ matching new wall. A door on a wall that survives keeps its exact centre. A door
 on a wall that becomes interior is dropped and counted. The union is ordinary
 walls when saved, so the level format did not change.
 
-Alt+drag uses the same cell decomposition inside `level_shape_rect_at` to find
-the largest rectangle of the area that contains the press point. The copy is
-unioned at the drag offset.
-
 ## Fixed interaction choices
 
 The shipped UI has six tools: Select, Line, Rectangle, Door, Stairs, and Label,
@@ -107,8 +103,8 @@ preserved. The Snap checkbox and grid size remain user controls.
 
 ## Alternatives rejected
 
-- Rectangle list as canonical geometry. It keeps each rectangle for Alt+drag cut
-  and paste, but every Select reshape and every wall delete would desync the
+- Rectangle list as canonical geometry. It keeps each rectangle as editable
+  geometry, but every Select reshape and every wall delete would desync the
   list from the outline, so the shape would have two sources of truth. The
   outline is the observable object, so it is the model.
 - Orthogonal polygon clipping. It is exact but needs vertex classification and
@@ -127,9 +123,8 @@ preserved. The Snap checkbox and grid size remain user controls.
 - Fixed capacities (512 shapes, 512 walls, 256 doors, 128 labels, 64 stairs) are
   enough for a floor plan and keep the format and snapshots simple. Capacity
   failure is reported in the status line.
-- The union loses which rectangles formed a shape. Alt+drag copies the largest
-  rectangle of the current area under the cursor, which matches a plain
-  rectangle shape exactly and approximates a concave one.
+- The union loses which rectangles formed a shape. The outline and the area
+  are what later edits and the file format need.
 - A union that removes a wall removes its doors. The count is reported.
 - Selection is a bounded set per object kind plus a primary reference. It is
   cleared when an undo changes pool counts, so indices never retarget silently.

@@ -87,17 +87,16 @@ typedef enum {
     GESTURE_NONE = 0,
     GESTURE_CHAIN,
     GESTURE_MARQUEE,
-    /* Alt+drag in Select marks a section of one wall to cut. */
+    /* Shift+drag in Select marks a section of one wall to cut. */
     GESTURE_SPAN,
     GESTURE_MOVE,
     GESTURE_RESHAPE,
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
     GESTURE_STAIRS_RESIZE,
-    /* The Rectangle tool drags a new rectangle, or Alt+drag copies the
-       rectangle under the cursor. The Stairs tool drags a stair footprint. */
+    /* The Rectangle tool drags a new rectangle. The Stairs tool drags a stair
+       footprint. */
     GESTURE_RECT_DRAW,
-    GESTURE_RECT_COPY,
     GESTURE_STAIRS_DRAW,
     /* A Line press waits for the release to tell a click from a plain drag. */
     GESTURE_LINE_PENDING,
@@ -186,9 +185,9 @@ struct Editor {
     Tool tool;
     Selection selection;
     Gesture gesture;
-    /* The section of one wall that Select marked with Alt+drag. It sits beside
-       the selection instead of inside it, so selecting, reshaping, and cutting
-       never share a flag. */
+    /* The section of one wall that Select marked with Shift+drag. It sits
+       beside the selection instead of inside it, so selecting, reshaping, and
+       cutting never share a flag. */
     WallId span_wall;
     float span_t0;
     float span_t1;
@@ -230,7 +229,7 @@ static const char* TOOL_NAMES[TOOL_COUNT] = {
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click an object to select it, drag empty canvas to marquee, drag a wall edge to reshape, Alt+drag a wall to cut a section",
+    "click an object to select it, drag empty canvas to marquee, drag a wall edge to reshape, Shift+drag a wall to cut a section",
     "click to add a wall; click the first point or press Enter to close the chain",
     "drag a rectangle; overlapping rectangles union into one outline",
     "hover a wall and click to place a door; drag its ends with Select to resize",
@@ -366,7 +365,6 @@ static bool gesture_is_drag(const Editor* e) {
            e->gesture.kind == GESTURE_DOOR_RESIZE ||
            e->gesture.kind == GESTURE_STAIRS_RESIZE ||
            e->gesture.kind == GESTURE_RECT_DRAW ||
-           e->gesture.kind == GESTURE_RECT_COPY ||
            e->gesture.kind == GESTURE_STAIRS_DRAW ||
            e->gesture.kind == GESTURE_LINE_PENDING ||
            e->gesture.kind == GESTURE_SPAN ||
@@ -1846,10 +1844,33 @@ static void update_drag(Editor* e, bool have_pointer) {
                 break;
             }
             if (down) {
+                if (have_pointer &&
+                    screen_dist(io->MousePos, v2_to_im(g->press_screen)) >= 4.0f) {
+                    g->moved = true;
+                }
                 float t = point_segment_t(world, wall->a, wall->b);
                 if (e->snap) t = snap_wall_t(wall, t, e->grid_size);
                 e->span_t1 = t;
-                g->moved = true;
+                break;
+            }
+            if (!g->moved) {
+                /* A shift press that stayed put is the shift-click selection
+                   it has always been, at the object under the press. */
+                Hit hit = hit_test(e, g->press_world);
+                Target target;
+                target_from_hit(e, hit, &target);
+                span_clear(e);
+                if (target.kind != SEL_NONE &&
+                    !(target.kind == SEL_WALL && target.wall_count <= 0)) {
+                    target_add(e, &target);
+                    if (target.index >= 0) {
+                        sel_set_primary(e, target.kind, target.index);
+                    }
+                    int n = sel_count(&e->selection);
+                    set_status(e, false, "%d object%s selected", n,
+                               n == 1 ? "" : "s");
+                }
+                cancel_gesture(e);
                 break;
             }
             float t0 = e->span_t0;
@@ -2170,21 +2191,6 @@ static void begin_rect_drag(Editor* e, Vec2 world, ImVec2 mouse) {
     g->press_world = snap_grid(world, e->grid_size);
     g->cur_world = g->press_world;
     g->press_screen = v2(mouse.x, mouse.y);
-    if (igGetIO()->KeyAlt) {
-        int index = level_shape_at(&e->level, world);
-        Rect copy;
-        if (index >= 0 && level_shape_rect_at(&e->level,
-                                              e->level.shapes[index].id,
-                                              world, &copy)) {
-            g->kind = GESTURE_RECT_COPY;
-            g->shape = e->level.shapes[index].id;
-            g->pts[0] = copy.min;
-            g->pts[1] = copy.max;
-            g->point_count = 2;
-            set_status(e, false, "Alt+drag copies the rectangle under the cursor");
-            return;
-        }
-    }
     set_status(e, false, "Drag a rectangle");
 }
 
@@ -2209,18 +2215,14 @@ static int union_rect_into_shapes(Editor* e, Rect r, int* dropped) {
 
 static void finish_rect_drag(Editor* e, bool have_pointer) {
     Gesture* g = &e->gesture;
-    if (g->kind != GESTURE_RECT_DRAW && g->kind != GESTURE_RECT_COPY) return;
+    if (g->kind != GESTURE_RECT_DRAW) return;
     if (have_pointer) {
         g->cur_world =
             snap_grid(screen_to_world(e, igGetIO()->MousePos), e->grid_size);
     }
     Vec2 a = g->press_world;
     Vec2 b = g->cur_world;
-    bool copy = g->kind == GESTURE_RECT_COPY;
-    ShapeId source = g->shape;
-    Rect source_rect = { g->pts[0], g->pts[1] };
-    if (!copy &&
-        (fabsf(b.x - a.x) < e->grid_size || fabsf(b.y - a.y) < e->grid_size)) {
+    if (fabsf(b.x - a.x) < e->grid_size || fabsf(b.y - a.y) < e->grid_size) {
         set_status(e, true, "Rectangle needs one grid cell on each axis");
         cancel_gesture(e);
         return;
@@ -2229,34 +2231,14 @@ static void finish_rect_drag(Editor* e, bool have_pointer) {
     cancel_gesture(e);
 
     int dropped = 0;
-    if (copy) {
-        Vec2 delta = v2_sub(b, a);
-        Rect moved = rect_from_points(v2_add(source_rect.min, delta),
-                                      v2_add(source_rect.max, delta));
-        LevelUnion result = level_union_rect(&e->level, source, moved, &dropped);
-        if (result == LEVEL_UNION_INVALID) {
-            set_status(e, true, "Could not copy the rectangle");
+    if (!union_rect_into_shapes(e, r, &dropped)) {
+        if (level_add_rect_shape(&e->level, r) == 0) {
+            set_status(e, true, "Could not add the rectangle");
             return;
         }
-        if (result == LEVEL_UNION_DISJOINT) {
-            if (level_add_rect_shape(&e->level, moved) == 0) {
-                set_status(e, true, "Could not add the copied rectangle");
-                return;
-            }
-            commit(e, "Copied rectangle placed as a new shape");
-            auto_select_after_action(e);
-            return;
-        }
-    } else {
-        if (!union_rect_into_shapes(e, r, &dropped)) {
-            if (level_add_rect_shape(&e->level, r) == 0) {
-                set_status(e, true, "Could not add the rectangle");
-                return;
-            }
-            commit(e, "Rectangle added");
-            auto_select_after_action(e);
-            return;
-        }
+        commit(e, "Rectangle added");
+        auto_select_after_action(e);
+        return;
     }
 
     if (dropped > 0) {
@@ -2309,8 +2291,7 @@ static void finish_stairs_drag(Editor* e, bool have_pointer) {
 
 static void update_shape_drag(Editor* e, bool have_pointer) {
     Gesture* g = &e->gesture;
-    if (g->kind != GESTURE_RECT_DRAW && g->kind != GESTURE_RECT_COPY &&
-        g->kind != GESTURE_STAIRS_DRAW) {
+    if (g->kind != GESTURE_RECT_DRAW && g->kind != GESTURE_STAIRS_DRAW) {
         return;
     }
     if (have_pointer && igGetIO()->MouseDown[0]) {
@@ -2326,15 +2307,10 @@ static void update_shape_drag(Editor* e, bool have_pointer) {
 
 static void draw_shape_preview(const Editor* e) {
     const Gesture* g = &e->gesture;
-    if (g->kind != GESTURE_RECT_DRAW && g->kind != GESTURE_RECT_COPY &&
-        g->kind != GESTURE_STAIRS_DRAW) {
+    if (g->kind != GESTURE_RECT_DRAW && g->kind != GESTURE_STAIRS_DRAW) {
         return;
     }
     Rect r = rect_from_points(g->press_world, g->cur_world);
-    if (g->kind == GESTURE_RECT_COPY) {
-        Vec2 delta = v2_sub(g->cur_world, g->press_world);
-        r = rect_from_points(v2_add(g->pts[0], delta), v2_add(g->pts[1], delta));
-    }
     ImDrawList* dl = igGetWindowDrawList();
     ImVec2 a = world_to_screen(e, r.min);
     ImVec2 b = world_to_screen(e, r.max);
@@ -2345,7 +2321,7 @@ static void draw_shape_preview(const Editor* e) {
     ImDrawList_AddRectEx(dl, a, b, col32(ACCENT_COL), 0.0f, 1.0f, 0);
 }
 
-/* Alt+drag marks a section of the wall under the press. The start is the
+/* Shift+drag marks a section of the wall under the press. The start is the
    projected parameter; the drag moves the other end along the same wall, and
    Snap locks that coordinate to the grid. */
 static void begin_span(Editor* e, int wall_index, float t, Vec2 world,
@@ -2371,10 +2347,11 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
 
-    /* Alt+drag on a wall starts a span. Any other press clears the old span
-       first and then runs the normal selection path, so the two never claim
-       the same click. */
-    if (io->KeyAlt && !shift && !ctrl) {
+    /* Shift+drag on a wall starts a span. A shift press that never travels
+       still adds the object under it to the selection, and a shift drag off a
+       wall stays the additive marquee. Any other press clears the old span
+       first and then runs the normal selection path. */
+    if (shift && !ctrl) {
         float t = 0.0f;
         int wall = level_nearest_wall(&e->level, world,
                                       HIT_TOL_PX / e->camera.zoom, &t);
@@ -2835,7 +2812,6 @@ static void draw_left_panel(Editor* e) {
         case TOOL_RECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
             small_note("Drag a grid-aligned rectangle. Overlapping rectangles union; one that only touches keeps its own outline.");
-            small_note("Alt+drag copies the rectangle under the cursor.");
             break;
         case TOOL_DOOR:
             igDummy((ImVec2){ 0.0f, 3.0f });
@@ -2868,7 +2844,7 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_SELECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Alt+drag along a wall to mark a section, then press Delete to cut it out.");
+            small_note("Shift+drag along a wall to mark a section, then press Delete to cut it out.");
             break;
         case TOOL_COUNT:
         default:
