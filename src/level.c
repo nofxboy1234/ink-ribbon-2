@@ -994,6 +994,81 @@ bool level_move_walls(Level* level, const bool* selected, int count, Vec2 delta)
     return moved;
 }
 
+/* A vertex is a point where wall endpoints meet, grouped by coordinate because
+   the level stores walls, not vertices. Moving one corner marks that vertex and
+   then every vertex that must follow: the other end of each wall at a moving
+   vertex, on the axis across that wall, and every other wall that shares the
+   followed vertex. That keeps each wall orthogonal and the outline connected.
+   A chain of collinear walls carries the same coordinate farther. The move is
+   rejected whole when any wall would collapse or turn diagonal. */
+bool level_move_vertex(Level* level, Vec2 from, Vec2 to) {
+    if (!level) return false;
+    if (!isfinite(from.x) || !isfinite(from.y) || !isfinite(to.x) ||
+        !isfinite(to.y)) {
+        return false;
+    }
+    if (v2_equal(from, to, ORTHO_EPS)) return false;
+
+    Vec2 group_pos[LEVEL_MAX_WALLS * 2];
+    bool need_x[LEVEL_MAX_WALLS * 2] = { false };
+    bool need_y[LEVEL_MAX_WALLS * 2] = { false };
+    int a_group[LEVEL_MAX_WALLS];
+    int b_group[LEVEL_MAX_WALLS];
+    int group_count = 0;
+    int from_group = -1;
+    for (int i = 0; i < level->wall_count; i++) {
+        a_group[i] = endpoint_group(group_pos, &group_count, level->walls[i].a);
+        b_group[i] = endpoint_group(group_pos, &group_count, level->walls[i].b);
+        if (from_group < 0 && v2_equal(level->walls[i].a, from, ORTHO_EPS)) {
+            from_group = a_group[i];
+        }
+        if (from_group < 0 && v2_equal(level->walls[i].b, from, ORTHO_EPS)) {
+            from_group = b_group[i];
+        }
+    }
+    if (from_group < 0) return false;
+    need_x[from_group] = true;
+    need_y[from_group] = true;
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int i = 0; i < level->wall_count; i++) {
+            int axis = wall_slide_axis(&level->walls[i]);
+            if (axis < 0) return false;
+            bool* need = axis == 0 ? need_x : need_y;
+            int a = a_group[i];
+            int b = b_group[i];
+            if (need[a] != need[b]) {
+                need[a] = need[b] = true;
+                changed = true;
+            }
+        }
+    }
+
+    Vec2 delta = v2_sub(to, from);
+    Vec2 next_a[LEVEL_MAX_WALLS];
+    Vec2 next_b[LEVEL_MAX_WALLS];
+    for (int i = 0; i < level->wall_count; i++) {
+        int a = a_group[i];
+        int b = b_group[i];
+        Vec2 na = group_pos[a];
+        Vec2 nb = group_pos[b];
+        if (need_x[a]) na.x += delta.x;
+        if (need_y[a]) na.y += delta.y;
+        if (need_x[b]) nb.x += delta.x;
+        if (need_y[b]) nb.y += delta.y;
+        if (!wall_ok(na, nb)) return false;
+        next_a[i] = na;
+        next_b[i] = nb;
+    }
+    for (int i = 0; i < level->wall_count; i++) {
+        level->walls[i].a = next_a[i];
+        level->walls[i].b = next_b[i];
+    }
+    return true;
+}
+
 int level_add_door(Level* level, WallId wall, float t, float width) {
     if (level->door_count >= LEVEL_MAX_DOORS) return -1;
     if (!level_wall_by_id_const(level, wall)) return -1;

@@ -157,6 +157,11 @@ bool level_slide_edges(Level* level, const bool* selected, int count, Vec2 delta
 /* Rigid translate: moves every selected wall by delta, so their doors follow by
    wall id. Returns true when any wall moved. */
 bool level_move_walls(Level* level, const bool* selected, int count, Vec2 delta);
+/* Moves one corner. Every wall whose endpoint is `from` keeps that endpoint,
+   and each vertex that must follow moves with it so every wall stays
+   orthogonal and the outline stays connected. Rejects a move that would
+   collapse a wall or leave one diagonal, and changes nothing on rejection. */
+bool level_move_vertex(Level* level, Vec2 from, Vec2 to);
 /* Index of the closed shape whose outline contains p, or -1. */
 int level_shape_at(const Level* level, Vec2 p);
 bool level_delete_wall(Level* level, int wall_index);

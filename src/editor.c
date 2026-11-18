@@ -23,6 +23,8 @@
 #define DOOR_HOVER_PX 22.0f
 #define CLOSE_TOL_PX 12.0f
 #define DRAG_END_PX 8.0f
+/* A wall corner is a small target, so it answers a press from this close. */
+#define VERTEX_GRAB_PX 7.0f
 /* One look means a near-black canvas and white lines. A wall and a stair
    tread draw at the same faint alpha, and nothing is ever filled. */
 #define CANVAS_BG 0x040404
@@ -88,6 +90,8 @@ typedef enum {
     GESTURE_CHAIN,
     GESTURE_MARQUEE,
     GESTURE_MOVE,
+    /* A press on a wall corner moves that corner and the walls that meet it. */
+    GESTURE_VERTEX,
     GESTURE_RESHAPE,
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
@@ -130,6 +134,8 @@ typedef struct {
     Vec2 cur_world;
     Vec2 anchor;
     Vec2 move_applied;
+    /* The current position of the corner a vertex drag grabbed. */
+    Vec2 vertex;
     int object_index;
     bool walls[LEVEL_MAX_WALLS];
     int ref_wall_x;
@@ -232,7 +238,7 @@ static const char* TOOL_NAMES[TOOL_COUNT] = {
 };
 
 static const char* TOOL_HINTS[TOOL_COUNT] = {
-    "click an object to select it, drag a box to mark wall sections, drag a wall edge to reshape",
+    "click an object to select it, drag a box to mark wall sections, drag a wall edge to reshape, drag a corner to resize",
     "click to add a wall; click the first point or press Enter to close the chain",
     "drag a rectangle; overlapping rectangles union into one outline",
     "hover a wall and click to place a door; drag its ends with Select to resize",
@@ -363,7 +369,8 @@ static bool gesture_active(const Editor* e) {
 }
 
 static bool gesture_is_drag(const Editor* e) {
-    return e->gesture.kind == GESTURE_MOVE || e->gesture.kind == GESTURE_RESHAPE ||
+    return e->gesture.kind == GESTURE_MOVE || e->gesture.kind == GESTURE_VERTEX ||
+           e->gesture.kind == GESTURE_RESHAPE ||
            e->gesture.kind == GESTURE_DOOR_SLIDE ||
            e->gesture.kind == GESTURE_DOOR_RESIZE ||
            e->gesture.kind == GESTURE_STAIRS_RESIZE ||
@@ -1587,6 +1594,28 @@ static void draw_selected_edges(const Editor* e) {
     }
 }
 
+/* Wall endpoints draw as small hollow squares in Select, so the corner handles
+   are visible without competing with the selection accents. Coincident corners
+   draw once. */
+static void draw_vertex_handles(const Editor* e) {
+    if (e->tool != TOOL_SELECT) return;
+    Vec2 points[LEVEL_MAX_WALLS * 2];
+    int count = 0;
+    for (int i = 0; i < e->level.wall_count; i++) {
+        add_vertex(points, &count, e->level.walls[i].a);
+        add_vertex(points, &count, e->level.walls[i].b);
+    }
+    if (count == 0) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    ImU32 col = col32a(WALL_COL, 140);
+    for (int i = 0; i < count; i++) {
+        ImVec2 p = world_to_screen(e, points[i]);
+        ImDrawList_AddRectEx(dl, (ImVec2){ p.x - 3.0f, p.y - 3.0f },
+                             (ImVec2){ p.x + 3.0f, p.y + 3.0f }, col, 0.0f, 1.0f,
+                             0);
+    }
+}
+
 static void draw_selection(Editor* e) {
     sel_prune(e);
     draw_selected_edges(e);
@@ -2053,6 +2082,28 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             break;
         }
+        case GESTURE_VERTEX: {
+            if (down) {
+                Vec2 target = snapped(e, world);
+                if (!v2_equal(target, g->vertex, 0.0001f) &&
+                    level_move_vertex(&e->level, g->vertex, target)) {
+                    g->vertex = target;
+                    g->moved = true;
+                }
+            }
+            if (!down) {
+                if (g->moved) {
+                    commit(e, "Moved a corner");
+                } else if (g->object_index >= 0 &&
+                           g->object_index < e->level.wall_count) {
+                    sel_only(e, SEL_WALL, g->object_index);
+                    sel_set_primary(e, SEL_WALL, g->object_index);
+                    set_status(e, false, "Edge selected");
+                }
+                cancel_gesture(e);
+            }
+            break;
+        }
         case GESTURE_RESHAPE: {
             if (down) {
                 Vec2 raw = v2_sub(world, g->press_world);
@@ -2439,6 +2490,37 @@ static void draw_shape_preview(const Editor* e) {
     ImDrawList_AddRectEx(dl, a, b, col32(ACCENT_COL), 0.0f, 1.0f, 0);
 }
 
+/* Nearest wall endpoint to the pointer within the grab radius. Coincident
+   corners are one handle, so the wall that answers only names a click target;
+   the move itself covers every wall at that point. */
+static int nearest_vertex(const Editor* e, ImVec2 mouse, Vec2* out) {
+    int best = -1;
+    float best_dist = VERTEX_GRAB_PX + 0.001f;
+    for (int i = e->level.wall_count - 1; i >= 0; i--) {
+        const Wall* wall = &e->level.walls[i];
+        Vec2 ends[2] = { wall->a, wall->b };
+        for (int k = 0; k < 2; k++) {
+            float d = screen_dist(mouse, world_to_screen(e, ends[k]));
+            if (d < best_dist) {
+                best_dist = d;
+                best = i;
+                if (out) *out = ends[k];
+            }
+        }
+    }
+    return best;
+}
+
+static void begin_vertex(Editor* e, int wall_index, Vec2 vertex) {
+    Gesture* g = &e->gesture;
+    cancel_gesture(e);
+    g->kind = GESTURE_VERTEX;
+    g->object_index = wall_index;
+    g->vertex = vertex;
+    g->moved = false;
+    set_status(e, false, "Drag the corner");
+}
+
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     ImGuiIO* io = igGetIO();
     bool shift = io->KeyShift;
@@ -2447,6 +2529,17 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     /* A plain press drops the marked sections. Shift and Ctrl presses keep
        them, because those add to the selection instead of starting over. */
     if (!shift && !ctrl) span_clear(e);
+
+    /* A corner wins over the wall it ends, because a reshape press would
+       otherwise swallow the small handle. */
+    if (!shift && !ctrl) {
+        Vec2 vertex;
+        int wall = nearest_vertex(e, mouse, &vertex);
+        if (wall >= 0) {
+            begin_vertex(e, wall, vertex);
+            return;
+        }
+    }
 
     Hit hit = hit_test(e, world);
     if (hit.kind == HIT_NONE) {
@@ -2773,6 +2866,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_walls(e);
     draw_doors(e);
     draw_spans(e);
+    draw_vertex_handles(e);
     if (e->tool == TOOL_DOOR && e->cursor_valid && !gesture_active(e)) {
         draw_door_ghost(e);
     }
@@ -2936,7 +3030,7 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_SELECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Drag a box across walls to mark their crossed sections, then press Delete to cut them out.");
+            small_note("Drag a box across walls to mark their crossed sections, then press Delete to cut them out. Drag a wall corner to resize the lines that meet there.");
             break;
         case TOOL_COUNT:
         default:
@@ -3130,6 +3224,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Shift-click adds; Ctrl-click toggles");
         igTextDisabled("Drag a box to mark wall sections for cutting");
         igTextDisabled("Drag selected edges to reshape them");
+        igTextDisabled("Drag a wall corner to resize the walls that meet there");
         igTextDisabled("Drag a stair edge to resize its footprint");
         igTextDisabled("Drag a group to move walls, doors, labels, or stairs");
         igTextDisabled("Drag a door to slide; drag an end to resize");
@@ -3224,6 +3319,8 @@ static void draw_help_modal(Editor* e) {
     igText("Drag a box to select objects and mark wall sections.");
     igBullet();
     igText("Drag selected edges to reshape them.");
+    igBullet();
+    igText("Drag a wall corner to resize the walls that meet there.");
     igBullet();
     igText("Drag a group to move its walls, doors, labels, and stairs.");
     igBullet();
