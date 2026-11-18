@@ -37,7 +37,7 @@ ImGui clears the pointer position to `-FLT_MAX` when the window loses focus. Nev
 
 ## Tools and gestures
 
-Tools: Select, Line, Label. Number keys 1, 2, 3. Line is the default. The Line chip appears only while Line is active. Switching tools ends any open chain without committing it.
+Tools: Select, Line, Label, Room. Number keys 1, 2, 3, 4. Line is the default. Switching tools ends any open chain without committing it.
 
 ### Line
 
@@ -46,7 +46,7 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 - The first click starts a chain at the grid-snapped point.
 - Each later click uses `snap_ortho(chain_last, cursor_world, grid)` so a segment is horizontal when `|dx| > |dy|`, vertical otherwise, and the free coordinate snaps to the grid.
 - The first click creates a shape with `level_add_shape`. Every later click calls `level_add_wall_to_shape`.
-- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, call `level_close_shape`, then `level_set_shape_fill` with the tool's fill colour. End the chain. A close needs at least four walls; report that when it fails.
+- Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, call `level_close_shape`, then `level_set_shape_fill` with the current Fill palette choice. End the chain. A close needs at least four walls; report that when it fails.
 - `Enter` also closes the chain when it has at least three points. `Esc` ends it open, keeping only the walls already added.
 - `Backspace` removes the last wall added in the current chain and moves the chain tip back. That is a live document mutation; commit history after it.
 - A plain drag does nothing. `Shift` plus drag starts a marquee and clips every crossed wall to the dragged box.
@@ -58,9 +58,15 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 Right-click in Line mode opens a menu built from the last marquee or the click:
 
 - Door appears when the marquee clipped at least one wall. White, Red, and Blue add a door to each covered wall span. A span already contained in a longer span is skipped, so a painted fill border drawn over the same line does not add a second door.
-- Fill appears inside a closed shape when the marquee selected no wall. Red, Blue, and None set the shape fill. Fills are ear-clipped to the shape's own loop.
+- Mode appears inside a closed shape when the marquee selected no wall. Blue, Red, Floor Blue, Floor Red, Hole, and Empty set the shape fill and become the current palette choice. Fills are ear-clipped to the shape's own loop.
 - Stairs appears when the marquee box is at least one grid cell wide and tall, even when it touches a wall. The drag's dominant axis picks the direction, the run is divided by `STAIR_STEP_DEPTH`, and the lower edge is the bottom of the run.
 - Clear selection empties the marquee and the object selection.
+
+### Room
+
+Drag an axis-aligned rectangle on the grid. On release, `create_rect_room` adds a closed shape whose four walls are the rectangle and sets the current Fill palette choice. A rectangle needs at least one grid cell on each axis. The Fill palette paints Blue and Red in creation order, Floor Blue in an underlay pass, Floor Red in creation order, Hole in the canvas colour, and Empty as no fill with a faint outline.
+
+Alt+drag a closed shape starts `GESTURE_ROOM_COPY` with that shape's polygon; the release creates the same polygon translated by the drag delta. A copy keeps the source shape's fill. Right-click any closed shape and pick Mode to change it after creation.
 
 ### Label
 
@@ -123,7 +129,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 3 tools, `Delete` delete the selection, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 4 tools, `Delete` delete the selection, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag empty canvas marquee, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 
@@ -131,7 +137,7 @@ The UI owner must verify all of these on the real X11 window and report the comm
 
 1. `make` builds with no warnings from `src/`.
 2. Launch with the demo level. Screenshot shows blue and red fills, white/red/blue doors, labels, and hatched stairs. Sample pixels to prove the fill colors exist.
-3. Draw a closed four-click rectangle with the Line tool. Screenshot shows the walls, and the right-click Fill submenu adds a fill. Verify with `level_stats` text or pixel sampling.
+3. Draw a closed four-click rectangle with the Line tool. Screenshot shows the walls, and the right-click Mode submenu adds a fill. Verify with `level_stats` text or pixel sampling.
 4. Switch to Select, click inside the new shape, press Delete, screenshot or status confirms removal.
 5. Shift-drag a wall section, right-click Door, add a door. Drag it along the wall, resize it, change its color in the inspector.
 6. Add a label with the Label tool, type in the inspector, move it. Shift-drag an empty box, right-click Stairs, change step count and direction.

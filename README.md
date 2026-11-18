@@ -47,7 +47,8 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Draw walls click by click. Every segment is horizontal or vertical and continues from the last click.
 - Close a drawn loop by clicking its first point or pressing Enter. Close with an L-shaped pair when the last point is not aligned with the first. Press Esc to keep the chain open.
 - Each drawn chain is one wall shape. Select any of its lines to select the shape, then drag a line to reshape it: that line moves and the lines connected to it stretch, while opposite lines stay put.
-- A closed shape fills only its own inside, in blue or red, or not at all with the None fill. Use the right-click Fill submenu to change a closed shape's fill.
+- A closed shape fills only its own inside. The Fill palette offers Blue, Red, Floor Blue, Floor Red, Hole, and Empty. Floor fills paint under the rooms, Hole paints the canvas colour, and Empty leaves only the faint outline. The Line tool applies the current choice when a loop closes; the Room tool applies it to each new rectangle. Right-click a closed shape and pick Mode to change it.
+- Drag an axis-aligned rectangle with the Room tool to add a closed room shape on the grid. Alt+drag a room to duplicate it, then select and drag the copy to place it.
 - Marquee a wall section with Shift plus drag in Line mode, then use the right-click Door submenu to add a white, red, or blue door. In Select mode the selected walls feed the same menu. A door keeps a fixed thickness, slides along its wall, and changes length by dragging either end or with the inspector.
 - Drag an empty box with Shift in Line mode, then right-click Stairs to add a footprint. A stair snaps to the grid, so its edges sit flush with walls. Drag any edge to resize it, and the step count divides the run into treads.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The Label tool also has a size setting, and the inspector can resize and move any label.
@@ -60,7 +61,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 
 | Input | Action |
 | --- | --- |
-| 1, 2, 3 | Select, Line, Label. Line is the default |
+| 1, 2, 3, 4 | Select, Line, Label, Room. Line is the default |
 | Left click | Use the active tool |
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
@@ -100,7 +101,7 @@ Undo stores whole level snapshots. Each completed change writes one snapshot. A 
 
 A plain click on an unselected object selects only it. Clicking an object already in a multi-selection keeps the group and makes it primary. Shift-click adds an object and never removes one. Ctrl-click toggles it. Dragging from empty canvas draws a marquee, and Shift makes the marquee additive. The inspector shows per-kind counts for a multi-selection, and Delete removes the whole set in one undo step.
 
-A wall belongs to a shape, and each line is selectable on its own. Click a line to select that edge, shift-click to add another, or click inside a closed shape to select all of its edges. The inspector then shows the shape: its fill, whether it is closed, how many walls it has, and which edge you are on.
+A wall belongs to a shape, and each line is selectable on its own. Click a line to select that edge, shift-click to add another, or click inside a closed shape to select all of its edges. The inspector then shows the shape: its fill palette, whether it is closed, how many walls it has, and which edge you are on.
 
 ![Two selected edges with amber vertices](docs/screenshots/selection.png)
 
