@@ -24,6 +24,7 @@
 #define CLOSE_TOL_PX 12.0f
 #define DRAG_END_PX 8.0f
 /* A wall corner is a small target, so it answers a press from this close. */
+#define SPAN_END_GRAB_PX 9.0f
 #define VERTEX_GRAB_PX 7.0f
 /* One look means a near-black canvas and white lines. A wall and a stair
    tread draw at the same faint alpha, and nothing is ever filled. */
@@ -92,6 +93,7 @@ typedef enum {
     GESTURE_MOVE,
     /* A press on a wall corner moves that corner and the walls that meet it. */
     GESTURE_VERTEX,
+    GESTURE_SPAN_END,
     GESTURE_RESHAPE,
     GESTURE_DOOR_SLIDE,
     GESTURE_DOOR_RESIZE,
@@ -152,6 +154,8 @@ typedef struct {
     /* The Line press interrupted an active click-click chain, so its points
        survive under the pending gesture and the release continues it. */
     bool chain_active;
+    /* Which end of the marked section a span-end drag holds, 0 or 1. */
+    int span_end;
 } Gesture;
 
 typedef struct {
@@ -370,6 +374,7 @@ static bool gesture_active(const Editor* e) {
 
 static bool gesture_is_drag(const Editor* e) {
     return e->gesture.kind == GESTURE_MOVE || e->gesture.kind == GESTURE_VERTEX ||
+           e->gesture.kind == GESTURE_SPAN_END ||
            e->gesture.kind == GESTURE_RESHAPE ||
            e->gesture.kind == GESTURE_DOOR_SLIDE ||
            e->gesture.kind == GESTURE_DOOR_RESIZE ||
@@ -2092,6 +2097,43 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             break;
         }
+        case GESTURE_SPAN_END: {
+            if (g->object_index < 0 || g->object_index >= e->span_count) {
+                cancel_gesture(e);
+                break;
+            }
+            if (down && have_pointer) {
+                Span* span = &e->spans[g->object_index];
+                const Wall* w = level_wall_by_id_const(&e->level, span->wall);
+                if (!w) {
+                    cancel_gesture(e);
+                    break;
+                }
+                float t = point_segment_t(world, w->a, w->b);
+                if (e->snap) t = snap_wall_t(w, t, e->grid_size);
+                const float min_span = 0.02f;
+                if (g->span_end == 0) {
+                    if (t > span->t1 - min_span) t = span->t1 - min_span;
+                    if (t < 0.0f) t = 0.0f;
+                    span->t0 = t;
+                } else {
+                    if (t < span->t0 + min_span) t = span->t0 + min_span;
+                    if (t > 1.0f) t = 1.0f;
+                    span->t1 = t;
+                }
+                g->moved = true;
+            }
+            if (!down) {
+                const Wall* w = level_wall_by_id_const(
+                    &e->level, e->spans[g->object_index].wall);
+                float len = w ? wall_length(w) *
+                                    fabsf(e->spans[g->object_index].t1 -
+                                          e->spans[g->object_index].t0) : 0.0f;
+                set_status(e, false, "Section of %.0f units", len);
+                cancel_gesture(e);
+            }
+            break;
+        }
         case GESTURE_VERTEX: {
             if (down) {
                 Vec2 target = snapped(e, world);
@@ -2503,6 +2545,41 @@ static void draw_shape_preview(const Editor* e) {
 /* Nearest wall endpoint to the pointer within the grab radius. Coincident
    corners are one handle, so the wall that answers only names a click target;
    the move itself covers every wall at that point. */
+/* The marked section's end handle under the pointer, or 0. A section end is a
+   draggable handle, so it is picked before the wall and before the clear that a
+   plain press would otherwise do. */
+static int nearest_span_end(const Editor* e, ImVec2 mouse, int* out_span,
+                            int* out_end) {
+    float best = SPAN_END_GRAB_PX + 0.001f;
+    int found = 0;
+    for (int i = 0; i < e->span_count; i++) {
+        const Wall* wall = level_wall_by_id_const(&e->level, e->spans[i].wall);
+        if (!wall) continue;
+        float ends[2] = { e->spans[i].t0, e->spans[i].t1 };
+        for (int k = 0; k < 2; k++) {
+            ImVec2 p = world_to_screen(e, segment_point(wall->a, wall->b, ends[k]));
+            float d = screen_dist(mouse, p);
+            if (d < best) {
+                best = d;
+                found = 1;
+                if (out_span) *out_span = i;
+                if (out_end) *out_end = k;
+            }
+        }
+    }
+    return found;
+}
+
+static void begin_span_end(Editor* e, int span_index, int end) {
+    Gesture* g = &e->gesture;
+    cancel_gesture(e);
+    g->kind = GESTURE_SPAN_END;
+    g->object_index = span_index;
+    g->span_end = end;
+    g->moved = false;
+    set_status(e, false, "Drag to resize the section");
+}
+
 static int nearest_vertex(const Editor* e, ImVec2 mouse, Vec2* out) {
     int best = -1;
     float best_dist = VERTEX_GRAB_PX + 0.001f;
@@ -2535,6 +2612,17 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     ImGuiIO* io = igGetIO();
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
+
+    /* A section end is a handle: grabbing it resizes the section instead of
+       clearing it or starting a marquee. */
+    if (!shift && !ctrl) {
+        int span_index = -1;
+        int end = -1;
+        if (nearest_span_end(e, mouse, &span_index, &end)) {
+            begin_span_end(e, span_index, end);
+            return;
+        }
+    }
 
     /* A plain press drops the marked sections. Shift and Ctrl presses keep
        them, because those add to the selection instead of starting over. */
@@ -2886,6 +2974,16 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_selection(e);
     draw_marquee(e);
     draw_status_strip(e);
+    /* Frame rate sits in the top right corner of the canvas, away from the
+       status strip, so it never moves while the status text changes. */
+    {
+        char fps[32];
+        snprintf(fps, sizeof fps, "%.0f fps", (double)igGetIO()->Framerate);
+        float w = igCalcTextSize(fps).x;
+        ImVec2 p = { e->canvas.max.x - w - 10.0f, e->canvas.min.y + 6.0f };
+        ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), 13.0f, p,
+                                      col32(0x5abf6a), fps, NULL, 0.0f, NULL);
+    }
 
     igEnd();
 }
@@ -3541,6 +3639,10 @@ static void handle_shortcuts(Editor* e) {
     if (igIsKeyPressedEx(ImGuiKey_F, false)) {
         e->fit_pending = true;
         set_status(e, false, "Fit level");
+    }
+    if (igIsKeyPressedEx(ImGuiKey_S, false)) {
+        e->snap = !e->snap;
+        set_status(e, false, e->snap ? "Snap on" : "Snap off");
     }
     if (igIsKeyPressedEx(ImGuiKey_G, false)) e->show_grid = !e->show_grid;
     if (igIsKeyPressedEx(ImGuiKey_H, false)) open_path_modal(e, MODAL_HELP);

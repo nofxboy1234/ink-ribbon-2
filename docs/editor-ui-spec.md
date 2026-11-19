@@ -26,6 +26,10 @@ Dark ImGui theme: window background `#101114`, panel `#16181c`, frame `#1d2025`,
 
 The embedded scalable ImGui default font at 15 px is fine. Do not depend on system font files.
 
+## Frame rate
+
+The current frame rate draws in green at the top right of the canvas, inset 10 px from the right edge and 6 px from the top, so it never collides with the status strip. It reads `ImGuiIO::Framerate` each frame.
+
 ## Canvas transform and navigation
 
 The camera stores a world-space center and a zoom in screen pixels per world unit. World y grows down. `screen_to_world` and `world_to_screen` are the only transforms.

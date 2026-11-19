@@ -56,7 +56,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Input | Action |
 | --- | --- |
 | 1, 2, 3, 4, 5, 6 | Select, Line, Rectangle, Door, Stairs, Label. Select is the default |
-| Q (held) | Keep the active drawing tool after an action |
+| Q | Toggle keeping the active drawing tool after an action |
 | Left click | Use the active tool |
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
@@ -64,6 +64,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Drag a wall corner | Resize the walls that meet at that corner |
 | Drag a stair edge | Resize the stair footprint on the grid |
 | Drag on empty canvas | Marquee select and mark crossed wall sections; Shift adds to the selection |
+| Drag a section end | Resize a marked section along its wall |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
 | Enter | Close a line chain |
@@ -72,6 +73,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Delete | Cut every marked wall section and delete the selected objects |
 | F | Fit the level |
 | G | Toggle the grid |
+| S | Toggle snapping |
 | Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+S, Ctrl+Shift+S | Save, save as |
 | Ctrl+O | Open |
