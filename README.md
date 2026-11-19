@@ -5,10 +5,13 @@ Dear ImGui. It has one look: white lines on a near-black canvas. Walls and stair
 treads draw faint, doors draw white, and nothing is filled. The only tools are
 Select, Line, Rectangle, Door, Stairs, and Label.
 
-The editor loads `levels/re2-library.lvl` on startup. That file is the rough
-mockup of overlapping rectangles that sets the shape language for the rebuilt
-map. The full-scale plan is kept in `levels/re2-library-source.lvl`, and
-`tools/gen_demo_map.py` regenerates it from readable coordinates.
+The editor loads `levels/re2-library.lvl` on startup. That file is rebuilt from
+the reference floor plan and matches it one reference pixel per world unit. The
+plan is kept in `levels/re2-library-source.lvl`; `tools/gen_ref_map.py`
+regenerates it from readable coordinates, and `tools/build_map.py` draws it in
+the running editor through the real tools. `docs/screenshots/rebuilt-overlay.png`
+shows the finished level blended over the reference, and
+`docs/screenshots/rebuilt-side-by-side.png` shows the same pair side by side.
 
 ## Build and run
 

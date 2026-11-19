@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """Rebuild the reference map in the running editor through real UI input.
 
-The saved level is the plan. Every coordinate is scaled by half, snapped to the
-4-unit grid, and mapped through the editor canvas transform, then emitted as
-xdotool commands or run against the live window. The run always starts with
-File > New, so rerunning the same plan produces the same document.
+The plan in ``levels/re2-library-source.lvl`` is written in reference-image
+pixels. This driver maps it to editor world coordinates, then emits or runs
+xdotool clicks. It always starts with File > New, turns snapping off, and draws
+every shape with the Line tool, so rerunning the same plan produces the same
+document. Door, Stairs, and Label use the current tool panels rather than the
+old right-click menu.
 
 usage:
   python3 tools/build_map.py --window 2097200 --plan levels/re2-library-source.lvl
   python3 tools/build_map.py --emit --plan levels/re2-library-source.lvl
-
-The canvas transform is the shipped 1280x800 layout: 190 px left panel, 300 px
-right panel, a 23 px menu bar, zoom 1 and a zero camera centre. A click at
-screen (585 + wx, 411.5 + wy) lands on world (wx, wy).
 """
 from __future__ import annotations
 
@@ -24,22 +22,21 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-GRID = 4.0
-SCALE = 0.5
-SOURCE_CENTRE = (600.0, 340.0)
+# The plan is in reference pixels. A world point is the reference point minus
+# this centre, so File > New (which fits an empty level to 0,0 at zoom 1) maps
+# reference (0,0) to screen (192,165) on the shipped 1280x800 layout.
+SOURCE_CENTRE = (393.0, 246.5)
 CANVAS_CX = 585.0
 CANVAS_CY = 411.5
 DISPLAY_SIZE = (1280, 800)
 
-# Offsets from the right-click point into the ImGui popup, measured on the
-# real 1280x800 window. Menu rows are 23 px apart; a submenu opens 155 px to
-# the right and its first row lines up with the parent row.
-MENU_EDGE = 5
-MENU_ROW0 = 12
-MENU_ROW_H = 23
-MENU_ITEM_X = 25
-SUBMENU_X = 215
-FIXED_CLICK = (400, 300)
+# Left panel controls for the current tool. Ctrl-clicking the numeric part of
+# a slider opens its text entry.
+TOOL_SLIDER = (50, 350)
+STAIR_H_BUTTON = (95, 350)
+STAIR_V_BUTTON = (95, 375)
+STAIR_STEPS = (50, 402)
+STAIR_FLIP = (32, 429)
 
 
 @dataclass(frozen=True)
@@ -88,6 +85,7 @@ class Stairs:
     steps: int
     width: float
     length: float
+    bottom: int = 0
 
 
 class Plan:
@@ -126,18 +124,13 @@ class Plan:
                 elif kind == "stairs":
                     self.stairs.append(
                         Stairs(float(parts[1]), float(parts[2]), int(parts[3]),
-                               int(parts[4]), float(parts[5]), float(parts[6]))
+                               int(parts[4]), float(parts[5]), float(parts[6]),
+                               int(parts[7]) if len(parts) > 7 else 0)
                     )
 
 
-def snap(value: float) -> float:
-    """Nearest grid line, ties toward +infinity, matching the half-scale plan."""
-    return math.floor(value / GRID + 0.5) * GRID
-
-
 def world(p: Point) -> Point:
-    return Point(snap((p.x - SOURCE_CENTRE[0]) * SCALE),
-                 snap((p.y - SOURCE_CENTRE[1]) * SCALE))
+    return Point(p.x - SOURCE_CENTRE[0], p.y - SOURCE_CENTRE[1])
 
 
 def screen(p: Point) -> tuple[int, int]:
@@ -145,85 +138,9 @@ def screen(p: Point) -> tuple[int, int]:
             int(math.floor(p.y + CANVAS_CY + 0.5)))
 
 
-def area_centroid(points: list[Point]) -> Point:
-    area = 0.0
-    cx = 0.0
-    cy = 0.0
-    for i, p in enumerate(points):
-        q = points[(i + 1) % len(points)]
-        cross = p.x * q.y - q.x * p.y
-        area += cross
-        cx += (p.x + q.x) * cross
-        cy += (p.y + q.y) * cross
-    area *= 0.5
-    if abs(area) < 1e-6:
-        raise ValueError("degenerate polygon")
-    return Point(cx / (6.0 * area), cy / (6.0 * area))
-
-
-def inside(points: list[Point], p: Point) -> bool:
-    result = False
-    for i, a in enumerate(points):
-        b = points[(i + 1) % len(points)]
-        if (a.y > p.y) != (b.y > p.y):
-            x = (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
-            if p.x < x:
-                result = not result
-    return result
-
-
-def shape_polygon(shape: Shape) -> list[Point]:
-    points = [shape.walls[0].a]
-    points.extend(w.b for w in shape.walls)
-    if len(points) > 1 and points[0] == points[-1]:
-        points.pop()
-    return points
-
-
 def wall_point(wall: Wall, t: float) -> Point:
     return Point(wall.a.x + (wall.b.x - wall.a.x) * t,
                  wall.a.y + (wall.b.y - wall.a.y) * t)
-
-
-def clip_wall(wall: Wall, rect: tuple[float, float, float, float]):
-    """Same axis-aligned clip the editor uses; returns (t0, t1) or None."""
-    x0, y0, x1, y1 = rect
-    t0, t1 = 0.0, 1.0
-    dx = wall.b.x - wall.a.x
-    dy = wall.b.y - wall.a.y
-    if abs(dx) < 1e-4:
-        if wall.a.x < x0 or wall.a.x > x1:
-            return None
-    else:
-        a = (x0 - wall.a.x) / dx
-        b = (x1 - wall.a.x) / dx
-        if a > b:
-            a, b = b, a
-        t0 = max(t0, a)
-        t1 = min(t1, b)
-    if abs(dy) < 1e-4:
-        if wall.a.y < y0 or wall.a.y > y1:
-            return None
-    else:
-        a = (y0 - wall.a.y) / dy
-        b = (y1 - wall.a.y) / dy
-        if a > b:
-            a, b = b, a
-        t0 = max(t0, a)
-        t1 = min(t1, b)
-    if t1 - t0 <= 1e-4:
-        return None
-    return t0, t1
-
-
-def point_segment_dist(p: Point, a: Point, b: Point) -> float:
-    dx = b.x - a.x
-    dy = b.y - a.y
-    length2 = dx * dx + dy * dy
-    if length2 <= 0.0:
-        return math.hypot(p.x - a.x, p.y - a.y)
-    t = max(0.0, min(1.0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2))
-    return math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t))
 
 
 class Macro:
@@ -244,40 +161,47 @@ class Macro:
 
     def move(self, x: int, y: int) -> None:
         self.add("move", ["xdotool", "mousemove", "--sync",
-                          str(x + self.ox), str(y + self.oy)], 0.08)
+                          str(x + self.ox), str(y + self.oy)], 0.10)
 
-    def click(self, x: int, y: int, wait: float = 0.28, hover: float = 0.0) -> None:
+    def click(self, x: int, y: int, wait: float = 0.18, hover: float = 0.0) -> None:
         self.move(x, y)
         if hover > 0.0:
             self.pause(hover)
         self.add("click", ["xdotool", "click", "1"], wait)
 
-    def right_click(self, x: int, y: int) -> None:
-        self.move(x, y)
-        self.add("right click", ["xdotool", "click", "3"], 0.5)
-
-    def key(self, spec: str, wait: float = 0.3) -> None:
+    def key(self, spec: str, wait: float = 0.22) -> None:
         self.add(f"key {spec}", ["xdotool", "key", "--clearmodifiers", spec], wait)
 
     def key_down(self, spec: str) -> None:
-        self.add(f"keydown {spec}", ["xdotool", "keydown", spec], 0.12)
+        self.add(f"keydown {spec}", ["xdotool", "keydown", spec], 0.10)
 
     def key_up(self, spec: str) -> None:
-        self.add(f"keyup {spec}", ["xdotool", "keyup", spec], 0.12)
+        self.add(f"keyup {spec}", ["xdotool", "keyup", spec], 0.10)
 
     def type_text(self, text: str) -> None:
         self.add(f"type {text!r}", ["xdotool", "type", "--clearmodifiers",
-                                    "--delay", "25", text], 0.25)
+                                    "--delay", "20", text], 0.15)
 
-    def drag(self, a: tuple[int, int], b: tuple[int, int], shift: bool = False) -> None:
-        if shift:
-            self.key_down("shift")
+    def ctrl_click(self, x: int, y: int) -> None:
+        self.key_down("ctrl")
+        self.move(x, y)
+        self.add("ctrl click", ["xdotool", "click", "1"], 0.18)
+        self.key_up("ctrl")
+
+    def set_slider(self, x: int, y: int, value: float) -> None:
+        # Ctrl-click opens the slider's text entry with the value selected, so
+        # typing replaces it. Do not send ctrl+a: it cancels the entry here.
+        self.ctrl_click(x, y)
+        self.pause(0.25)
+        self.type_text(f"{value:g}")
+        self.key("Return")
+        self.pause(0.15)
+
+    def drag(self, a: tuple[int, int], b: tuple[int, int]) -> None:
         self.move(*a)
-        self.add("press", ["xdotool", "mousedown", "1"], 0.15)
+        self.add("press", ["xdotool", "mousedown", "1"], 0.12)
         self.move(*b)
-        self.add("release", ["xdotool", "mouseup", "1"], 0.35)
-        if shift:
-            self.key_up("shift")
+        self.add("release", ["xdotool", "mouseup", "1"], 0.30)
 
     def emit(self) -> str:
         lines: list[str] = []
@@ -327,101 +251,66 @@ def find_window() -> tuple[str, int, int]:
 
 
 def draw_shapes(plan: Plan, macro: Macro) -> None:
-    macro.comment("draw every shape, closing each loop on its first vertex")
+    macro.comment("draw every shape with the Line tool and close each loop")
     for shape in plan.shapes.values():
         if not shape.walls:
             continue
+        macro.key("2")
         clicks = [shape.walls[0].a] + [w.b for w in shape.walls]
         for point in clicks:
             macro.click(*screen(world(point)))
-        if not shape.closed:
+        if shape.closed:
+            macro.click(*screen(world(clicks[0])))
+        else:
             macro.key("Escape")
-        macro.pause(0.15)
-
-
-def apply_fills(plan: Plan, macro: Macro) -> None:
-    macro.comment("fill closed shapes through the right-click menu")
-    for shape in plan.shapes.values():
-        if shape.fill == 0 or not shape.closed:
-            continue
-        polygon = [world(p) for p in shape_polygon(shape)]
-        centroid = area_centroid(polygon)
-        if not inside(polygon, centroid):
-            raise SystemExit(f"shape {shape.id}: centroid is outside its polygon")
-        cx, cy = screen(centroid)
-        macro.right_click(cx, cy)
-        macro.click(cx + MENU_ITEM_X, cy + MENU_ROW0, hover=0.2)
-        sub_row = 0 if shape.fill == 2 else 1  # Red, Blue, None
-        macro.click(cx + SUBMENU_X, cy + MENU_ROW0 + MENU_ROW_H * sub_row,
-                    wait=0.45, hover=0.3)
-
-
-def door_rect(door: Door, plan: Plan) -> tuple[float, float, float, float]:
-    wall = plan.walls[door.wall]
-    wall = Wall(wall.id, wall.shape, world(wall.a), world(wall.b))
-    centre = wall_point(wall, door.t)
-    half = door.width * SCALE * 0.5
-    if abs(wall.b.x - wall.a.x) > abs(wall.b.y - wall.a.y):
-        return (snap(centre.x - half), wall.a.y, snap(centre.x + half), wall.a.y)
-    return (wall.a.x, snap(centre.y - half), wall.a.x, snap(centre.y + half))
+        macro.pause(0.08)
 
 
 def place_doors(plan: Plan, macro: Macro) -> None:
-    macro.comment("marquee each door span, then right-click for a coloured door")
+    macro.comment("set the door width, then hover each host wall and click")
+    macro.key("4")
+    if plan.doors:
+        macro.set_slider(*TOOL_SLIDER, plan.doors[0].width)
     for door in plan.doors:
-        rect = door_rect(door, plan)
-        a = screen(Point(rect[0], rect[1]))
-        b = screen(Point(rect[2], rect[3]))
-        macro.drag(a, b, shift=True)
-        macro.right_click(*FIXED_CLICK)
-        macro.click(FIXED_CLICK[0] + MENU_ITEM_X, FIXED_CLICK[1] + MENU_ROW0,
-                    hover=0.2)
-        macro.click(FIXED_CLICK[0] + SUBMENU_X,
-                    FIXED_CLICK[1] + MENU_ROW0 + MENU_ROW_H * door.color,
-                    wait=0.45, hover=0.3)
-
-
-def stair_rect(stair: Stairs) -> tuple[float, float, float, float]:
-    a = world(Point(stair.x, stair.y))
-    b = world(Point(stair.x + stair.width, stair.y + stair.length))
-    return (a.x, a.y, b.x, b.y)
+        wall = plan.walls[door.wall]
+        p = world(wall_point(wall, door.t))
+        sx, sy = screen(p)
+        macro.move(sx, sy)
+        macro.pause(0.12)
+        macro.add("door click", ["xdotool", "click", "1"], 0.28)
+        macro.key("4")
+    macro.pause(0.1)
 
 
 def place_stairs(plan: Plan, macro: Macro) -> None:
-    macro.comment("drag each stair box from its bottom edge to its top edge")
+    macro.comment("set direction, steps and fade end, then drag each stair footprint")
+    flip = False
     for stair in plan.stairs:
-        x0, y0, x1, y1 = stair_rect(stair)
-        # Bottom-left to top-right: the wide axis picks the direction, and the
-        # run stays the dominant extent at half scale.
-        macro.drag(screen(Point(x0, y1)), screen(Point(x1, y0)), shift=True)
-        macro.right_click(*FIXED_CLICK)
-        # Fill (from the shell under the click) or Door (from a touched wall)
-        # owns row 0, so Stairs is always row 1 on this map.
-        macro.click(FIXED_CLICK[0] + MENU_ITEM_X,
-                    FIXED_CLICK[1] + MENU_ROW0 + MENU_ROW_H, wait=0.55, hover=0.25)
-
-
-def set_label_size(macro: Macro, size: float) -> None:
-    macro.key_down("ctrl")
-    macro.click(95, 249)
-    macro.key_up("ctrl")
-    macro.type_text(f"{size:g}")
-    macro.key("Return")
+        macro.key("5")
+        if stair.direction == 0:
+            macro.click(*STAIR_H_BUTTON)
+        else:
+            macro.click(*STAIR_V_BUTTON)
+        macro.set_slider(*STAIR_STEPS, stair.steps)
+        if bool(stair.bottom) != flip:
+            macro.click(*STAIR_FLIP)
+            flip = bool(stair.bottom)
+        a = world(Point(stair.x, stair.y))
+        b = world(Point(stair.x + stair.width, stair.y + stair.length))
+        macro.drag(screen(a), screen(b))
+        macro.pause(0.1)
 
 
 def place_labels(plan: Plan, macro: Macro) -> None:
     macro.comment("place labels with the Label tool and type their text")
-    macro.key("3")
-    current = None
     for label in plan.labels:
-        size = label.size * SCALE
-        if current != size:
-            set_label_size(macro, size)
-            current = size
+        macro.key("6")
+        macro.set_slider(*TOOL_SLIDER, label.size)
         macro.click(*screen(world(Point(label.x, label.y))))
         macro.type_text(label.text)
         macro.key("Return")
-        macro.pause(0.1)
+        macro.key("Escape")
+        macro.pause(0.08)
 
 
 def save(plan: Plan, macro: Macro, out_path: str) -> None:
@@ -432,19 +321,23 @@ def save(plan: Plan, macro: Macro, out_path: str) -> None:
     macro.type_text(out_path)
     macro.key("Return", wait=0.9)
     macro.key("ctrl+s", wait=0.6)
+    # Clean canvas for the verification screenshot: one pixel per world unit,
+    # no grid, and the Line tool so the Select endpoint handles are gone.
+    macro.key("Escape")
+    macro.key("ctrl+0", wait=0.4)
+    macro.key("g", wait=0.3)
+    macro.key("2", wait=0.3)
 
 
 def build_macro(plan: Plan, origin: tuple[int, int], out_path: str,
                 only: set[str] | None = None) -> Macro:
     macro = Macro(origin)
-    macro.comment("new level, grid 4, snap stays on")
+    macro.comment("new level, then snapping off so the plan keeps its pixels")
     macro.click(35, 11)
     macro.click(30, 35, wait=0.6)
-    macro.click(50, 300)
-    macro.click(50, 326, wait=0.5)
+    macro.key("s", wait=0.35)
     stages = [
         ("shapes", draw_shapes),
-        ("fills", apply_fills),
         ("doors", place_doors),
         ("stairs", place_stairs),
         ("labels", place_labels),
@@ -465,7 +358,7 @@ def main() -> int:
     parser.add_argument("--origin", default="0,0",
                         help="window origin for --emit, default 0,0")
     parser.add_argument("--emit", action="store_true", help="print xdotool commands")
-    parser.add_argument("--only", help="comma list of shapes,fills,doors,stairs,labels,save")
+    parser.add_argument("--only", help="comma list of shapes,doors,stairs,labels,save")
     args = parser.parse_args()
     only = set(args.only.split(",")) if args.only else None
 
