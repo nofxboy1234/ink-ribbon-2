@@ -86,10 +86,10 @@ DOORS: list[tuple[float, float, bool, float]] = [
 STAIRS: list[tuple[float, float, float, float, int, int, int]] = [
     (244, 84, 265, 115, 1, 5, 0),
     (302, 84, 322, 115, 1, 5, 0),
-    (303, 247, 322, 315, 1, 13, 1),
+    (302, 246, 323, 315, 1, 13, 1),
     (250, 316, 302, 336, 0, 14, 1),
     (703, 117, 720, 146, 1, 5, 0),
-    (720, 117, 737, 193, 1, 10, 1),
+    (720, 117, 737, 193, 1, 13, 0),
 ]
 
 # Label text top-left in reference pixels and font size.

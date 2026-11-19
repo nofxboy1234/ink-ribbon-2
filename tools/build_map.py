@@ -315,11 +315,17 @@ def place_labels(plan: Plan, macro: Macro) -> None:
 
 def save(plan: Plan, macro: Macro, out_path: str) -> None:
     macro.comment("save the new document over the startup level")
+    # Leave any label or slider text entry first; a focused input would swallow
+    # the save shortcut.
     macro.key("Escape")
-    macro.key("ctrl+shift+s", wait=0.6)
+    macro.key("1")
+    macro.click(600, 700)
+    macro.key("Escape")
+    macro.pause(0.25)
+    macro.key("ctrl+shift+s", wait=0.9)
     macro.key("ctrl+a")
     macro.type_text(out_path)
-    macro.key("Return", wait=0.9)
+    macro.key("Return", wait=1.1)
     macro.key("ctrl+s", wait=0.6)
     # Clean canvas for the verification screenshot: one pixel per world unit,
     # no grid, and the Line tool so the Select endpoint handles are gone.
