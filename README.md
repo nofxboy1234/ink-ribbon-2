@@ -77,6 +77,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 | Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+S, Ctrl+Shift+S | Save, save as |
 | Ctrl+O | Open |
+| Ctrl+0 | Reset the zoom to 100 percent |
 | H | Controls dialog |
 
 ## Editing model

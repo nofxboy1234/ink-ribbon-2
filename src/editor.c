@@ -3342,6 +3342,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Ctrl+S save, Ctrl+O open");
         igTextDisabled("Middle-drag or Space+drag pans");
         igTextDisabled("Wheel zooms around the cursor");
+        igTextDisabled("Ctrl+0 resets the zoom to 100 percent");
         igPopFont();
         igDummy((ImVec2){ 0.0f, 6.0f });
         igTextDisabled("%s", e->current_path);
@@ -3410,6 +3411,7 @@ static void draw_help_modal(Editor* e) {
     igText("Middle-drag or Space+left-drag pans.");
     igBullet();
     igText("Wheel zooms around the cursor.");
+    igText("Ctrl+0 resets the zoom to 100 percent.");
     igBullet();
     igText("F fits the level, G toggles the grid.");
     igText("Editing");
@@ -3612,6 +3614,13 @@ static void handle_shortcuts(Editor* e) {
         }
         if (igIsKeyPressedEx(ImGuiKey_Y, false)) {
             do_redo(e);
+            return;
+        }
+        if (igIsKeyPressedEx(ImGuiKey_0, false)) {
+            /* Reset to one screen pixel per world unit, keeping the world point
+               under the canvas centre fixed so the view does not jump. */
+            e->camera.zoom = 1.0f;
+            set_status(e, false, "Zoom 100%%");
             return;
         }
         if (igIsKeyPressedEx(ImGuiKey_S, false)) {
