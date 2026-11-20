@@ -1805,7 +1805,27 @@ static bool rect_covers_shape_area(const Editor* e, Rect r, const Vec2* pts,
     return false;
 }
 
-static int merge_overlapping_shapes(Editor* e) {
+/* True when a's outline already covered real area of b's outline. The merge
+   after a drag is for a move that makes rectangles overlap; a shape that was
+   already containing another must not swallow it just because it moved a
+   little. */
+static bool shape_already_covers(const Level* level, ShapeId a, ShapeId b) {
+    Vec2 pa[LEVEL_MAX_WALLS];
+    Vec2 pb[LEVEL_MAX_WALLS];
+    int na = level_shape_polygon(level, a, pa, LEVEL_MAX_WALLS);
+    int nb = level_shape_polygon(level, b, pb, LEVEL_MAX_WALLS);
+    if (na < 3 || nb < 3) return false;
+    Rect rb = polygon_bounds(pb, nb);
+    const float step = 4.0f;
+    for (float y = rb.min.y + step * 0.5f; y < rb.max.y; y += step) {
+        for (float x = rb.min.x + step * 0.5f; x < rb.max.x; x += step) {
+            if (point_in_polygon(pa, na, v2(x, y))) return true;
+        }
+    }
+    return false;
+}
+
+static int merge_overlapping_shapes(Editor* e, const Level* before) {
     Vec2 poly[LEVEL_MAX_WALLS];
     int merges = 0;
     for (int i = 0; i < e->level.shape_count && merges < 8; i++) {
@@ -1819,6 +1839,10 @@ static int merge_overlapping_shapes(Editor* e) {
             Rect rb = polygon_bounds(poly, level_shape_polygon(&e->level, b->id, poly,
                                                                LEVEL_MAX_WALLS));
             if (!rect_overlaps_area(ra, rb)) continue;
+            if (before && (shape_already_covers(before, a->id, b->id) ||
+                           shape_already_covers(before, b->id, a->id))) {
+                continue;
+            }
             /* Bounds alone would treat the empty corner of an L as filled, so
                the moved rect must cover real area of the other outline. */
             int an = level_shape_polygon(&e->level, a->id, poly, LEVEL_MAX_WALLS);
@@ -1838,6 +1862,8 @@ static int merge_overlapping_shapes(Editor* e) {
 
 static void finish_move(Editor* e) {
     if (e->gesture.moved) {
+        Level before;
+        bool have_before = history_current_copy(&e->history, &before);
         int left = 0;
         int moved = moved_objects(e, &left);
         char message[256];
@@ -1851,7 +1877,7 @@ static void finish_move(Editor* e) {
                      moved, moved == 1 ? "" : "s");
         }
         commit(e, message);
-        if (merge_overlapping_shapes(e) > 0) {
+        if (merge_overlapping_shapes(e, have_before ? &before : NULL) > 0) {
             set_status(e, false, "Overlapping rectangles joined");
         }
     }
@@ -2427,8 +2453,10 @@ static void update_drag(Editor* e, bool have_pointer) {
             }
             if (!down) {
                 if (g->moved) {
+                    Level before;
+                    bool have_before = history_current_copy(&e->history, &before);
                     commit(e, "Reshaped");
-                    if (merge_overlapping_shapes(e) > 0) {
+                    if (merge_overlapping_shapes(e, have_before ? &before : NULL) > 0) {
                         set_status(e, false, "Overlapping rectangles joined");
                     }
                 } else {

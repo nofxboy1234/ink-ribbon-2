@@ -242,6 +242,10 @@ bool history_init(History* history);
 void history_shutdown(History* history);
 void history_reset(History* history, const Level* level);
 void history_commit(History* history, const Level* level);
+/* Copies the committed snapshot at the history cursor into out. A drag reads
+   this before it commits, so it can tell a newly created overlap from one that
+   was already there when the gesture began. */
+bool history_current_copy(const History* history, Level* out);
 bool history_undo(History* history, Level* level);
 bool history_redo(History* history, Level* level);
 bool history_restore_current(History* history, Level* level);

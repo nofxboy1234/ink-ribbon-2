@@ -1701,6 +1701,15 @@ void history_commit(History* history, const Level* level) {
     history->cursor = live;
 }
 
+bool history_current_copy(const History* history, Level* out) {
+    if (!history || !out || !history->snapshots || history->count <= 0) {
+        return false;
+    }
+    if (history->cursor < 0 || history->cursor >= history->count) return false;
+    *out = history->snapshots[history->cursor];
+    return true;
+}
+
 bool history_undo(History* history, Level* level) {
     if (!history->snapshots || history->cursor <= 0) return false;
     history->cursor--;
