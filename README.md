@@ -52,7 +52,7 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
-- Snap dragged lines, edges, and corners to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
+- Snap dragged lines, edges, corners, and every side of a moving selection to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
 ## Controls
@@ -96,7 +96,7 @@ Selection is UI state and is never saved into a level. It is a bounded set per o
 
 Snap applies to line points, labels, stair boxes and edges, door centres, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
-Snap objects is a second, independent toggle. While it is on, a dragged edge or corner also snaps to nearby wall lines and wall endpoints within 8 screen pixels; object snapping wins on an axis and grid snapping fills the other. It is on by default.
+Snap objects is a second, independent toggle. While it is on, a dragged edge or corner also snaps to nearby wall lines and wall endpoints within 8 screen pixels. A rigid object drag checks every moving edge and wall endpoint on each axis, so a selection can land by its right or bottom side as well as its top or left. Object snapping wins on an axis and grid snapping fills the other. It is on by default.
 
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. The history keeps 64 levels.
 

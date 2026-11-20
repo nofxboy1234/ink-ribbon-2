@@ -121,7 +121,7 @@ Selection is a bounded set per object kind plus a primary reference. Walls are s
 - Plain press on empty canvas clears the selection and the marked sections, then starts a marquee. Shift-press on empty canvas starts an additive marquee. Travel under 4 screen pixels is a click.
 - On marquee release, select whole non-wall objects inside the rectangle. Doors use segment intersection, labels and stairs use rect overlap. Walls are never selected whole by a box. The crossed part of every wall is marked as a section instead, clipped in wall parameters to the snapped box.
 - Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes.
-- Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, labels and stairs by their own move calls, and doors follow their host wall.
+- Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, labels and stairs by their own move calls, and doors follow their host wall. Object snapping checks every moving wall endpoint and label or stair box edge on each axis, so the nearest side wins; grid snapping still measures the primary anchor.
 - A release without movement collapses a multi-selection to the pressed object.
 - There is no right-click menu. Right-click does nothing.
 - `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.

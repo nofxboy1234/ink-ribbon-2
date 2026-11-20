@@ -2162,6 +2162,90 @@ static float snap_edit_axis(const Editor* e, const bool* skip, float value,
     return value;
 }
 
+/* Consider one moving edge coordinate as an object snap target and keep the
+   translation offset of the nearest hit. */
+static void snap_move_candidate(const Editor* e, const bool* skip, float base,
+                                float shift, bool x_axis, float tol,
+                                bool* found, float* best, float* offset) {
+    float value = base + shift;
+    float target;
+    if (!snap_axis_objects(e, skip, value, x_axis, tol, &target)) return;
+    float d = fabsf(target - value);
+    if (!*found || d < *best) {
+        *found = true;
+        *best = d;
+        *offset = target - value;
+    }
+}
+
+/* Object snap for a rigid move checks every edge and endpoint that moves, not
+   just the primary anchor, so a selection's top, left, right, and bottom can
+   all land on a wall line or endpoint. The grid still snaps the primary
+   anchor, which keeps a group's relative spacing intact. */
+static Vec2 snap_move_point(const Editor* e, const bool* moving, Vec2 anchor,
+                            Vec2 raw, Vec2 applied) {
+    Vec2 shift = v2_sub(raw, applied);
+    Vec2 goal = v2_add(anchor, raw);
+    float tol = OBJECT_SNAP_PX / (e->camera.zoom > 0.0001f ? e->camera.zoom : 1.0f);
+    bool found_x = false;
+    bool found_y = false;
+    float best_x = tol;
+    float best_y = tol;
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+
+    if (e->snap_objects) {
+        for (int i = 0; i < e->level.wall_count; i++) {
+            if (!moving[i]) continue;
+            const Wall* w = &e->level.walls[i];
+            snap_move_candidate(e, moving, w->a.x, shift.x, true, tol,
+                                &found_x, &best_x, &offset_x);
+            snap_move_candidate(e, moving, w->b.x, shift.x, true, tol,
+                                &found_x, &best_x, &offset_x);
+            snap_move_candidate(e, moving, w->a.y, shift.y, false, tol,
+                                &found_y, &best_y, &offset_y);
+            snap_move_candidate(e, moving, w->b.y, shift.y, false, tol,
+                                &found_y, &best_y, &offset_y);
+        }
+        for (int i = 0; i < e->level.label_count; i++) {
+            if (!sel_has(&e->selection, SEL_LABEL, i)) continue;
+            Rect r = label_world_rect(e, &e->level.labels[i]);
+            snap_move_candidate(e, moving, r.min.x, shift.x, true, tol,
+                                &found_x, &best_x, &offset_x);
+            snap_move_candidate(e, moving, r.max.x, shift.x, true, tol,
+                                &found_x, &best_x, &offset_x);
+            snap_move_candidate(e, moving, r.min.y, shift.y, false, tol,
+                                &found_y, &best_y, &offset_y);
+            snap_move_candidate(e, moving, r.max.y, shift.y, false, tol,
+                                &found_y, &best_y, &offset_y);
+        }
+        for (int i = 0; i < e->level.stairs_count; i++) {
+            if (!sel_has(&e->selection, SEL_STAIRS, i)) continue;
+            Rect r = level_stairs_rect(&e->level.stairs[i]);
+            snap_move_candidate(e, moving, r.min.x, shift.x, true, tol,
+                                &found_x, &best_x, &offset_x);
+            snap_move_candidate(e, moving, r.max.x, shift.x, true, tol,
+                                &found_x, &best_x, &offset_x);
+            snap_move_candidate(e, moving, r.min.y, shift.y, false, tol,
+                                &found_y, &best_y, &offset_y);
+            snap_move_candidate(e, moving, r.max.y, shift.y, false, tol,
+                                &found_y, &best_y, &offset_y);
+        }
+        /* The primary anchor stays a candidate so a door-only group keeps
+           snapping from the door's centre. */
+        snap_move_candidate(e, moving, anchor.x + applied.x, shift.x, true, tol,
+                            &found_x, &best_x, &offset_x);
+        snap_move_candidate(e, moving, anchor.y + applied.y, shift.y, false, tol,
+                            &found_y, &best_y, &offset_y);
+    }
+
+    if (found_x) goal.x += offset_x;
+    else if (e->snap) goal.x = snap_scalar(goal.x, e->grid_size);
+    if (found_y) goal.y += offset_y;
+    else if (e->snap) goal.y = snap_scalar(goal.y, e->grid_size);
+    return goal;
+}
+
 /* True once the pointer has moved far enough for a press to count as a drag.
    Until then a press is a click and must leave the document untouched, even
    when the object is not on the current snap grid. */
@@ -2202,9 +2286,9 @@ static void update_drag(Editor* e, bool have_pointer) {
             if (down) {
                 if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
                 Vec2 raw = v2_sub(world, g->press_world);
-                Vec2 delta = raw;
-                Vec2 goal = snap_edit_point(e, g->walls, v2_add(g->anchor, raw));
-                delta = v2_sub(goal, g->anchor);
+                Vec2 goal = snap_move_point(e, g->walls, g->anchor, raw,
+                                            g->move_applied);
+                Vec2 delta = v2_sub(goal, g->anchor);
                 Vec2 step = v2_sub(delta, g->move_applied);
                 if (fabsf(step.x) > 0.0001f || fabsf(step.y) > 0.0001f) {
                     bool moved_any = level_move_walls(&e->level, g->walls,
