@@ -2179,7 +2179,7 @@ static float snap_edit_axis(const Editor* e, const bool* skip, float value,
                             bool x_axis) {
     if (e->snap_objects) {
         float tol = OBJECT_SNAP_PX / (e->camera.zoom > 0.0001f ? e->camera.zoom : 1.0f);
-        float snapped;
+        float snapped = value;
         if (snap_axis_objects(e, skip, value, x_axis, tol, &snapped)) {
             return snapped;
         }
@@ -2897,7 +2897,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     /* A corner wins over the wall it ends, because a reshape press would
        otherwise swallow the small handle. */
     if (!shift && !ctrl) {
-        Vec2 vertex;
+        Vec2 vertex = world;
         int wall = nearest_vertex(e, mouse, &vertex);
         if (wall >= 0) {
             begin_vertex(e, wall, vertex);
@@ -3672,7 +3672,7 @@ static int scan_levels(char paths[][512], int max) {
         snprintf(key, sizeof key, "%s", paths[i]);
         int j = i - 1;
         while (j >= 0 && strcmp(paths[j], key) > 0) {
-            snprintf(paths[j + 1], 512, "%s", paths[j]);
+            memcpy(paths[j + 1], paths[j], 512);
             j--;
         }
         snprintf(paths[j + 1], 512, "%s", key);

@@ -9,7 +9,9 @@ cd "$(dirname "$0")/.."
 out=${1:-/tmp/ink-ribbon.png}
 drive=${2:-}
 
-make -s
+./fibs build editor
+fibs_config=$(./fibs config --get)
+editor_bin=".fibs/dist/$fibs_config/editor"
 xvfb_start
 meanwhile() {
     kill "$pid" 2>/dev/null || true
@@ -21,7 +23,7 @@ meanwhile() {
 }
 trap meanwhile EXIT INT TERM HUP
 
-( exec -a "$EDITOR_TAG" ./build/editor ${EDITOR_ARGS:-} ) >/tmp/ink-ribbon.log 2>&1 &
+( exec -a "$EDITOR_TAG" "$editor_bin" ${EDITOR_ARGS:-} ) >/tmp/ink-ribbon.log 2>&1 &
 pid=$!
 
 win=""

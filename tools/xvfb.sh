@@ -5,7 +5,7 @@
 #   . tools/xvfb.sh
 #   xvfb_trap_all
 #   xvfb_start
-#   DISPLAY="$XVFB_DISPLAY" ./build/editor
+#   DISPLAY="$XVFB_DISPLAY" .fibs/dist/<config>/editor
 #   xvfb_stop
 #
 # Every process this harness starts carries its own run id in argv[0], so a

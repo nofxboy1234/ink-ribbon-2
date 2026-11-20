@@ -16,7 +16,9 @@ record=1
 [ "${INK_NO_RECORD:-0}" = "1" ] && record=0
 mkdir -p "$(dirname "$out")"
 
-make -s
+./fibs build editor
+fibs_config=$(./fibs config --get)
+editor_bin=".fibs/dist/$fibs_config/editor"
 
 xvfb_start
 win=""
@@ -44,7 +46,7 @@ if [ "$record" = "1" ]; then
     sleep 1
 fi
 
-( exec -a "$EDITOR_TAG" ./build/editor ) >/tmp/ink-ribbon-build-editor.log 2>&1 &
+( exec -a "$EDITOR_TAG" "$editor_bin" ) >/tmp/ink-ribbon-build-editor.log 2>&1 &
 pid=$!
 for _ in $(seq 1 100); do
     win=$(xdotool search --name "Ink Ribbon Level Editor" 2>/dev/null | head -1 || true)

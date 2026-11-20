@@ -7,10 +7,12 @@ cd "$(dirname "$0")/.."
 out=/tmp/ink-ribbon-six
 rm -f "$out"-*.png "$out"-*.lvl /tmp/ink-ribbon-empty-*.lvl
 echo "== build =="
-if ! make -B -j4 >/tmp/ink-ribbon-build.log 2>&1; then tail -30 /tmp/ink-ribbon-build.log; echo "FAIL build"; exit 1; fi
+if ! ./fibs build --rebuild >/tmp/ink-ribbon-build.log 2>&1; then tail -30 /tmp/ink-ribbon-build.log; echo "FAIL build"; exit 1; fi
 if grep -E "warning:|error:" /tmp/ink-ribbon-build.log; then echo "FAIL build warnings"; exit 1; fi
 echo "PASS build without warnings"
-if ! make -s test >/tmp/ink-ribbon-test.log 2>&1; then tail -10 /tmp/ink-ribbon-test.log; echo "FAIL core tests"; exit 1; fi
+fibs_config=$(./fibs config --get)
+fibs_dist=".fibs/dist/$fibs_config"
+if ! "$fibs_dist/test_level" >/tmp/ink-ribbon-test.log 2>&1; then tail -10 /tmp/ink-ribbon-test.log; echo "FAIL core tests"; exit 1; fi
 grep -q "ALL CORE TESTS PASSED" /tmp/ink-ribbon-test.log || { echo "FAIL core tests"; exit 1; }
 echo "PASS core tests ($(grep -c '^PASS' /tmp/ink-ribbon-test.log) checks)"
 
@@ -30,7 +32,7 @@ door 1 1 0.500 40.000
 LVL
 
 xvfb_start
-( exec -a "$EDITOR_TAG" ./build/editor --level "$fixture" ) >/tmp/ink-ribbon-six.log 2>&1 &
+( exec -a "$EDITOR_TAG" "$fibs_dist/editor" --level "$fixture" ) >/tmp/ink-ribbon-six.log 2>&1 &
 pid=$!
 cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; xvfb_stop; _release_display; test_reap; _run_unregister; }
 trap cleanup EXIT INT TERM HUP

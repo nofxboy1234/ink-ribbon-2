@@ -15,31 +15,41 @@ shows the finished level blended over the reference, and
 
 ## Build and run
 
-The project is tested on Linux with X11 and OpenGL. It needs a C and C++ compiler, make, pkg-config, and the X11, Xi, Xcursor, and GL development packages.
+The project is tested on Linux with X11 and OpenGL. It uses [fibs](https://github.com/floooh/fibs), Floh's Typescript cmake wrapper. It needs Deno, CMake, a C/C++ toolchain, and the X11, Xi, Xcursor, and GL development packages. Ninja is recommended.
+
+Install Deno from https://docs.deno.com/runtime/getting_started/installation/
 
 Fedora:
 
 ```sh
-sudo dnf install gcc gcc-c++ make pkgconf-pkg-config libX11-devel libXi-devel libXcursor-devel mesa-libGL-devel
+sudo dnf install gcc gcc-c++ cmake ninja-build libX11-devel libXi-devel libXcursor-devel mesa-libGL-devel
 ```
 
 Debian and Ubuntu:
 
 ```sh
-sudo apt install gcc g++ make pkg-config libx11-dev libxi-dev libxcursor-dev libgl1-mesa-dev
+sudo apt install gcc g++ cmake ninja-build libx11-dev libxi-dev libxcursor-dev libgl1-mesa-dev
 ```
 
-`make verify` also needs `xdotool`, ImageMagick (for `import`, `convert`, and `compare`), and `Xvfb`. The editor itself does not use them. Verification runs on a private Xvfb display, so it never moves your mouse or touches your desktop. The harness tags every process with a per-run id, claims its own X display with a lock, and records itself in `/tmp/ink-ribbon-runs`. Two runs can go at once on separate displays. Each run kills only its own processes, and the next run reaps the processes and display lock of any run that was killed outright. `make verify` also fails if its own run leaves anything behind.
+`./fibs verify` also needs `xdotool`, ImageMagick (for `import`, `convert`, and `compare`), and `Xvfb`. The editor itself does not use them. Verification runs on a private Xvfb display, so it never moves your mouse or touches your desktop. The harness tags every process with a per-run id, claims its own X display with a lock, and records itself in `/tmp/ink-ribbon-runs`. Two runs can go at once on separate displays. Each run kills only its own processes, and the next run reaps the processes and display lock of any run that was killed outright. `./fibs verify` also fails if its own run leaves anything behind.
 
 Build and run from the repository root:
 
 ```sh
 git submodule update --init --recursive
-make
-./build/editor
+./fibs build
+./fibs editor
 ```
 
-Load another level with `./build/editor --level path/to/level.lvl`. The `levels/` path is relative to the working directory.
+`./fibs editor` builds the editor, then runs it from the project directory, so the relative `levels/` paths work. Load another level with `./fibs editor --level path/to/level.lvl`.
+
+Run the headless core tests with:
+
+```sh
+./fibs test
+```
+
+The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prints the active config. Use `./fibs config linux-ninja-debug` (or `linux-make-debug`) for a debug build and `./fibs build --rebuild` for a clean rebuild. `./fibs clean --all` removes build output.
 
 ## What you can do
 
@@ -107,15 +117,15 @@ The canvas is near-black. Every wall, stair tread, and selection helper is a lin
 ## Verification
 
 ```sh
-make test
-make verify
+./fibs test
+./fibs verify
 ```
 
-`make verify` rebuilds, runs the core tests, loads a legacy level with a fill, a room polygon, and a coloured door, then drives the real X11 window with xdotool. It checks that the fill is ignored, the wall is faint, the door is white, and the six tool buttons activate in order. It draws two overlapping rectangles and checks from the saved file that one shape holds exactly the eight boundary walls with no interior lines, then reloads that file and compares every wall record. It hovers a wall and checks the ghost and the placed white door, then proves that the tool returned to Select and that Q held keeps it. It places a stair, checks the saved flip flag, and toggles the flag from the inspector. A recorded run:
+`./fibs verify` rebuilds, runs the core tests, loads a legacy level with a fill, a room polygon, and a coloured door, then drives the real X11 window with xdotool. It checks that the fill is ignored, the wall is faint, the door is white, and the six tool buttons activate in order. It draws two overlapping rectangles and checks from the saved file that one shape holds exactly the eight boundary walls with no interior lines, then reloads that file and compares every wall record. It hovers a wall and checks the ghost and the placed white door, then proves that the tool returned to Select and that Q held keeps it. It places a stair, checks the saved flip flag, and toggles the flag from the inspector. A recorded run:
 
 ```text
 PASS build without warnings
-PASS core tests (338 checks)
+PASS core tests (375 checks)
 PASS empty room (040404), faint wall (max 0.340974), white door (max 0.94902)
 PASS save writes fill 0, door colour 0, and no room record
 PASS six tools activate in order on keys 1 to 6
@@ -141,6 +151,7 @@ The script assumes a 1280x800 window and the default panel widths, and it uses i
 
 | Path | Owns |
 | --- | --- |
+| `fibs`, `fibs.ts` | fibs launcher and build graph |
 | `src/main.c` | sokol app lifecycle, font, frame order |
 | `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
 | `src/level.c` | level document, shapes, rectangle union, edits, save, load, undo ring |
@@ -153,7 +164,7 @@ The script assumes a 1280x800 window and the default panel widths, and it uses i
 | `tools/gen_demo_map.py` | regenerate the demo level |
 | `tools/level_info.c` | print counts and bounds for a level file |
 
-Only `main.c` and `editor.c` include sokol or ImGui headers. `make test` links the core with gcc alone, so a core file that pulls in a UI header fails the build.
+Only `main.c` and `editor.c` include sokol or ImGui headers. The `test_level` target in `fibs.ts` depends only on `ink-core`, so a core file that pulls in a UI header fails the build.
 
 ## Limits
 

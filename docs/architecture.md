@@ -51,10 +51,10 @@ per completed gesture. Command deltas would need a correct inverse for every
 mutation, and cascade deletes are exactly where inverses are hard. Snapshot undo
 needs none.
 
-The core (`geom.*`, `level.*`) includes no sokol or ImGui header and builds with
-gcc alone, so it is tested headlessly. `main.c` owns the sokol lifecycle.
-`editor.*` owns UI state, gestures, and drawing. The split is enforced by the
-Makefile: `make test` links only the core.
+The core (`geom.*`, `level.*`) includes no sokol or ImGui header, so it is
+tested headlessly. `main.c` owns the sokol lifecycle. `editor.*` owns UI state,
+gestures, and drawing. The split is enforced by `fibs.ts`: `test_level` depends
+only on the `ink-core` library.
 
 ## Rectangle union
 
@@ -138,7 +138,7 @@ preserved. The Snap checkbox and grid size remain user controls.
 - Selection is a bounded set per object kind plus a primary reference. It is
   cleared when an undo changes pool counts, so indices never retarget silently.
   Doors keep stable wall IDs, so no generational handles are needed.
-- `make test` covers the pure core only. Canvas behavior is proven by driving
+- `./fibs test` covers the pure core only. Canvas behavior is proven by driving
   the real window and screenshotting it.
 
 ## Synthesis decision

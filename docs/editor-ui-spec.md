@@ -177,7 +177,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 The UI owner must verify these on the real X11 window and report the commands and screenshots:
 
-1. `make` builds with no warnings from `src/`.
+1. `./fibs build` builds with no warnings from `src/`.
 2. Load a legacy level with fills, a room polygon, and a coloured door. Screenshot shows faint walls, a white door, and a black interior. Save it and confirm fill 0, door colour 0, and no room record.
 3. Press 1 to 6 and confirm one tool button lights per key and key 7 changes nothing.
 4. Draw two overlapping rectangles. The saved level has one shape with exactly the boundary walls, no interior lines, and the union area.

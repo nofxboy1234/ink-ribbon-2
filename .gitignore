@@ -2,3 +2,6 @@ build/
 decisions.tsv
 *.png
 !docs/screenshots/*.png
+.fibs/
+CMakeLists.txt
+CMakePresets.json
