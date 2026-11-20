@@ -324,30 +324,67 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
         return take;
     }
 
+    const float radii[] = { 10.0f, 7.0f, 4.5f, 2.5f, 1.2f };
     Vec2 smooth[NAV_MAX_PATH];
     int sn = 0;
-    smooth[sn++] = filtered[0];
-    for (int i = 0; i < fn - 1; i++) {
-        Vec2 q = v2_lerp(filtered[i], filtered[i + 1], 0.25f);
-        Vec2 r = v2_lerp(filtered[i], filtered[i + 1], 0.75f);
-        if (sn == 0 || !v2_equal(q, smooth[sn - 1], 0.01f)) smooth[sn++] = q;
-        if (sn == 0 || !v2_equal(r, smooth[sn - 1], 0.01f)) smooth[sn++] = r;
-    }
-    Vec2 end = filtered[fn - 1];
-    if (!v2_equal(smooth[sn - 1], end, 0.01f)) smooth[sn++] = end;
-    else smooth[sn - 1] = end;
-
-    bool clear = true;
-    for (int i = 1; i < sn; i++) {
-        if (!nav_line_clear(nav, smooth[i - 1], smooth[i])) {
-            clear = false;
-            break;
+    for (int ri = 0; ri < (int)(sizeof radii / sizeof radii[0]); ri++) {
+        sn = 0;
+        smooth[sn++] = filtered[0];
+        for (int i = 1; i < fn - 1; i++) {
+            Vec2 prev = filtered[i - 1];
+            Vec2 cur = filtered[i];
+            Vec2 next = filtered[i + 1];
+            float l0 = v2_dist(prev, cur);
+            float l1 = v2_dist(cur, next);
+            if (l0 < 0.001f || l1 < 0.001f) continue;
+            Vec2 d0 = v2_scale(v2_sub(cur, prev), 1.0f / l0);
+            Vec2 d1 = v2_scale(v2_sub(next, cur), 1.0f / l1);
+            float dot = d0.x * d1.x + d0.y * d1.y;
+            float radius = radii[ri];
+            if (radius > l0 * 0.45f) radius = l0 * 0.45f;
+            if (radius > l1 * 0.45f) radius = l1 * 0.45f;
+            if (dot > 0.999f || radius < 0.2f) {
+                if (!v2_equal(cur, smooth[sn - 1], 0.02f)) smooth[sn++] = cur;
+                continue;
+            }
+            Vec2 a = v2_sub(cur, v2_scale(d0, radius));
+            Vec2 b = v2_add(cur, v2_scale(d1, radius));
+            if (!v2_equal(a, smooth[sn - 1], 0.02f)) smooth[sn++] = a;
+            int steps = (int)ceilf(radius / 0.5f);
+            if (steps < 4) steps = 4;
+            if (steps > 32) steps = 32;
+            for (int k = 1; k <= steps; k++) {
+                float t = (float)k / (float)steps;
+                float u = 1.0f - t;
+                Vec2 q = v2_add(
+                    v2_add(v2_scale(a, u * u),
+                           v2_scale(cur, 2.0f * u * t)),
+                    v2_scale(b, t * t));
+                if (!v2_equal(q, smooth[sn - 1], 0.02f)) smooth[sn++] = q;
+            }
+            if (sn >= NAV_MAX_PATH) break;
         }
+        Vec2 lastp = filtered[fn - 1];
+        if (!v2_equal(lastp, smooth[sn - 1], 0.02f)) smooth[sn++] = lastp;
+        else smooth[sn - 1] = lastp;
+        if (sn < 2) continue;
+        bool clear = true;
+        for (int i = 1; i < sn; i++) {
+            if (!nav_line_clear(nav, smooth[i - 1], smooth[i])) {
+                clear = false;
+                break;
+            }
+        }
+        if (clear) break;
+        sn = 0;
     }
-    const Vec2* use = clear ? smooth : filtered;
-    int un = clear ? sn : fn;
-    int take = un < max ? un : max;
-    for (int i = 0; i < take; i++) out[i] = use[i];
+    if (sn < 2) {
+        int take = fn < max ? fn : max;
+        for (int i = 0; i < take; i++) out[i] = filtered[i];
+        return take;
+    }
+    int take = sn < max ? sn : max;
+    for (int i = 0; i < take; i++) out[i] = smooth[i];
     return take;
 }
 

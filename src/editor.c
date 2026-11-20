@@ -1139,12 +1139,27 @@ static void update_player(Editor* e, float dt) {
             heading += clampf(err, -turn, turn);
         }
     } else {
-        float step = fminf(dist, PLAYER_SPEED * dt);
-        pos = v2_add(pos, v2_scale(dir, step));
         heading += clampf(err, -turn, turn);
-        if (step >= dist - 0.001f) {
-            pos = target;
-            e->player_path_index++;
+        /* Consume the whole frame's travel across dense curve samples so the
+           player keeps a constant speed instead of stopping on every sample. */
+        float remaining = PLAYER_SPEED * dt;
+        while (remaining > 0.0f &&
+               e->player_path_index < e->player_path_count) {
+            Vec2 next = e->player_path[e->player_path_index];
+            Vec2 to = v2_sub(next, pos);
+            float d = v2_len(to);
+            if (d <= 0.0001f) {
+                e->player_path_index++;
+                continue;
+            }
+            if (d <= remaining) {
+                pos = next;
+                remaining -= d;
+                e->player_path_index++;
+            } else {
+                pos = v2_add(pos, v2_scale(to, remaining / d));
+                remaining = 0.0f;
+            }
         }
     }
     e->level.player_pos = pos;

@@ -153,7 +153,8 @@ At most one player record exists. The Player section at the bottom of the left p
 - With a player, a play-mode click builds an A* path and starts walking.
 - The nav grid is 8 world units per cell. A cell is open when its centre is inside a closed room or corridor and clears every solid wall by the player radius. Door openings are removed from every collinear wall record, so doors are passable. Stair treads are not walls; stair-side walls remain solid.
 - Hovering in play mode draws the nav cell as a green-bordered square when walkable, and a muted red border when blocked. It also draws the planned A* route from the player to that cell as a green line. After a click, the remaining route is drawn in green while the player walks. The same green hover cell appears while `Place player` is armed in edit mode.
-- A* uses 8-way movement and forbids diagonal corner cutting. Its cell route is line-of-sight filtered and Chaikin-rounded, then every smoothed segment is sampled for open cells; if a rounded segment fails, the filtered polyline is used. This route is what is drawn and walked.
+- A* uses 8-way movement and forbids diagonal corner cutting. Its cell route is line-of-sight filtered, then each interior corner is replaced by a quadratic Bezier arc. Arc radii start at 10 world units and shrink until the sampled arc stays on open cells. The resulting dense waypoints are what is drawn, previewed, and walked.
+- The player consumes the frame's travel across as many dense curve samples as needed, giving a constant-speed follow instead of stopping at each sample.
 - If the next destination is directly horizontal or vertical behind the player, the player pivots on the spot to face it. Otherwise it turns while moving, with a small turning circle drawn around it.
 - `C` recentres on the player at the current zoom. `Esc` stops the player. `P` returns to editing. The player position and heading are saved in the level.
 

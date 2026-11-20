@@ -139,9 +139,11 @@ grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
 is inside a closed room/corridor outline and its player radius clears every solid
 wall. Door spans are cut out of every collinear wall they sit on, so doors are
 passable; stair treads are not walls, while stair-side walls still block. A* uses
-8-way movement, forbids corner cutting, and paths through door gaps. The raw A* route is line-of-sight filtered and Chaikin-rounded, then checked
-against the nav grid again, so the drawn and walked route is a short smooth
-polyline rather than a cell-by-cell staircase. If the first destination is
+8-way movement, forbids corner cutting, and paths through door gaps. The raw A* route is line-of-sight filtered, then each corner is replaced by a
+quadratic Bezier arc. Arc radii start at 10 world units and shrink until the
+sampled curve stays on open nav cells, so the drawn and walked route is a smooth
+curve with no stair-step or sharp corner. The player follows the dense curve at
+a constant speed rather than hopping between grid waypoints. If the first destination is
 directly horizontal or vertical behind the player, the player pivots on the
 spot; otherwise it turns while moving, with a small turning circle drawn around
 it.
