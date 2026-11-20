@@ -23,6 +23,10 @@
 #define DOOR_HOVER_PX 22.0f
 #define CLOSE_TOL_PX 12.0f
 #define DRAG_END_PX 8.0f
+/* A click may wobble by a pixel or two. A drag gesture only starts applying
+   snapped positions once the pointer has actually travelled this far, so a
+   plain Select click never moves an off-grid object. */
+#define DRAG_START_PX 4.0f
 /* A wall corner is a small target, so it answers a press from this close. */
 #define SPAN_END_GRAB_PX 9.0f
 #define VERTEX_GRAB_PX 7.0f
@@ -2030,6 +2034,13 @@ static void line_finish_pending(Editor* e, ImVec2 mouse, bool moved) {
     }
 }
 
+/* True once the pointer has moved far enough for a press to count as a drag.
+   Until then a press is a click and must leave the document untouched, even
+   when the object is not on the current snap grid. */
+static bool past_drag_start(const Editor* e, ImVec2 mouse) {
+    return screen_dist(mouse, v2_to_im(e->gesture.press_screen)) >= DRAG_START_PX;
+}
+
 static void update_drag(Editor* e, bool have_pointer) {
     ImGuiIO* io = igGetIO();
     Gesture* g = &e->gesture;
@@ -2061,6 +2072,7 @@ static void update_drag(Editor* e, bool have_pointer) {
         }
         case GESTURE_MOVE: {
             if (down) {
+                if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
                 Vec2 raw = v2_sub(world, g->press_world);
                 Vec2 delta = raw;
                 if (e->snap) {
@@ -2102,7 +2114,7 @@ static void update_drag(Editor* e, bool have_pointer) {
                 cancel_gesture(e);
                 break;
             }
-            if (down && have_pointer) {
+            if (down && have_pointer && past_drag_start(e, io->MousePos)) {
                 Span* span = &e->spans[g->object_index];
                 const Wall* w = level_wall_by_id_const(&e->level, span->wall);
                 if (!w) {
@@ -2136,6 +2148,7 @@ static void update_drag(Editor* e, bool have_pointer) {
         }
         case GESTURE_VERTEX: {
             if (down) {
+                if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
                 Vec2 target = snapped(e, world);
                 if (!v2_equal(target, g->vertex, 0.0001f) &&
                     level_move_vertex(&e->level, g->vertex, target)) {
@@ -2158,6 +2171,7 @@ static void update_drag(Editor* e, bool have_pointer) {
         }
         case GESTURE_RESHAPE: {
             if (down) {
+                if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
                 Vec2 raw = v2_sub(world, g->press_world);
                 Vec2 total = raw;
                 if (e->snap) {
@@ -2215,7 +2229,7 @@ static void update_drag(Editor* e, bool have_pointer) {
                     float t = point_segment_t(world, w->a, w->b);
                     if (e->snap) t = snap_wall_t(w, t, e->grid_size);
                     float old_t = d->t;
-                    if (down) {
+                    if (down && have_pointer && past_drag_start(e, io->MousePos)) {
                         level_set_door_span(&e->level, idx, t, d->width);
                         if (fabsf(e->level.doors[idx].t - old_t) > 0.0001f) g->moved = true;
                     }
@@ -2244,7 +2258,8 @@ static void update_drag(Editor* e, bool have_pointer) {
                         float t = g->fixed_t + (tc >= g->fixed_t ? half : -half);
                         float old_t = d->t;
                         float old_w = d->width;
-                        if (down) {
+                        if (down && have_pointer &&
+                            past_drag_start(e, io->MousePos)) {
                             level_set_door_span(&e->level, idx, t, width);
                             if (fabsf(e->level.doors[idx].t - old_t) > 0.0001f ||
                                 fabsf(e->level.doors[idx].width - old_w) > 0.0001f) {
@@ -2268,6 +2283,7 @@ static void update_drag(Editor* e, bool have_pointer) {
                 break;
             }
             if (down) {
+                if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
                 Rect before = level_stairs_rect(&e->level.stairs[idx]);
                 Rect next = before;
                 /* Snap on keeps every edge on the grid, so the minimum is one
@@ -2620,6 +2636,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         int end = -1;
         if (nearest_span_end(e, mouse, &span_index, &end)) {
             begin_span_end(e, span_index, end);
+            e->gesture.press_screen = v2(mouse.x, mouse.y);
             return;
         }
     }
@@ -2635,6 +2652,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         int wall = nearest_vertex(e, mouse, &vertex);
         if (wall >= 0) {
             begin_vertex(e, wall, vertex);
+            e->gesture.press_screen = v2(mouse.x, mouse.y);
             return;
         }
     }
@@ -2650,6 +2668,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
                 sel_only(e, SEL_STAIRS, i);
                 cancel_gesture(e);
                 begin_stairs_resize(e, i, edge, world);
+                e->gesture.press_screen = v2(mouse.x, mouse.y);
                 return;
             }
         }
@@ -2702,6 +2721,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         if (target.index >= 0) sel_set_primary(e, target.kind, target.index);
     }
     cancel_gesture(e);
+    e->gesture.press_screen = v2(mouse.x, mouse.y);
     e->gesture.collapse = target;
     e->gesture.collapse_on_release = in_group;
 
