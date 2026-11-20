@@ -214,9 +214,6 @@ struct Editor {
     int span_count;
     bool fit_pending;
     bool pan_active;
-    /* A session lock on the current selection. Any selection change clears it,
-       so it only protects the objects the user deliberately froze. */
-    bool selection_locked;
 
     float grid_size;
     bool snap;
@@ -522,26 +519,108 @@ static int sel_count(const Selection* s) {
 
 static void sel_prune(Editor* e);
 
-static bool selection_is_locked(const Editor* e) {
-    return e->selection_locked && sel_count(&e->selection) > 0;
+static bool object_locked(const Editor* e, SelKind kind, int index) {
+    switch (kind) {
+        case SEL_WALL:
+            return index >= 0 && index < e->level.wall_count &&
+                   e->level.walls[index].locked;
+        case SEL_DOOR:
+            return index >= 0 && index < e->level.door_count &&
+                   e->level.doors[index].locked;
+        case SEL_LABEL:
+            return index >= 0 && index < e->level.label_count &&
+                   e->level.labels[index].locked;
+        case SEL_STAIRS:
+            return index >= 0 && index < e->level.stairs_count &&
+                   e->level.stairs[index].locked;
+        case SEL_NONE:
+        default:
+            return false;
+    }
+}
+
+static bool wall_has_locked_door(const Editor* e, int wall_index) {
+    if (wall_index < 0 || wall_index >= e->level.wall_count) return false;
+    WallId id = e->level.walls[wall_index].id;
+    for (int i = 0; i < e->level.door_count; i++) {
+        if (e->level.doors[i].wall == id && e->level.doors[i].locked) return true;
+    }
+    return false;
+}
+
+static bool selection_has_locked(const Editor* e) {
+    const Selection* s = &e->selection;
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        SelKind kind = (SelKind)k;
+        const bool* bits = sel_pool_const(s, kind);
+        int cap = sel_cap(kind);
+        for (int i = 0; i < cap; i++) {
+            if (!bits[i]) continue;
+            if (object_locked(e, kind, i)) return true;
+            if (kind == SEL_WALL && wall_has_locked_door(e, i)) return true;
+        }
+    }
+    return false;
+}
+
+static bool selection_all_locked(const Editor* e) {
+    const Selection* s = &e->selection;
+    int n = 0;
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        SelKind kind = (SelKind)k;
+        const bool* bits = sel_pool_const(s, kind);
+        int cap = sel_cap(kind);
+        for (int i = 0; i < cap; i++) {
+            if (!bits[i]) continue;
+            n++;
+            if (!object_locked(e, kind, i)) return false;
+        }
+    }
+    return n > 0;
+}
+
+static void set_selection_locked(Editor* e, bool locked) {
+    Selection* s = &e->selection;
+    for (int k = SEL_WALL; k < SEL_KIND_COUNT; k++) {
+        SelKind kind = (SelKind)k;
+        bool* bits = sel_pool(s, kind);
+        int cap = sel_cap(kind);
+        for (int i = 0; i < cap; i++) {
+            if (!bits[i]) continue;
+            switch (kind) {
+                case SEL_WALL: e->level.walls[i].locked = locked; break;
+                case SEL_DOOR: e->level.doors[i].locked = locked; break;
+                case SEL_LABEL: e->level.labels[i].locked = locked; break;
+                case SEL_STAIRS: e->level.stairs[i].locked = locked; break;
+                case SEL_NONE:
+                default: break;
+            }
+        }
+    }
+    /* Locking a room's walls also locks the doors hosted by those walls. */
+    for (int d = 0; d < e->level.door_count; d++) {
+        if (s->doors[d]) continue;
+        int wall = level_find_wall_index(&e->level, e->level.doors[d].wall);
+        if (wall >= 0 && s->walls[wall]) e->level.doors[d].locked = locked;
+    }
 }
 
 static void toggle_selection_lock(Editor* e) {
     sel_prune(e);
-    if (sel_count(&e->selection) == 0) {
+    int n = sel_count(&e->selection);
+    if (n == 0) {
         set_status(e, true, "Select something before locking it");
         return;
     }
-    e->selection_locked = !e->selection_locked;
-    set_status(e, false, e->selection_locked ? "Selection locked"
-                                             : "Selection unlocked");
+    bool lock = !selection_all_locked(e);
+    set_selection_locked(e, lock);
+    set_status(e, false, lock ? "Selection locked" : "Selection unlocked");
 }
 
 static void sel_clear(Editor* e) {
     memset(&e->selection, 0, sizeof e->selection);
     e->selection.primary.kind = SEL_NONE;
     e->selection.primary.index = -1;
-    e->selection_locked = false;
     e->label_buf_ready = false;
 }
 
@@ -599,7 +678,6 @@ static void sel_prune(Editor* e) {
         }
     }
     if (sel_count(s) == 0) {
-        e->selection_locked = false;
         if (s->primary.kind != SEL_NONE || s->primary.index != -1) {
             s->primary = (SelRef){ SEL_NONE, -1 };
             changed = true;
@@ -930,6 +1008,11 @@ static int cut_spans(Editor* e, int* dropped_doors, int* failed) {
     for (int i = 0; i < e->span_count; i++) {
         if (used[i]) continue;
         WallId wall = e->spans[i].wall;
+        int wall_index = level_find_wall_index(&e->level, wall);
+        if (wall_index >= 0 && (e->level.walls[wall_index].locked ||
+                                wall_has_locked_door(e, wall_index))) {
+            continue;
+        }
         float iv[2 * LEVEL_MAX_WALLS];
         int n = 0;
         for (int k = i; k < e->span_count; k++) {
@@ -974,8 +1057,8 @@ static int cut_spans(Editor* e, int* dropped_doors, int* failed) {
    walls go only when no section is marked, because a section owns its wall. */
 static void delete_selection(Editor* e) {
     sel_prune(e);
-    if (selection_is_locked(e)) {
-        set_status(e, true, "Selection is locked");
+    if (selection_has_locked(e)) {
+        set_status(e, true, "Selection contains locked objects");
         return;
     }
     span_prune(e);
@@ -2040,6 +2123,7 @@ static bool wall_section_in_rect(const Wall* wall, Rect box, float* out_t0,
 static void collect_sections(Editor* e, Rect box, bool additive) {
     if (!additive) span_clear(e);
     for (int i = 0; i < e->level.wall_count; i++) {
+        if (e->level.walls[i].locked || wall_has_locked_door(e, i)) continue;
         float t0, t1;
         if (!wall_section_in_rect(&e->level.walls[i], box, &t0, &t1)) continue;
         span_add(e, e->level.walls[i].id, t0, t1);
@@ -2900,10 +2984,6 @@ static void begin_vertex(Editor* e, int wall_index, Vec2 vertex) {
 }
 
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
-    if (selection_is_locked(e)) {
-        set_status(e, false, "Selection is locked; press L or unlock it in the inspector");
-        return;
-    }
     ImGuiIO* io = igGetIO();
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
@@ -2914,9 +2994,13 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
         int span_index = -1;
         int end = -1;
         if (nearest_span_end(e, mouse, &span_index, &end)) {
-            begin_span_end(e, span_index, end);
-            e->gesture.press_screen = v2(mouse.x, mouse.y);
-            return;
+            const Wall* span_wall = level_wall_by_id_const(
+                &e->level, e->spans[span_index].wall);
+            if (span_wall && !span_wall->locked) {
+                begin_span_end(e, span_index, end);
+                e->gesture.press_screen = v2(mouse.x, mouse.y);
+                return;
+            }
         }
     }
 
@@ -2929,7 +3013,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     if (!shift && !ctrl) {
         Vec2 vertex = world;
         int wall = nearest_vertex(e, mouse, &vertex);
-        if (wall >= 0) {
+        if (wall >= 0 && !e->level.walls[wall].locked) {
             begin_vertex(e, wall, vertex);
             e->gesture.press_screen = v2(mouse.x, mouse.y);
             return;
@@ -2945,6 +3029,10 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
                 int edge = stair_edge_at(e, i, mouse);
                 if (edge == STAIR_EDGE_NONE) continue;
                 sel_only(e, SEL_STAIRS, i);
+                if (e->level.stairs[i].locked) {
+                    set_status(e, false, "Selection is locked; press L to unlock");
+                    return;
+                }
                 cancel_gesture(e);
                 begin_stairs_resize(e, i, edge, world);
                 e->gesture.press_screen = v2(mouse.x, mouse.y);
@@ -3003,6 +3091,10 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     e->gesture.press_screen = v2(mouse.x, mouse.y);
     e->gesture.collapse = target;
     e->gesture.collapse_on_release = in_group;
+    if (selection_has_locked(e)) {
+        set_status(e, false, "Selection is locked; press L to unlock");
+        return;
+    }
 
     if (target.kind == SEL_WALL) {
         int edges = sel_count_kind(&e->selection, SEL_WALL);
@@ -3636,18 +3728,19 @@ static void draw_inspector(Editor* e) {
 
     sel_prune(e);
     bool have_selection = sel_count(&e->selection) > 0;
+    bool any_locked = have_selection && selection_has_locked(e);
     if (have_selection) {
-        bool locked = e->selection_locked;
+        bool locked = selection_all_locked(e);
         if (igCheckbox("Lock selection", &locked)) {
-            e->selection_locked = locked;
+            set_selection_locked(e, locked);
             set_status(e, false, locked ? "Selection locked"
                                         : "Selection unlocked");
         }
-        if (e->selection_locked) {
-            small_note("Locked: this selection cannot be moved, reshaped, deleted, or edited. Press L to unlock.");
+        if (any_locked) {
+            small_note("Locked objects stay put while you select and edit others. Press L or the checkbox to unlock the selected objects.");
         }
     }
-    igBeginDisabled(e->selection_locked && have_selection);
+    igBeginDisabled(any_locked);
     SelRef single;
     if (sel_single(&e->selection, &single)) {
         switch (single.kind) {
@@ -3881,8 +3974,8 @@ static void draw_modals(Editor* e) {
    copies, in one history step. */
 static void duplicate_selection(Editor* e) {
     sel_prune(e);
-    if (selection_is_locked(e)) {
-        set_status(e, true, "Selection is locked");
+    if (selection_has_locked(e)) {
+        set_status(e, true, "Selection contains locked objects");
         return;
     }
     Selection* sel = &e->selection;
@@ -3906,6 +3999,7 @@ static void duplicate_selection(Editor* e) {
         /* Copy every creation setting, including falloff and both opacities. */
         e->level.stairs[idx] = src;
         e->level.stairs[idx].pos = copy.min;
+        e->level.stairs[idx].locked = false;
         sel_add(e, SEL_STAIRS, idx);
         made++;
     }
@@ -4117,7 +4211,7 @@ Editor* editor_create(const char* startup_path) {
     e->snap = true;
     e->snap_objects = true;
     e->show_grid = true;
-    e->door_width = 32.0f;
+    e->door_width = 12.0f;
     e->label_size = 10.0f;
     e->stair_dir = STAIRS_H;
     e->stair_steps = 10;

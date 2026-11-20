@@ -115,7 +115,8 @@ A wall hit selects that edge. Clicking inside a closed shape selects all of its 
 
 Selection is a bounded set per object kind plus a primary reference. Walls are selected as individual edges. The set is never serialized.
 
-- A selection can be locked with `L` or the inspector's Lock selection checkbox. While locked, canvas presses leave the selection untouched and do not start a gesture, `Delete` and `Ctrl+D` report that the selection is locked, and the object inspector is disabled apart from the lock checkbox. Clearing the selection or pressing `Esc` clears the lock.
+- A selection can be locked with `L` or the inspector's Lock selection checkbox. Locking a wall also locks the doors hosted by that wall. Locks live on the selected objects for the session, so other objects can still be selected and edited. Locked objects remain selectable so they can be unlocked. A selection containing any locked object refuses canvas drags, `Delete`, `Ctrl+D`, and inspector edits; the lock checkbox stays enabled. Locks are not saved with the level.
+- Locked walls are skipped by marquee section marking and section cutting.
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out.
 - A plain press within 7 screen pixels of a wall endpoint starts a corner drag. The level moves the shared vertex and every vertex that must follow, so attached walls stay orthogonal and the outline stays connected. Snap puts the corner on the grid; Snap objects instead aligns it to nearby wall lines and endpoints within 8 screen pixels. Select draws hollow squares at wall endpoints as handles.
@@ -140,7 +141,7 @@ Show properties for the selected object, all edits through `level.*` and committ
 - Label: single-line text input, size slider 8 to 48, position, Delete.
 - Stairs: direction buttons, step count slider `STAIR_MIN_STEPS` to `STAIR_MAX_STEPS`, Flip checkbox, falloff combo, faint and bright opacity sliders, size, position, Delete.
 
-Above the object properties, show a Lock selection checkbox when anything is selected. While locked, the properties and Delete are disabled; the checkbox stays enabled so the selection can be unlocked. When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
+Above the object properties, show a Lock selection checkbox when anything is selected. It is checked when every selected object is locked; ticking it locks all selected objects and unticking unlocks them. If any selected object is locked, the properties and Delete are disabled; the checkbox stays enabled so the selection can be unlocked. When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
 
 ## Tool options in the left panel
 
@@ -150,7 +151,7 @@ Below the six tool buttons and the Q lock row:
 - Select: a hint that a box across walls marks their crossed sections to cut, and that a wall corner drags to resize.
 - Line: a hint.
 - Rectangle: a hint that overlapping rectangles union.
-- Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 32.
+- Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 12. New doors are 3 px thick.
 - Stairs: direction buttons, a steps slider, a Flip checkbox, a falloff combo (Linear, Ease in, Ease out, Smooth), faint and bright opacity sliders, and a hint.
 - Label: a size slider from 8 to 48.
 

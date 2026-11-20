@@ -83,7 +83,7 @@ static int append_wall(Level* level, ShapeId shape, Vec2 a, Vec2 b) {
     if (!wall_ok(a, b)) return -1;
 
     int index = level->wall_count++;
-    level->walls[index] = (Wall){ level->next_wall_id++, shape, a, b };
+    level->walls[index] = (Wall){ level->next_wall_id++, shape, a, b, false };
     return index;
 }
 
@@ -1074,7 +1074,7 @@ int level_add_door(Level* level, WallId wall, float t, float width) {
     if (!level_wall_by_id_const(level, wall)) return -1;
 
     int index = level->door_count++;
-    level->doors[index] = (Door){ wall, t, width };
+    level->doors[index] = (Door){ wall, t, width, false };
     level_set_door_span(level, index, t, width);
     return index;
 }
@@ -1186,6 +1186,7 @@ int level_add_stairs(Level* level, Rect rect, StairsDir dir, int steps) {
         STAIR_FADE_LINEAR,
         STAIR_ALPHA_MIN,
         STAIR_ALPHA_MAX,
+        false,
     };
     return index;
 }
@@ -1461,7 +1462,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 break;
             }
             wall_lines[tmp.wall_count] = line_no;
-            tmp.walls[tmp.wall_count++] = (Wall){ id, shape, a, b };
+            tmp.walls[tmp.wall_count++] = (Wall){ id, shape, a, b, false };
         } else if (strcmp(tag, "room") == 0) {
             /* Standalone room polygons were painted areas with a colour.
                They have no place in the empty look, so the record is read
@@ -1483,7 +1484,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 break;
             }
             door_lines[tmp.door_count] = line_no;
-            tmp.doors[tmp.door_count++] = (Door){ wall, t, width };
+            tmp.doors[tmp.door_count++] = (Door){ wall, t, width, false };
         } else if (strcmp(tag, "label") == 0) {
             float x, y, size;
             if (!read_float(&save, &x) || !read_float(&save, &y) ||
@@ -1583,7 +1584,8 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             }
             tmp.stairs[tmp.stairs_count++] =
                 (Stairs){ box.min, width, length, kept_steps, (StairsDir)dir,
-                          bottom != 0, (StairFade)fade, min_alpha, max_alpha };
+                          bottom != 0, (StairFade)fade, min_alpha, max_alpha,
+                          false };
         } else {
             ok = fail_line(err, line_no, "unknown record '%s'", tag);
         }

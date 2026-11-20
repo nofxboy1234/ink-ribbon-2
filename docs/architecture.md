@@ -43,7 +43,9 @@ points at a dead host.
 Labels and stairs are independent placed objects. The stair footprint is an
 explicit min-corner box, so its edges can be dragged, and `dir`, `steps`, the
 fade-end flag, the falloff curve, and the faint/bright end opacities are stored
-fields rather than derived UI state. Older stair records omit the last three,
+fields rather than derived UI state. Every object also carries a session-only
+`locked` flag; it is not serialized, but it rides along with the object through
+array shifts and undo snapshots. Older stair records omit the last three,
 so they load with the linear 0.18/0.68 default.
 
 Undo is a ring of `Level` snapshots in `History`. The UI commits one snapshot

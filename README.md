@@ -60,7 +60,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
 - Select, edit, duplicate, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them. Ctrl+D duplicates the selection one grid cell diagonally and keeps every setting, including door width/position and each stair's direction, steps, flip, falloff, and opacities; doors on duplicated walls come along.
-- Lock the current selection with L or the inspector checkbox. A locked selection cannot be moved, reshaped, deleted, or changed in the inspector; L or the checkbox unlocks it. Clearing the selection also clears the lock.
+- Lock the selected objects with L or the inspector checkbox. Locking a wall also locks the doors it hosts. Locked objects stay put while you select and edit other objects. Selecting a locked object and pressing L (or unticking the checkbox) unlocks it. A selection that contains any locked object cannot be moved, reshaped, deleted, duplicated, or edited.
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Snap dragged lines, edges, corners, and every side of a moving selection to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
@@ -110,7 +110,7 @@ Selection is UI state and is never saved into a level. It is a bounded set per o
 
 Snap applies to line points, labels, stair boxes and edges, door centres, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
-Ctrl+D duplicates every selected object with its full settings and copies doors hosted by duplicated walls. A door selected without its wall gets a copy of the host wall under it. The selection lock is session state: while locked, the selection ignores canvas gestures, Delete, duplicate, and inspector edits; any selection change or Esc clears it.
+Ctrl+D duplicates every selected object with its full settings and copies doors hosted by duplicated walls. A door selected without its wall gets a copy of the host wall under it. Locks live on the objects for the session: they are not saved with the level, but they survive selecting other objects. Locked objects remain selectable so they can be unlocked; any edit or delete involving a locked object is refused.
 
 Snap objects is a second, independent toggle. While it is on, a dragged edge or corner also snaps to nearby wall lines and wall endpoints within 8 screen pixels. A rigid object drag checks every moving edge and wall endpoint on each axis, so a selection can land by its right or bottom side as well as its top or left. Object snapping wins on an axis and grid snapping fills the other. It is on by default.
 
@@ -140,7 +140,7 @@ PASS the tool returned to Select after the rectangle action
 PASS two overlapping rectangles are one eight-wall shape with no interior lines
 PASS level structure, doors, stairs, and labels
 PASS the union round-trips through save and load
-PASS hover ghost, click placed a white 32-unit door at the projected point
+PASS hover ghost, click placed a white 12-unit door at the projected point
 PASS the tool returned to Select after placing the door
 PASS Q lock lights, holds the Door tool, and the next unheld action switches
 PASS a stair drag uses the panel direction, steps, and flip
@@ -180,6 +180,7 @@ Only `main.c` and `editor.c` include sokol or ImGui headers. The `test_level` ta
 - Fixed capacities are 512 shapes, 512 walls, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
 - One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.
 - Group drag moves walls, labels, and stairs. Doors follow their host walls, so a selected door whose wall is not selected stays put. A single selected door slides along its wall instead.
+- Locks are session-only. They are not written to the level file and are cleared by opening or creating a level.
 - The editor was tested on Linux and X11 only.
 
 ## Third party

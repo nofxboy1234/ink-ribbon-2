@@ -40,6 +40,7 @@ typedef struct {
     WallId id;
     ShapeId shape;
     Vec2 a, b;
+    bool locked;
 } Wall;
 
 /* Doors are white and live on a wall: t is the centre parameter along the
@@ -48,12 +49,14 @@ typedef struct {
     WallId wall;
     float t;
     float width;
+    bool locked;
 } Door;
 
 typedef struct {
     Vec2 pos;
     float size;
     char text[LEVEL_LABEL_LEN];
+    bool locked;
 } Label;
 
 typedef enum {
@@ -87,6 +90,7 @@ typedef struct {
        which end of the run each one lands on. */
     float min_alpha;
     float max_alpha;
+    bool locked;
 } Stairs;
 
 typedef struct {
