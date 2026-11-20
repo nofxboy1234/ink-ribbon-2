@@ -1,5 +1,6 @@
 #include "geom.h"
 #include "level.h"
+#include "nav.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1687,6 +1688,70 @@ static void test_cut_two_walls(void) {
           "each cut wall keeps its id on the near piece");
 }
 
+static void test_nav_grid(void) {
+    Level level;
+    level_init(&level);
+    int walls[4];
+    ShapeId room = add_rectangle(&level, v2(-100, -100), 200, 200, walls);
+    level_close_shape(&level, room);
+    int inner = level_add_wall(&level, v2(0, -100), v2(0, 100));
+    WallId inner_id = level.walls[inner].id;
+    NavGrid nav;
+    check(nav_build(&nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav grid builds inside the room");
+    int start = nav_cell_at_world(&nav, v2(-40, 0));
+    int goal = nav_cell_at_world(&nav, v2(40, 0));
+    int path[NAV_MAX_PATH];
+    check(start >= 0 && goal >= 0, "nav finds the start and goal cells");
+    check(nav_find_path(&nav, start, goal, path, NAV_MAX_PATH) == 0,
+          "a solid wall blocks the path");
+
+    check(level_add_door(&level, inner_id, 0.5f, 20.0f) == 0,
+          "add a door through the blocking wall");
+    check(nav_build(&nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav grid rebuilds with the door");
+    start = nav_cell_at_world(&nav, v2(-40, 0));
+    goal = nav_cell_at_world(&nav, v2(40, 0));
+    int count = nav_find_path(&nav, start, goal, path, NAV_MAX_PATH);
+    check(count > 1, "the path crosses the door");
+    if (count > 1) {
+        bool through_door = false;
+        for (int i = 1; i < count; i++) {
+            Vec2 a = nav_cell_center(&nav, path[i - 1]);
+            Vec2 b = nav_cell_center(&nav, path[i]);
+            if (a.x <= 0.0f && b.x >= 0.0f) through_door = true;
+        }
+        check(through_door, "the path crosses from one side of the door to the other");
+    }
+}
+
+static void test_player(void) {
+    Level level;
+    level_init(&level);
+    check(level_is_empty(&level), "a level with no player is empty");
+    check(level_place_player(&level, v2(12, 34), 1.5f),
+          "place the one player marker");
+    check(level.player_present && nearv(level.player_pos, v2(12, 34)) &&
+              nearf(level.player_heading, 1.5f),
+          "the player keeps its position and heading");
+    Rect b = level_bounds(&level);
+    check(nearv(b.min, v2(12, 34)) && nearv(b.max, v2(12, 34)),
+          "the player contributes to the level bounds");
+    char path[256];
+    snprintf(path, sizeof path, "/tmp/ink_ribbon_player_%ld.lvl", (long)getpid());
+    LevelError err;
+    check(level_save(&level, path, &err), "save a player level");
+    Level loaded;
+    level_init(&loaded);
+    check(level_load(&loaded, path, &err) && loaded.player_present &&
+              nearv(loaded.player_pos, v2(12, 34)) &&
+              nearf(loaded.player_heading, 1.5f),
+          "the player survives save and load");
+    check(level_remove_player(&loaded) && !loaded.player_present,
+          "remove the player");
+    remove(path);
+}
+
 int main(void) {
     test_geometry();
     test_polygon();
@@ -1712,6 +1777,8 @@ int main(void) {
     test_move_vertex();
     test_delete_edge_reopens_shape();
     test_save_load_shapes();
+    test_nav_grid();
+    test_player();
 
     if (failures == 0) {
         printf("ALL CORE TESTS PASSED\n");

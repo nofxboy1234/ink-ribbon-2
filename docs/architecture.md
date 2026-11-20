@@ -142,6 +142,10 @@ preserved. The Snap checkbox and grid size remain user controls.
   Doors keep stable wall IDs, so no generational handles are needed.
 - `./fibs test` covers the pure core only. Canvas behavior is proven by driving
   the real window and screenshotting it.
+- `nav.c` is core code: an 8-unit grid, door-aware wall clearance, 8-way links
+  with no corner cutting, and A*. The player record lives in `Level`, so bounds,
+  save/load, and undo snapshots carry it. The editor owns the movement state,
+  the play-mode camera, and the Krita-sourced sprite texture.
 
 ## Synthesis decision
 

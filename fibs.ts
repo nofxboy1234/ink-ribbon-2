@@ -108,7 +108,7 @@ export function build(b: Builder): void {
 
     b.addTarget('ink-core', 'lib', (t) => {
         t.setDir('src');
-        t.addSources(['geom.c', 'level.c']);
+        t.addSources(['geom.c', 'level.c', 'nav.c']);
         t.addIncludeDirectories({ dirs: ['.'], scope: 'public' });
         cWarnings(t);
     });

@@ -3,6 +3,11 @@
 #include "cimgui.h"
 #include "geom.h"
 #include "level.h"
+#include "nav.h"
+#include "player_sprite.h"
+#include "sokol_app.h"
+#include "sokol_gfx.h"
+#include "sokol_imgui.h"
 
 #include <dirent.h>
 #include <float.h>
@@ -33,6 +38,10 @@
 /* A wall corner is a small target, so it answers a press from this close. */
 #define SPAN_END_GRAB_PX 9.0f
 #define VERTEX_GRAB_PX 7.0f
+#define PLAYER_SPEED 62.0f
+#define PLAYER_TURN_RATE 9.0f
+#define PLAYER_RADIUS 3.2f
+#define PLAYER_SPRITE_WORLD 12.0f
 /* One look means a near-black canvas and white lines. A wall and a stair
    tread draw at the same faint alpha, and nothing is ever filled. */
 #define CANVAS_BG 0x040404
@@ -247,6 +256,22 @@ struct Editor {
 
     Vec2 cursor_world;
     bool cursor_valid;
+
+    /* Runtime player state: one marker in the level, an A* grid over the
+       walls, and the current path. */
+    bool play_mode;
+    bool nav_ready;
+    NavGrid nav;
+    int player_path[NAV_MAX_PATH];
+    int player_path_count;
+    int player_path_index;
+    bool player_moving;
+    bool player_forward;
+    bool follow_player;
+    sg_image player_image;
+    sg_view player_view;
+    sg_sampler player_sampler;
+    ImTextureID player_texture;
 };
 
 static const char* TOOL_NAMES[TOOL_COUNT] = {
@@ -906,6 +931,173 @@ static void fit_camera(Editor* e) {
     e->camera.center = v2((b.min.x + b.max.x) * 0.5f, (b.min.y + b.max.y) * 0.5f);
 }
 
+static float angle_delta(float from, float to) {
+    return atan2f(sinf(to - from), cosf(to - from));
+}
+
+static int nav_nearest_open_cell(const NavGrid* nav, int cell, int rings) {
+    if (!nav_cell_valid(nav, cell)) return -1;
+    if (nav_cell_is_open(nav, cell)) return cell;
+    int cx = cell % nav->cols;
+    int cy = cell / nav->cols;
+    for (int r = 1; r <= rings; r++) {
+        int best = -1;
+        float best_dist = INFINITY;
+        for (int y = cy - r; y <= cy + r; y++) {
+            for (int x = cx - r; x <= cx + r; x++) {
+                if (x < 0 || y < 0 || x >= nav->cols || y >= nav->rows) continue;
+                if (x > cx - r && x < cx + r && y > cy - r && y < cy + r) continue;
+                int idx = y * nav->cols + x;
+                if (!nav_cell_is_open(nav, idx)) continue;
+                float d = (float)((x - cx) * (x - cx) + (y - cy) * (y - cy));
+                if (d < best_dist) {
+                    best_dist = d;
+                    best = idx;
+                }
+            }
+        }
+        if (best >= 0) return best;
+    }
+    return -1;
+}
+
+static void recenter_player_camera(Editor* e) {
+    if (!e->level.player_present) {
+        set_status(e, true, "No player to center on");
+        return;
+    }
+    e->camera.center = e->level.player_pos;
+    e->follow_player = true;
+    set_status(e, false, "Centered on player");
+}
+
+static void set_play_mode(Editor* e, bool on) {
+    if (e->play_mode == on) return;
+    e->play_mode = on;
+    e->player_moving = false;
+    e->player_forward = false;
+    e->player_path_count = 0;
+    e->player_path_index = 0;
+    cancel_gesture(e);
+    sel_clear(e);
+    span_clear(e);
+    if (on) {
+        e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                 PLAYER_RADIUS);
+        if (e->level.player_present) {
+            int cell = nav_cell_at_world(&e->nav, e->level.player_pos);
+            int open = nav_nearest_open_cell(&e->nav, cell, 3);
+            if (open >= 0 && open != cell) {
+                e->level.player_pos = nav_cell_center(&e->nav, open);
+            }
+            recenter_player_camera(e);
+            set_status(e, false, "Play mode: click the map to move");
+        } else {
+            set_status(e, false, "Play mode: click the map to place the player");
+        }
+    } else {
+        e->follow_player = false;
+        set_status(e, false, "Edit mode");
+    }
+}
+
+static void player_command(Editor* e, Vec2 world) {
+    if (!e->nav_ready) {
+        e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                 PLAYER_RADIUS);
+    }
+    if (!e->nav_ready) {
+        set_status(e, true, "No navigation grid for this level");
+        return;
+    }
+    int target = nav_cell_at_world(&e->nav, world);
+    if (!nav_cell_is_open(&e->nav, target)) {
+        set_status(e, true, "Click a walkable nav cell");
+        return;
+    }
+    Vec2 target_pos = nav_cell_center(&e->nav, target);
+    if (!e->level.player_present) {
+        level_place_player(&e->level, target_pos, 0.0f);
+        e->follow_player = true;
+        e->camera.center = target_pos;
+        set_status(e, false, "Player placed");
+        return;
+    }
+    int start = nav_cell_at_world(&e->nav, e->level.player_pos);
+    int open_start = nav_nearest_open_cell(&e->nav, start, 3);
+    if (open_start < 0) {
+        set_status(e, true, "The player is not on the nav grid");
+        return;
+    }
+    if (open_start != start) {
+        e->level.player_pos = nav_cell_center(&e->nav, open_start);
+        start = open_start;
+    }
+    int count = nav_find_path(&e->nav, start, target, e->player_path,
+                              NAV_MAX_PATH);
+    if (count <= 0) {
+        set_status(e, true, "No path to that cell");
+        return;
+    }
+    e->player_path_count = count;
+    e->player_path_index = 0;
+    e->player_moving = true;
+    e->player_forward = false;
+    e->follow_player = true;
+    set_status(e, false, "Walking to cell");
+}
+
+static void update_player(Editor* e, float dt) {
+    if (!e->play_mode || !e->level.player_present || !e->player_moving) return;
+    if (dt <= 0.0f) return;
+    if (dt > 0.05f) dt = 0.05f;
+    if (!e->nav_ready || e->player_path_count <= 0) {
+        e->player_moving = false;
+        return;
+    }
+    Vec2 pos = e->level.player_pos;
+    float heading = e->level.player_heading;
+    while (e->player_path_index < e->player_path_count) {
+        Vec2 target = nav_cell_center(&e->nav,
+                                      e->player_path[e->player_path_index]);
+        if (v2_dist(pos, target) > 0.35f) break;
+        e->player_path_index++;
+    }
+    if (e->player_path_index >= e->player_path_count) {
+        e->player_moving = false;
+        e->player_forward = false;
+        e->player_path_count = 0;
+        return;
+    }
+    Vec2 target = nav_cell_center(&e->nav, e->player_path[e->player_path_index]);
+    Vec2 delta = v2_sub(target, pos);
+    float dist = v2_len(delta);
+    if (dist <= 0.0001f) return;
+    Vec2 dir = v2_scale(delta, 1.0f / dist);
+    float desired = atan2f(dir.x, -dir.y);
+    float err = angle_delta(heading, desired);
+    float turn = PLAYER_TURN_RATE * dt;
+    if (!e->player_forward) {
+        if (fabsf(err) <= turn) {
+            heading = desired;
+            e->player_forward = true;
+        } else {
+            heading += clampf(err, -turn, turn);
+        }
+    } else {
+        float step = fminf(dist, PLAYER_SPEED * dt);
+        pos = v2_add(pos, v2_scale(dir, step));
+        heading += clampf(err, -turn, turn);
+        if (step >= dist - 0.001f) {
+            pos = target;
+            e->player_path_index++;
+        }
+    }
+    e->level.player_pos = pos;
+    e->level.player_heading = heading;
+    if (e->follow_player) e->camera.center = pos;
+}
+
 static Rect label_world_rect(const Editor* e, const Label* label) {
     ImVec2 sz = ImFont_CalcTextSizeA(igGetFont(), label->size * e->camera.zoom,
                                      FLT_MAX, 0.0f, label->text);
@@ -1176,7 +1368,18 @@ static void do_redo(Editor* e) {
     set_status(e, false, "Redo");
 }
 
+static void reset_player_runtime(Editor* e) {
+    e->play_mode = false;
+    e->nav_ready = false;
+    e->player_moving = false;
+    e->player_forward = false;
+    e->player_path_count = 0;
+    e->player_path_index = 0;
+    e->follow_player = false;
+}
+
 static void new_level(Editor* e) {
+    reset_player_runtime(e);
     level_init(&e->level);
     history_reset(&e->history, &e->level);
     sel_clear(e);
@@ -1210,6 +1413,7 @@ static bool open_level(Editor* e, const char* path) {
         return false;
     }
     history_reset(&e->history, &e->level);
+    reset_player_runtime(e);
     sel_clear(e);
     span_clear(e);
     cancel_gesture(e);
@@ -1589,6 +1793,52 @@ static void draw_labels(const Editor* e) {
         ImVec2 p = world_to_screen(e, l->pos);
         ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), l->size * e->camera.zoom, p,
                                       col32(LABEL_COL), l->text, NULL, 0.0f, NULL);
+    }
+}
+
+static void draw_nav_hover(const Editor* e) {
+    if (!e->play_mode || !e->nav_ready || !e->cursor_valid) return;
+    int cell = nav_cell_at_world(&e->nav, e->cursor_world);
+    if (!nav_cell_valid(&e->nav, cell)) return;
+    Vec2 c = nav_cell_center(&e->nav, cell);
+    float half = e->nav.cell * 0.5f;
+    ImVec2 a = world_to_screen(e, v2(c.x - half, c.y - half));
+    ImVec2 b = world_to_screen(e, v2(c.x + half, c.y + half));
+    bool open = nav_cell_is_open(&e->nav, cell);
+    ImU32 fill = open ? col32a(0x2f8f5a, 30) : col32a(0x8f2f2f, 22);
+    ImU32 edge = open ? col32a(0x58d68d, 220) : col32a(0xc06060, 170);
+    ImDrawList* dl = igGetWindowDrawList();
+    ImDrawList_AddRectFilledEx(dl, a, b, fill, 0.0f, 0);
+    ImDrawList_AddRectEx(dl, a, b, edge, 0.0f, 2.0f, 0);
+}
+
+static void draw_player(const Editor* e) {
+    if (!e->level.player_present || !e->player_texture) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    Vec2 pos = e->level.player_pos;
+    float heading = e->level.player_heading;
+    Vec2 fwd = v2(sinf(heading), -cosf(heading));
+    Vec2 right = v2(cosf(heading), sinf(heading));
+    float half = PLAYER_SPRITE_WORLD * 0.5f;
+    Vec2 corners[4] = {
+        v2_add(v2_add(pos, v2_scale(fwd, half)), v2_scale(right, -half)),
+        v2_add(v2_add(pos, v2_scale(fwd, half)), v2_scale(right, half)),
+        v2_add(v2_sub(pos, v2_scale(fwd, half)), v2_scale(right, half)),
+        v2_add(v2_sub(pos, v2_scale(fwd, half)), v2_scale(right, -half)),
+    };
+    ImVec2 p[4];
+    for (int i = 0; i < 4; i++) p[i] = world_to_screen(e, corners[i]);
+    ImTextureRef tex = { 0 };
+    tex._TexID = e->player_texture;
+    ImDrawList_AddImageQuadEx(dl, tex, p[0], p[1], p[2], p[3],
+                              (ImVec2){ 0, 0 }, (ImVec2){ 1, 0 },
+                              (ImVec2){ 1, 1 }, (ImVec2){ 0, 1 },
+                              IM_COL32_WHITE);
+    if (e->player_moving) {
+        ImVec2 center = world_to_screen(e, pos);
+        float radius = 6.0f * e->camera.zoom;
+        ImDrawList_AddCircleEx(dl, center, radius, col32a(0xf0d060, 90),
+                               32, 1.5f, 0);
     }
 }
 
@@ -3290,6 +3540,9 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
             e->camera.zoom = nz;
             Vec2 after = screen_to_world(e, io->MousePos);
             e->camera.center = v2_add(e->camera.center, v2_sub(before, after));
+            if (e->play_mode && e->follow_player && e->level.player_present) {
+                e->camera.center = e->level.player_pos;
+            }
         }
     }
 
@@ -3297,6 +3550,7 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     if (!e->pan_active && hovered &&
         (io->MouseDown[2] || (space && io->MouseDown[0] && !gesture_active(e)))) {
         e->pan_active = true;
+        e->follow_player = false;
     }
     if (e->pan_active) {
         bool held = io->MouseDown[2] || (space && io->MouseDown[0]);
@@ -3314,6 +3568,10 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     update_shape_drag(e, have_pointer);
 
     if (hovered && igIsMouseClicked(0) && !e->pan_active) {
+        if (e->play_mode) {
+            player_command(e, world);
+            return;
+        }
         switch (e->tool) {
             case TOOL_SELECT: begin_select(e, world, io->MousePos); break;
             case TOOL_LINE: line_press(e, world, io->MousePos); break;
@@ -3360,6 +3618,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     ImDrawList_AddRectFilledEx(dl, v2_to_im(e->canvas.min), v2_to_im(e->canvas.max),
                                col32(CANVAS_BG), 0.0f, 0);
     draw_grid(e);
+    draw_nav_hover(e);
     draw_shape_preview(e);
     draw_stairs(e);
     draw_walls(e);
@@ -3370,6 +3629,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
         draw_door_ghost(e);
     }
     draw_labels(e);
+    draw_player(e);
 
     if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
     draw_selection(e);
@@ -3561,6 +3821,22 @@ static void draw_left_panel(Editor* e) {
         case TOOL_COUNT:
         default:
             break;
+    }
+    igDummy((ImVec2){ 0.0f, 8.0f });
+    heading("Player");
+    bool play = e->play_mode;
+    if (igCheckbox("Play mode (P)", &play)) set_play_mode(e, play);
+    if (e->level.player_present) {
+        if (igButtonEx("Remove player", (ImVec2){ -FLT_MIN, 24.0f })) {
+            level_remove_player(&e->level);
+            e->player_moving = false;
+            e->player_path_count = 0;
+            e->follow_player = false;
+            set_status(e, false, "Player removed");
+        }
+        small_note("Click the map to walk. C recenters on the player at the current zoom.");
+    } else {
+        small_note("Enter play mode, then click the map to place the one player marker.");
     }
     igEnd();
 }
@@ -3792,6 +4068,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Esc deselects then cancels a draft");
         igTextDisabled("Ctrl+Z undo, Ctrl+Shift+Z redo");
         igTextDisabled("Ctrl+S save, Ctrl+O open");
+        igTextDisabled("P play mode   C center player   Esc stop");
         igTextDisabled("Middle-drag or Space+drag pans");
         igTextDisabled("Wheel zooms around the cursor");
         igTextDisabled("Ctrl+0 resets the zoom to 100 percent");
@@ -3861,6 +4138,8 @@ static void draw_help_modal(Editor* e) {
     igBullet();
     igText("Left click uses the active tool.");
     igBullet();
+    igText("P toggles play mode. C recentres on the player at the current zoom.");
+    igText("In play mode, click the map to place or walk; Esc stops the player.");
     igText("Middle-drag or Space+left-drag pans.");
     igBullet();
     igText("Wheel zooms around the cursor.");
@@ -4101,6 +4380,32 @@ static void handle_shortcuts(Editor* e) {
     if (e->modal != MODAL_NONE) return;
     if (io->WantTextInput) return;
 
+    if (igIsKeyPressedEx(ImGuiKey_P, false)) {
+        set_play_mode(e, !e->play_mode);
+        return;
+    }
+    if (e->play_mode) {
+        if (igIsKeyPressedEx(ImGuiKey_C, false)) recenter_player_camera(e);
+        else if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
+            e->player_moving = false;
+            e->player_path_count = 0;
+            set_status(e, false, "Player stopped");
+        } else if (igIsKeyPressedEx(ImGuiKey_F, false)) {
+            e->fit_pending = true;
+        } else if (igIsKeyPressedEx(ImGuiKey_G, false)) {
+            e->show_grid = !e->show_grid;
+        } else if (igIsKeyPressedEx(ImGuiKey_S, false)) {
+            e->snap = !e->snap;
+        } else if (igIsKeyPressedEx(ImGuiKey_H, false)) {
+            open_path_modal(e, MODAL_HELP);
+        }
+        return;
+    }
+    if (igIsKeyPressedEx(ImGuiKey_C, false)) {
+        recenter_player_camera(e);
+        return;
+    }
+
     if (io->KeyCtrl) {
         bool shift = io->KeyShift;
         if (igIsKeyPressedEx(ImGuiKey_Z, false)) {
@@ -4241,6 +4546,24 @@ Editor* editor_create(const char* startup_path) {
     e->modal = MODAL_NONE;
     e->request_modal = MODAL_NONE;
     e->menu_height = 23.0f;
+    sg_image_desc image_desc = { 0 };
+    image_desc.width = PLAYER_SPRITE_W;
+    image_desc.height = PLAYER_SPRITE_H;
+    image_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+    image_desc.data.ptr = PLAYER_SPRITE_RGBA;
+    image_desc.data.size = sizeof PLAYER_SPRITE_RGBA;
+    e->player_image = sg_make_image(&image_desc);
+    sg_view_desc view_desc = { 0 };
+    view_desc.texture.image = e->player_image;
+    e->player_view = sg_make_view(&view_desc);
+    sg_sampler_desc sampler_desc = { 0 };
+    sampler_desc.min_filter = SG_FILTER_LINEAR;
+    sampler_desc.mag_filter = SG_FILTER_LINEAR;
+    sampler_desc.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
+    sampler_desc.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+    e->player_sampler = sg_make_sampler(&sampler_desc);
+    e->player_texture = (ImTextureID)simgui_imtextureid_with_sampler(
+        e->player_view, e->player_sampler);
     snprintf(e->current_path, sizeof e->current_path, "%s", "levels/re2-library.lvl");
     snprintf(e->path_buf, sizeof e->path_buf, "%s", e->current_path);
 
@@ -4284,6 +4607,9 @@ Editor* editor_create(const char* startup_path) {
 
 void editor_destroy(Editor* e) {
     if (!e) return;
+    if (e->player_sampler.id) sg_destroy_sampler(e->player_sampler);
+    if (e->player_view.id) sg_destroy_view(e->player_view);
+    if (e->player_image.id) sg_destroy_image(e->player_image);
     history_shutdown(&e->history);
     free(e);
 }
@@ -4302,6 +4628,7 @@ void editor_frame(Editor* e) {
     if (canvas_x1 < canvas_x0 + 80.0f) canvas_x1 = canvas_x0 + 80.0f;
     e->canvas = rect_from_points(v2(canvas_x0, e->menu_height), v2(canvas_x1, bottom));
 
+    update_player(e, io->DeltaTime);
     draw_left_panel(e);
     draw_inspector(e);
     draw_canvas(e, io->MousePos, mouse_available(io->MousePos));

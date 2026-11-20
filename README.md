@@ -9,7 +9,8 @@ The editor loads `levels/re2-library.lvl` on startup. That file is rebuilt from
 the reference floor plan and matches it one reference pixel per world unit. The
 plan is kept in `levels/re2-library-source.lvl`; `tools/gen_ref_map.py`
 regenerates it from readable coordinates, and `tools/build_map.py` draws it in
-the running editor through the real tools. `docs/screenshots/rebuilt-overlay.png`
+the running editor through the real tools. Play mode adds a single gold player
+arrow, an 8-unit A* nav grid, click-to-walk control, and a following camera. `docs/screenshots/rebuilt-overlay.png`
 shows the finished level blended over the reference, and
 `docs/screenshots/rebuilt-side-by-side.png` shows the same pair side by side.
 
@@ -65,6 +66,8 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Snap dragged lines, edges, corners, and every side of a moving selection to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
+- Press P for play mode. With no player, the first map click places the one player marker at the centre of that nav cell. Later clicks path the player to the clicked cell with A*; the arrow turns smoothly, pivots in place before starting from rest, follows the path through rooms and doors, and ends on the cell centre. A green-bordered square marks the hovered nav cell.
+- While walking, the camera follows the player at the current zoom. C recentres on the player without changing zoom. Middle-drag pans immediately, with no catch-up animation, and mouse-wheel zoom stays immediate.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 - Duplicate with Ctrl+D and lock a selection with L.
 
@@ -82,6 +85,9 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 | Drag a stair edge | Resize the stair footprint on the grid |
 | Drag on empty canvas | Marquee select and mark crossed wall sections; Shift adds to the selection |
 | M | Arm the next marquee so it can start inside a closed shape |
+| P | Toggle play mode; click the map to place or walk the player |
+| C | Recentre the camera on the player at the current zoom |
+| Esc | In play mode, stop the player |
 | Drag a section end | Resize a marked section along its wall |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
@@ -122,6 +128,26 @@ Undo stores whole level snapshots. Each completed change writes one snapshot. A 
 
 The canvas is near-black. Every wall, stair tread, and selection helper is a line. Walls draw at a fixed faint alpha. Doors are always white 3 px bars. Stairs are neutral 3 px treads whose opacity follows the per-stair falloff and end opacities, with no footprint fill. Labels are light grey. The editor has no fill palette, no room colour, and no shape fill mode. Loading a level that still carries fill, room, or door colour columns succeeds: the fill and colour values are ignored and the room polygons are skipped. Saving writes the fill and door colour columns as 0 for older readers and writes no room records.
 
+## Player and navigation
+
+Play mode is a runtime view, not a seventh drawing tool. The player is one optional
+level record (`player x y heading`), so a map holds at most one marker. The nav
+grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
+is inside a closed room/corridor outline and its player radius clears every solid
+wall. Door spans are cut out of every collinear wall they sit on, so doors are
+passable; stair treads are not walls, while stair-side walls still block. A* uses
+8-way movement, forbids corner cutting, and paths through door gaps. The player
+pivots in place before starting a new path and then turns and moves smoothly along
+the cell centres. A faint turning circle is drawn while the player is moving.
+
+The camera follows the player while walking but only changes its centre: zoom is
+never altered by play mode, recentring, or path starts. Middle-drag and wheel zoom
+apply immediately, and middle-drag disables follow until the next move or `C`.
+
+The player graphic is authored in `assets/player.svg`, rasterised with Krita to
+`assets/player.png`, and packed by `tools/gen_player_sprite.py` into
+`src/player_sprite.h` so the editor needs no image decoder at runtime.
+
 ## Verification
 
 ```sh
@@ -133,7 +159,7 @@ The canvas is near-black. Every wall, stair tread, and selection helper is a lin
 
 ```text
 PASS build without warnings
-PASS core tests (375 checks)
+PASS core tests (389 checks)
 PASS empty room (040404), faint wall (max 0.340974), white door (max 0.94902)
 PASS save writes fill 0, door colour 0, and no room record
 PASS six tools activate in order on keys 1 to 6
@@ -160,6 +186,9 @@ The script assumes a 1280x800 window and the default panel widths, and it uses i
 | Path | Owns |
 | --- | --- |
 | `fibs`, `fibs.ts` | fibs launcher and build graph |
+| `src/nav.c`, `nav.h` | 8-unit nav grid, door-aware wall clearance, A* |
+| `src/player_sprite.h` | RGBA player sprite embedded from the Krita export |
+| `assets/player.svg`, `assets/player.png` | player design and Krita raster export |
 | `src/main.c` | sokol app lifecycle, font, frame order |
 | `src/editor.c` | ImGui theme, panels, canvas, gestures, camera, modals |
 | `src/level.c` | level document, shapes, rectangle union, edits, save, load, undo ring |
@@ -170,6 +199,7 @@ The script assumes a 1280x800 window and the default panel widths, and it uses i
 | `tools/xvfb.sh` | private X display, per-run process tags, cleanup |
 | `tools/focus_drop.py` | drop X focus the way switching windows does |
 | `tools/gen_demo_map.py` | regenerate the demo level |
+| `tools/gen_player_sprite.py` | repack the Krita PNG into the C sprite header |
 | `tools/level_info.c` | print counts and bounds for a level file |
 
 Only `main.c` and `editor.c` include sokol or ImGui headers. The `test_level` target in `fibs.ts` depends only on `ink-core`, so a core file that pulls in a UI header fails the build.

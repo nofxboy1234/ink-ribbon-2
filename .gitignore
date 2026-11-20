@@ -5,3 +5,4 @@ decisions.tsv
 .fibs/
 CMakeLists.txt
 CMakePresets.json
+!assets/*.png

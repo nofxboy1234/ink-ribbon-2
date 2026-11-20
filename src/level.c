@@ -231,7 +231,8 @@ void level_init(Level* level) {
 
 bool level_is_empty(const Level* level) {
     return level->wall_count == 0 && level->door_count == 0 &&
-           level->label_count == 0 && level->stairs_count == 0;
+           level->label_count == 0 && level->stairs_count == 0 &&
+           !level->player_present;
 }
 
 Rect level_bounds(const Level* level) {
@@ -255,6 +256,9 @@ Rect level_bounds(const Level* level) {
         Rect sr = level_stairs_rect(&level->stairs[i]);
         rect_grow(&r, &has, sr.min);
         rect_grow(&r, &has, sr.max);
+    }
+    if (level->player_present) {
+        rect_grow(&r, &has, level->player_pos);
     }
     return r;
 }
@@ -1242,6 +1246,25 @@ bool level_move_stairs(Level* level, int stairs_index, Vec2 pos) {
     return true;
 }
 
+bool level_place_player(Level* level, Vec2 pos, float heading) {
+    if (!level || !isfinite(pos.x) || !isfinite(pos.y) ||
+        !isfinite(heading)) {
+        return false;
+    }
+    level->player_present = true;
+    level->player_pos = pos;
+    level->player_heading = heading;
+    return true;
+}
+
+bool level_remove_player(Level* level) {
+    if (!level || !level->player_present) return false;
+    level->player_present = false;
+    level->player_pos = v2(0.0f, 0.0f);
+    level->player_heading = 0.0f;
+    return true;
+}
+
 Rect level_stairs_rect(const Stairs* stairs) {
     return (Rect){
         stairs->pos,
@@ -1303,6 +1326,10 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
                      s->pos.x, s->pos.y, (int)s->dir, s->steps,
                      s->width, s->length, s->bottom ? 1 : 0, (int)s->fade,
                      s->min_alpha, s->max_alpha) >= 0;
+    }
+    if (ok && level->player_present) {
+        ok = fprintf(f, "player %.3f %.3f %.4f\n", level->player_pos.x,
+                     level->player_pos.y, level->player_heading) >= 0;
     }
 
     int write_errno = 0;
@@ -1586,6 +1613,17 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 (Stairs){ box.min, width, length, kept_steps, (StairsDir)dir,
                           bottom != 0, (StairFade)fade, min_alpha, max_alpha,
                           false };
+        } else if (strcmp(tag, "player") == 0) {
+            float x = 0, y = 0, heading = 0;
+            if (!read_float(&save, &x) || !read_float(&save, &y) ||
+                !read_float(&save, &heading) || next_token(&save) ||
+                !isfinite(x) || !isfinite(y) || !isfinite(heading)) {
+                ok = fail_line(err, line_no, "malformed player record");
+                break;
+            }
+            tmp.player_present = true;
+            tmp.player_pos = v2(x, y);
+            tmp.player_heading = heading;
         } else {
             ok = fail_line(err, line_no, "unknown record '%s'", tag);
         }

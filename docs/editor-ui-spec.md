@@ -9,7 +9,7 @@ One sokol window titled `Ink Ribbon Level Editor`, 1280 by 800 initial size, nea
 The frame builds a full-viewport ImGui layout:
 
 - A main menu bar at the top: File, Edit, View, Help.
-- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the six tool buttons, the Q lock row, then Grid, Snap, Show grid, and Snap objects, then only the active tool's settings.
+- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the six tool buttons, the Q lock row, then Grid, Snap, Show grid, and Snap objects, then only the active tool's settings, and a Player section at the bottom with Play mode, Remove player, and a recenter hint.
 - A right inspector panel, 300 px wide, same vertical span.
 - A canvas filling the middle. The canvas rect is stored in the editor so the mouse can be converted between screen and world.
 - A one-line status strip overlaid at the bottom of the canvas. It shows the active tool hint, cursor world coordinates, zoom, the current snap size or `snap off`, and the latest action or error.
@@ -36,7 +36,8 @@ The camera stores a world-space center and a zoom in screen pixels per world uni
 
 ImGui clears the pointer position to `-FLT_MAX` when the window loses focus. Never feed that value into `screen_to_world` or into a preview. Check `mouse_available` first, draw no preview without a pointer, and release any drag at its last applied position.
 
-- Mouse wheel zooms around the cursor, clamped 0.15 to 6.
+- Mouse wheel zooms around the cursor, clamped 0.15 to 6. Zoom is immediate, with no catch-up animation.
+- In play mode the camera follows the player while the player is walking, changing only the centre and never the zoom. `C` recentres on the player at the current zoom. Middle-drag pans immediately, sets follow off, and has no catch-up animation.
 - Middle-drag pans. Space plus left-drag pans.
 - `F` or View > Fit frames the level bounds with margin. If the level is empty, center 0,0 at zoom 1.
 - On startup, load `levels/re2-library.lvl` if it exists, then fit.
@@ -144,6 +145,16 @@ Show properties for the selected object, all edits through `level.*` and committ
 
 Above the object properties, show a Lock selection checkbox when anything is selected. It is checked when every selected object is locked; ticking it locks all selected objects and unticking unlocks them. If any selected object is locked, the properties and Delete are disabled; the checkbox stays enabled so the selection can be unlocked. When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
 
+## Player and play mode
+
+At most one player record exists. The Player section at the bottom of the left panel has a Play mode checkbox (also `P`) and a Remove player button. On entering play mode the nav grid is rebuilt and the selection and marked sections are cleared.
+
+- With no player, the first left click places the player at the centre of the clicked nav cell. With a player, a click builds an A* path and starts walking.
+- The nav grid is 8 world units per cell. A cell is open when its centre is inside a closed room or corridor and clears every solid wall by the player radius. Door openings are removed from every collinear wall record, so doors are passable. Stair treads are not walls; stair-side walls remain solid.
+- Hovering in play mode draws the nav cell as a green-bordered square when walkable, and a muted red border when blocked.
+- A* uses 8-way movement, forbids diagonal corner cutting, and returns cell centres. The player pivots in place before starting a path, then turns and moves smoothly through the cell centres. A faint turning circle is drawn while moving.
+- `C` recentres on the player at the current zoom. `Esc` stops the player. `P` returns to editing. The player position and heading are saved in the level.
+
 ## Tool options in the left panel
 
 Below the six tool buttons and the Q lock row:
@@ -162,7 +173,7 @@ There is no Fill palette.
 
 - New: `level_init`, `history_reset`, clear selection, fit, path `levels/untitled.lvl`.
 - Open: modal with a path input plus a small clickable list of `levels/*.lvl`. On load success, history_reset, clear selection, fit. On failure, show the error in the status strip and keep the current level.
-- The save format is `ink-level 3`. The shape record keeps its fill column but writes 0, and the door record keeps its colour column but writes 0. A loaded fill or door colour is ignored. Room records from version 1 to 3 are read and skipped. Stair records keep the optional trailing fade-end flag, falloff, and faint/bright opacities; omitted values load with the linear 0.18/0.68 defaults.
+- The save format is `ink-level 3`. A level may carry one `player x y heading` record. The shape record keeps its fill column but writes 0, and the door record keeps its colour column but writes 0. A loaded fill or door colour is ignored. Room records from version 1 to 3 are read and skipped. Stair records keep the optional trailing fade-end flag, falloff, and faint/bright opacities; omitted values load with the linear 0.18/0.68 defaults.
 - Save writes to the current path. Save As opens a path modal with the current path prefilled and lists `levels/*.lvl`. Report success or the error in the status strip.
 - `Ctrl+S` saves, `Ctrl+Shift+S` opens Save As, `Ctrl+O` opens the Open modal.
 - `Ctrl+Z` undo, `Ctrl+Shift+Z` or `Ctrl+Y` redo, disabled while a drag is active.
@@ -175,7 +186,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `M` arm the next marquee, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `M` arm the next marquee, `P` play mode, `C` recentre the player, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 

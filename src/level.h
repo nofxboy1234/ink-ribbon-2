@@ -110,6 +110,10 @@ typedef struct {
 
     Stairs stairs[LEVEL_MAX_STAIRS];
     int stairs_count;
+    /* At most one player marker. heading is radians, 0 = up (-y). */
+    bool player_present;
+    Vec2 player_pos;
+    float player_heading;
 } Level;
 
 typedef struct {
@@ -227,6 +231,8 @@ bool level_set_stairs_fade(Level* level, int stairs_index, StairFade fade,
    box and leaves the stair unchanged. */
 bool level_set_stairs_rect(Level* level, int stairs_index, Rect rect);
 bool level_move_stairs(Level* level, int stairs_index, Vec2 pos);
+bool level_place_player(Level* level, Vec2 pos, float heading);
+bool level_remove_player(Level* level);
 Rect level_stairs_rect(const Stairs* stairs);
 float wall_length(const Wall* wall);
 
