@@ -260,6 +260,7 @@ struct Editor {
     /* Runtime player state: one marker in the level, an A* grid over the
        walls, and the current path. */
     bool play_mode;
+    bool player_place_pending;
     bool nav_ready;
     NavGrid nav;
     int player_path[NAV_MAX_PATH];
@@ -974,6 +975,7 @@ static void recenter_player_camera(Editor* e) {
 static void set_play_mode(Editor* e, bool on) {
     if (e->play_mode == on) return;
     e->play_mode = on;
+    e->player_place_pending = false;
     e->player_moving = false;
     e->player_forward = false;
     e->player_path_count = 0;
@@ -1045,6 +1047,26 @@ static void player_command(Editor* e, Vec2 world) {
     e->player_forward = false;
     e->follow_player = true;
     set_status(e, false, "Walking to cell");
+}
+
+static void place_player_click(Editor* e, Vec2 world) {
+    if (!e->nav_ready) {
+        e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                 PLAYER_RADIUS);
+    }
+    int cell = nav_cell_at_world(&e->nav, world);
+    if (!nav_cell_is_open(&e->nav, cell)) {
+        set_status(e, true, "Click a walkable nav cell");
+        return;
+    }
+    if (!level_place_player(&e->level, nav_cell_center(&e->nav, cell), 0.0f)) {
+        set_status(e, true, "Could not place the player");
+        return;
+    }
+    e->player_place_pending = false;
+    e->follow_player = false;
+    commit(e, "Player placed");
+    set_status(e, false, "Player placed");
 }
 
 static void update_player(Editor* e, float dt) {
@@ -1370,6 +1392,7 @@ static void do_redo(Editor* e) {
 
 static void reset_player_runtime(Editor* e) {
     e->play_mode = false;
+    e->player_place_pending = false;
     e->nav_ready = false;
     e->player_moving = false;
     e->player_forward = false;
@@ -3572,6 +3595,10 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
             player_command(e, world);
             return;
         }
+        if (e->player_place_pending) {
+            place_player_click(e, world);
+            return;
+        }
         switch (e->tool) {
             case TOOL_SELECT: begin_select(e, world, io->MousePos); break;
             case TOOL_LINE: line_press(e, world, io->MousePos); break;
@@ -3835,8 +3862,18 @@ static void draw_left_panel(Editor* e) {
             set_status(e, false, "Player removed");
         }
         small_note("Click the map to walk. C recenters on the player at the current zoom.");
+    } else if (e->player_place_pending) {
+        if (igButtonEx("Cancel placement", (ImVec2){ -FLT_MIN, 24.0f })) {
+            e->player_place_pending = false;
+            set_status(e, false, "Player placement cancelled");
+        }
+        small_note("Click a walkable nav cell to place the player.");
     } else {
-        small_note("Enter play mode, then click the map to place the one player marker.");
+        if (igButtonEx("Place player", (ImVec2){ -FLT_MIN, 24.0f })) {
+            e->player_place_pending = true;
+            set_status(e, false, "Click a walkable nav cell to place the player");
+        }
+        small_note("Or enter play mode and click the map.");
     }
     igEnd();
 }
@@ -4399,6 +4436,12 @@ static void handle_shortcuts(Editor* e) {
         } else if (igIsKeyPressedEx(ImGuiKey_H, false)) {
             open_path_modal(e, MODAL_HELP);
         }
+        return;
+    }
+    if (e->player_place_pending &&
+        igIsKeyPressedEx(ImGuiKey_Escape, false)) {
+        e->player_place_pending = false;
+        set_status(e, false, "Player placement cancelled");
         return;
     }
     if (igIsKeyPressedEx(ImGuiKey_C, false)) {

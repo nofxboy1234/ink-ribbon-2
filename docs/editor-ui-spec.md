@@ -147,9 +147,10 @@ Above the object properties, show a Lock selection checkbox when anything is sel
 
 ## Player and play mode
 
-At most one player record exists. The Player section at the bottom of the left panel has a Play mode checkbox (also `P`) and a Remove player button. On entering play mode the nav grid is rebuilt and the selection and marked sections are cleared.
+At most one player record exists. The Player section at the bottom of the left panel has a Play mode checkbox (also `P`), a Place player button when no player exists, and a Remove player button once one does. On entering play mode the nav grid is rebuilt and the selection and marked sections are cleared.
 
-- With no player, the first left click places the player at the centre of the clicked nav cell. With a player, a click builds an A* path and starts walking.
+- In edit mode, Place player arms a click on a walkable nav cell and places the player at that cell's centre, without entering play mode. Esc cancels the armed placement. The same placement happens on the first play-mode click when no player exists.
+- With a player, a play-mode click builds an A* path and starts walking.
 - The nav grid is 8 world units per cell. A cell is open when its centre is inside a closed room or corridor and clears every solid wall by the player radius. Door openings are removed from every collinear wall record, so doors are passable. Stair treads are not walls; stair-side walls remain solid.
 - Hovering in play mode draws the nav cell as a green-bordered square when walkable, and a muted red border when blocked.
 - A* uses 8-way movement, forbids diagonal corner cutting, and returns cell centres. The player pivots in place before starting a path, then turns and moves smoothly through the cell centres. A faint turning circle is drawn while moving.

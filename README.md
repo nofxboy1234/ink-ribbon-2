@@ -66,7 +66,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Snap dragged lines, edges, corners, and every side of a moving selection to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
-- Press P for play mode. With no player, the first map click places the one player marker at the centre of that nav cell. Later clicks path the player to the clicked cell with A*; the arrow turns smoothly, pivots in place before starting from rest, follows the path through rooms and doors, and ends on the cell centre. A green-bordered square marks the hovered nav cell.
+- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, play-mode clicks path the player to the clicked cell with A*; the arrow turns smoothly, pivots in place before starting from rest, follows the path through rooms and doors, and ends on the cell centre. A green-bordered square marks the hovered nav cell.
 - While walking, the camera follows the player at the current zoom. C recentres on the player without changing zoom. Middle-drag pans immediately, with no catch-up animation, and mouse-wheel zoom stays immediate.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 - Duplicate with Ctrl+D and lock a selection with L.
@@ -131,7 +131,9 @@ The canvas is near-black. Every wall, stair tread, and selection helper is a lin
 ## Player and navigation
 
 Play mode is a runtime view, not a seventh drawing tool. The player is one optional
-level record (`player x y heading`), so a map holds at most one marker. The nav
+level record (`player x y heading`), so a map holds at most one marker. In edit
+mode, use **Place player** in the Player section and click a walkable cell; the
+same click also works in play mode when no player exists. The nav
 grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
 is inside a closed room/corridor outline and its player radius clears every solid
 wall. Door spans are cut out of every collinear wall they sit on, so doors are
