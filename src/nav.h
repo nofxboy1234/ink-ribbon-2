@@ -10,11 +10,19 @@
 #define NAV_MAX_PATH 4096
 
 typedef struct {
+    Vec2 center;
+    bool vertical;
+    float half;
+} NavDoor;
+
+typedef struct {
     float cell;
     Vec2 origin;
     int cols;
     int rows;
     bool built;
+    NavDoor doors[LEVEL_MAX_DOORS];
+    int door_count;
     bool open[NAV_MAX_CELLS];
     /* Bit per direction: E, W, N, S, NE, NW, SE, SW. */
     unsigned char links[NAV_MAX_CELLS];

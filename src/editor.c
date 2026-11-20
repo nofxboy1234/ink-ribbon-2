@@ -1991,9 +1991,9 @@ static void draw_player(const Editor* e) {
                               IM_COL32_WHITE);
     if (e->player_moving) {
         ImVec2 center = world_to_screen(e, pos);
-        float radius = 4.0f * e->camera.zoom;
-        ImDrawList_AddCircleEx(dl, center, radius, col32a(0xf0d060, 90),
-                               32, 1.5f, 0);
+        float radius = 10.0f * e->camera.zoom;
+        ImDrawList_AddCircleEx(dl, center, radius, col32a(0xf0d060, 150),
+                               48, 1.8f, 0);
     }
 }
 

@@ -142,11 +142,14 @@ passable; stair treads are not walls, while stair-side walls still block. A* use
 8-way movement, forbids corner cutting, and paths through door gaps. The raw A* route is line-of-sight filtered, then each corner is replaced by a
 quadratic Bezier arc. Arc radii start at 10 world units and shrink until the
 sampled curve stays on open nav cells, so the drawn and walked route is a smooth
-curve with no stair-step or sharp corner. The player follows the dense curve at
-a constant speed rather than hopping between grid waypoints. If the first destination is
+curve with no stair-step or sharp corner. A route that crosses a doorway is
+inserted with a short straight passage through the opening's centre, so the
+player never hugs a door jamb. The player follows the dense curve at a constant
+speed rather than hopping between grid waypoints. If the first destination is
 directly horizontal or vertical behind the player, the player pivots on the
-spot; otherwise it turns while moving, with a small turning circle drawn around
-it.
+spot; otherwise it turns while moving. A visible 10-unit turning ring is drawn
+around the player whenever it is moving, so the turn is readable even when the
+target is diagonally behind.
 
 The camera follows the player while walking but only changes its centre: zoom is
 never altered by play mode, recentring, or path starts. When the player starts
@@ -170,7 +173,7 @@ The player graphic is authored in `assets/player.svg`, rasterised with Krita to
 
 ```text
 PASS build without warnings
-PASS core tests (392 checks)
+PASS core tests (393 checks)
 PASS empty room (040404), faint wall (max 0.340974), white door (max 0.94902)
 PASS save writes fill 0, door colour 0, and no room record
 PASS six tools activate in order on keys 1 to 6

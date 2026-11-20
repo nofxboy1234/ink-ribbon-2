@@ -1735,6 +1735,11 @@ static void test_nav_grid(void) {
                   v2_dist(smooth[smooth_count - 1],
                           nav_cell_center(&nav, path[count - 1])) < 0.01f,
               "smoothing keeps the route endpoints");
+        bool centered = false;
+        for (int i = 0; i < smooth_count; i++) {
+            if (v2_dist(smooth[i], v2(0, 0)) < 0.05f) centered = true;
+        }
+        check(centered, "the smoothed route passes through the door centre");
     }
 }
 

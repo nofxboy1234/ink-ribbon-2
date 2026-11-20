@@ -124,6 +124,28 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
     int total = nav->cols * nav->rows;
     if (total > NAV_MAX_CELLS) return false;
 
+    for (int i = 0; i < level->door_count; i++) {
+        const Door* door = &level->doors[i];
+        const Wall* host = level_wall_by_id_const(level, door->wall);
+        if (!host) continue;
+        NavDoor nd;
+        nd.center = level_door_center(level, door);
+        nd.vertical = wall_is_vertical(host);
+        nd.half = door->width * 0.5f;
+        bool duplicate = false;
+        for (int k = 0; k < nav->door_count; k++) {
+            if (nav->doors[k].vertical == nd.vertical &&
+                v2_dist(nav->doors[k].center, nd.center) < 0.05f) {
+                if (nd.half > nav->doors[k].half) nav->doors[k].half = nd.half;
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate && nav->door_count < LEVEL_MAX_DOORS) {
+            nav->doors[nav->door_count++] = nd;
+        }
+    }
+
     Vec2 center[NAV_MAX_CELLS];
     for (int y = 0; y < nav->rows; y++) {
         for (int x = 0; x < nav->cols; x++) {
@@ -318,10 +340,63 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
         out[0] = filtered[0];
         return 1;
     }
-    if (fn == 2) {
-        int take = fn < max ? fn : max;
-        for (int i = 0; i < take; i++) out[i] = filtered[i];
-        return take;
+    /* Route through the centre of each doorway the filtered polyline crosses,
+       instead of letting the grid cells pick a side of the opening. */
+    Vec2 routed[NAV_MAX_PATH];
+    int rn = 0;
+    routed[rn++] = filtered[0];
+    for (int i = 0; i < fn - 1; i++) {
+        Vec2 a = filtered[i];
+        Vec2 b = filtered[i + 1];
+        float hits[LEVEL_MAX_DOORS];
+        int hit_doors[LEVEL_MAX_DOORS];
+        int hit_count = 0;
+        for (int d = 0; d < nav->door_count; d++) {
+            const NavDoor* nd = &nav->doors[d];
+            float t;
+            float across;
+            if (nd->vertical) {
+                if (fabsf(b.x - a.x) < 0.0001f) continue;
+                t = (nd->center.x - a.x) / (b.x - a.x);
+                across = a.y + (b.y - a.y) * t;
+            } else {
+                if (fabsf(b.y - a.y) < 0.0001f) continue;
+                t = (nd->center.y - a.y) / (b.y - a.y);
+                across = a.x + (b.x - a.x) * t;
+            }
+            if (t <= 0.001f || t >= 0.999f) continue;
+            if (fabsf(across - (nd->vertical ? nd->center.y : nd->center.x)) >
+                nd->half + 4.0f) {
+                continue;
+            }
+            int at = hit_count;
+            while (at > 0 && hits[at - 1] > t) {
+                hits[at] = hits[at - 1];
+                hit_doors[at] = hit_doors[at - 1];
+                at--;
+            }
+            hits[at] = t;
+            hit_doors[at] = d;
+            hit_count++;
+        }
+        for (int h = 0; h < hit_count; h++) {
+            const NavDoor* nd = &nav->doors[hit_doors[h]];
+            Vec2 c = nd->center;
+            Vec2 normal = nd->vertical ? v2(1.0f, 0.0f) : v2(0.0f, 1.0f);
+            float sign = nd->vertical ? (b.x > a.x ? 1.0f : -1.0f)
+                                      : (b.y > a.y ? 1.0f : -1.0f);
+            float off = nd->half + 4.0f;
+            Vec2 pre = v2_sub(c, v2_scale(normal, off * sign));
+            Vec2 post = v2_add(c, v2_scale(normal, off * sign));
+            if (!v2_equal(pre, routed[rn - 1], 0.02f)) routed[rn++] = pre;
+            if (!v2_equal(c, routed[rn - 1], 0.02f)) routed[rn++] = c;
+            if (!v2_equal(post, routed[rn - 1], 0.02f)) routed[rn++] = post;
+        }
+        if (!v2_equal(b, routed[rn - 1], 0.02f)) routed[rn++] = b;
+    }
+    if (rn >= 2) {
+        fn = rn;
+        for (int i = 0; i < rn; i++) filtered[i] = routed[i];
     }
 
     const float radii[] = { 10.0f, 7.0f, 4.5f, 2.5f, 1.2f };
