@@ -14,7 +14,7 @@
 #define LEVEL_MAX_STAIRS 64
 #define LEVEL_LABEL_LEN 64
 
-#define DOOR_THICKNESS 6.0f
+#define DOOR_THICKNESS 3.0f
 #define DOOR_MIN_WIDTH 8.0f
 #define STAIR_STEP_DEPTH 10.0f
 #define STAIR_WIDTH 44.0f

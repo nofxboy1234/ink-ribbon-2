@@ -350,7 +350,7 @@ PYEOF
 echo "PASS the tool returned to Select after the stair action"
 # Flip the selected stair back from the inspector and prove the flag saves.
 click 400 660
-click 1048 168
+click 1048 186
 save_as "$out-stairs-3.lvl"
 shot "$out-stairs-unflip.png"
 python3 - "$out-stairs-3.lvl" <<'PYEOF'

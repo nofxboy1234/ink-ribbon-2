@@ -59,11 +59,13 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Drag a rectangle with the Stairs tool. The run takes the panel's direction, step count, falloff, and faint/bright opacities. Flip reverses which end the tread fade starts from, and all of it is saved with the level. Drag any stair edge with Select to resize the footprint.
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
-- Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
+- Select, edit, duplicate, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them. Ctrl+D duplicates the selection one grid cell diagonally and keeps every setting, including door width/position and each stair's direction, steps, flip, falloff, and opacities; doors on duplicated walls come along.
+- Lock the current selection with L or the inspector checkbox. A locked selection cannot be moved, reshaped, deleted, or changed in the inspector; L or the checkbox unlocks it. Clearing the selection also clears the lock.
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Snap dragged lines, edges, corners, and every side of a moving selection to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
 - Pan, zoom, fit the level, undo and redo, save, and load.
+- Duplicate with Ctrl+D and lock a selection with L.
 
 ## Controls
 
@@ -88,6 +90,8 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 | F | Fit the level |
 | G | Toggle the grid |
 | S | Toggle snapping |
+| L | Lock or unlock the current selection |
+| Ctrl+D | Duplicate the selection one grid cell diagonally |
 | Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+S, Ctrl+Shift+S | Save, save as |
 | Ctrl+O | Open |
@@ -106,13 +110,15 @@ Selection is UI state and is never saved into a level. It is a bounded set per o
 
 Snap applies to line points, labels, stair boxes and edges, door centres, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
+Ctrl+D duplicates every selected object with its full settings and copies doors hosted by duplicated walls. A door selected without its wall gets a copy of the host wall under it. The selection lock is session state: while locked, the selection ignores canvas gestures, Delete, duplicate, and inspector edits; any selection change or Esc clears it.
+
 Snap objects is a second, independent toggle. While it is on, a dragged edge or corner also snaps to nearby wall lines and wall endpoints within 8 screen pixels. A rigid object drag checks every moving edge and wall endpoint on each axis, so a selection can land by its right or bottom side as well as its top or left. Object snapping wins on an axis and grid snapping fills the other. It is on by default.
 
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. The history keeps 64 levels.
 
 ## One look
 
-The canvas is near-black. Every wall, stair tread, and selection helper is a line. Walls draw at a fixed faint alpha. Doors are always white. Stairs are neutral 3 px treads whose opacity follows the per-stair falloff and end opacities, with no footprint fill. Labels are light grey. The editor has no fill palette, no room colour, and no shape fill mode. Loading a level that still carries fill, room, or door colour columns succeeds: the fill and colour values are ignored and the room polygons are skipped. Saving writes the fill and door colour columns as 0 for older readers and writes no room records.
+The canvas is near-black. Every wall, stair tread, and selection helper is a line. Walls draw at a fixed faint alpha. Doors are always white 3 px bars. Stairs are neutral 3 px treads whose opacity follows the per-stair falloff and end opacities, with no footprint fill. Labels are light grey. The editor has no fill palette, no room colour, and no shape fill mode. Loading a level that still carries fill, room, or door colour columns succeeds: the fill and colour values are ignored and the room polygons are skipped. Saving writes the fill and door colour columns as 0 for older readers and writes no room records.
 
 ## Verification
 

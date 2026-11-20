@@ -214,6 +214,9 @@ struct Editor {
     int span_count;
     bool fit_pending;
     bool pan_active;
+    /* A session lock on the current selection. Any selection change clears it,
+       so it only protects the objects the user deliberately froze. */
+    bool selection_locked;
 
     float grid_size;
     bool snap;
@@ -517,10 +520,28 @@ static int sel_count(const Selection* s) {
     return n;
 }
 
+static void sel_prune(Editor* e);
+
+static bool selection_is_locked(const Editor* e) {
+    return e->selection_locked && sel_count(&e->selection) > 0;
+}
+
+static void toggle_selection_lock(Editor* e) {
+    sel_prune(e);
+    if (sel_count(&e->selection) == 0) {
+        set_status(e, true, "Select something before locking it");
+        return;
+    }
+    e->selection_locked = !e->selection_locked;
+    set_status(e, false, e->selection_locked ? "Selection locked"
+                                             : "Selection unlocked");
+}
+
 static void sel_clear(Editor* e) {
     memset(&e->selection, 0, sizeof e->selection);
     e->selection.primary.kind = SEL_NONE;
     e->selection.primary.index = -1;
+    e->selection_locked = false;
     e->label_buf_ready = false;
 }
 
@@ -578,6 +599,7 @@ static void sel_prune(Editor* e) {
         }
     }
     if (sel_count(s) == 0) {
+        e->selection_locked = false;
         if (s->primary.kind != SEL_NONE || s->primary.index != -1) {
             s->primary = (SelRef){ SEL_NONE, -1 };
             changed = true;
@@ -952,6 +974,10 @@ static int cut_spans(Editor* e, int* dropped_doors, int* failed) {
    walls go only when no section is marked, because a section owns its wall. */
 static void delete_selection(Editor* e) {
     sel_prune(e);
+    if (selection_is_locked(e)) {
+        set_status(e, true, "Selection is locked");
+        return;
+    }
     span_prune(e);
     bool have_objects = sel_count(&e->selection) > 0;
     bool have_sections = e->span_count > 0;
@@ -2874,6 +2900,10 @@ static void begin_vertex(Editor* e, int wall_index, Vec2 vertex) {
 }
 
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
+    if (selection_is_locked(e)) {
+        set_status(e, false, "Selection is locked; press L or unlock it in the inspector");
+        return;
+    }
     ImGuiIO* io = igGetIO();
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
@@ -3605,6 +3635,19 @@ static void draw_inspector(Editor* e) {
     igPopStyleColorEx(1);
 
     sel_prune(e);
+    bool have_selection = sel_count(&e->selection) > 0;
+    if (have_selection) {
+        bool locked = e->selection_locked;
+        if (igCheckbox("Lock selection", &locked)) {
+            e->selection_locked = locked;
+            set_status(e, false, locked ? "Selection locked"
+                                        : "Selection unlocked");
+        }
+        if (e->selection_locked) {
+            small_note("Locked: this selection cannot be moved, reshaped, deleted, or edited. Press L to unlock.");
+        }
+    }
+    igBeginDisabled(e->selection_locked && have_selection);
     SelRef single;
     if (sel_single(&e->selection, &single)) {
         switch (single.kind) {
@@ -3640,6 +3683,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Drag a group to move walls, doors, labels, or stairs");
         igTextDisabled("Drag a door to slide; drag an end to resize");
         igTextDisabled("Delete removes every selected object");
+        igTextDisabled("L locks or unlocks the selection");
         igTextDisabled("Esc deselects then cancels a draft");
         igTextDisabled("Ctrl+Z undo, Ctrl+Shift+Z redo");
         igTextDisabled("Ctrl+S save, Ctrl+O open");
@@ -3650,6 +3694,7 @@ static void draw_inspector(Editor* e) {
         igDummy((ImVec2){ 0.0f, 6.0f });
         igTextDisabled("%s", e->current_path);
     }
+    igEndDisabled();
     igEnd();
 }
 
@@ -3836,6 +3881,10 @@ static void draw_modals(Editor* e) {
    copies, in one history step. */
 static void duplicate_selection(Editor* e) {
     sel_prune(e);
+    if (selection_is_locked(e)) {
+        set_status(e, true, "Selection is locked");
+        return;
+    }
     Selection* sel = &e->selection;
     if (sel_count(sel) == 0) {
         set_status(e, true, "Nothing selected to duplicate");
@@ -3843,16 +3892,21 @@ static void duplicate_selection(Editor* e) {
     }
     Vec2 off = v2(e->grid_size, e->grid_size);
     int made = 0;
+    int wall_map[LEVEL_MAX_WALLS];
+    for (int i = 0; i < LEVEL_MAX_WALLS; i++) wall_map[i] = -1;
+    int old_door_count = e->level.door_count;
 
     for (int i = e->level.stairs_count - 1; i >= 0; i--) {
         if (!sel->stairs[i]) continue;
-        Rect r = level_stairs_rect(&e->level.stairs[i]);
+        const Stairs src = e->level.stairs[i];
+        Rect r = level_stairs_rect(&src);
         Rect copy = { v2_add(r.min, off), v2_add(r.max, off) };
-        int idx = level_add_stairs(&e->level, copy, e->level.stairs[i].dir,
-                                   e->level.stairs[i].steps);
+        int idx = level_add_stairs(&e->level, copy, src.dir, src.steps);
         if (idx < 0) break;
-        e->level.stairs[idx].bottom = e->level.stairs[i].bottom;
-        sel_only(e, SEL_STAIRS, idx);
+        /* Copy every creation setting, including falloff and both opacities. */
+        e->level.stairs[idx] = src;
+        e->level.stairs[idx].pos = copy.min;
+        sel_add(e, SEL_STAIRS, idx);
         made++;
     }
     for (int i = e->level.label_count - 1; i >= 0; i--) {
@@ -3867,8 +3921,6 @@ static void duplicate_selection(Editor* e) {
     for (int i = e->level.shape_count - 1; i >= 0; i--) {
         const Shape* shape = &e->level.shapes[i];
         int indices[LEVEL_MAX_WALLS];
-        /* The count call needs the real cap: the API returns min(count, cap),
-           so a zero cap asks for nothing and the shape was skipped. */
         int count = level_shape_wall_indices(&e->level, shape->id, indices,
                                              LEVEL_MAX_WALLS);
         if (count <= 0) continue;
@@ -3880,9 +3932,11 @@ static void duplicate_selection(Editor* e) {
         ShapeId copy = level_add_shape(&e->level);
         if (copy == 0) break;
         for (int k = 0; k < count; k++) {
-            const Wall* w = &e->level.walls[indices[k]];
-            level_add_wall_to_shape(&e->level, copy, v2_add(w->a, off),
-                                    v2_add(w->b, off));
+            int old_index = indices[k];
+            const Wall* w = &e->level.walls[old_index];
+            int new_index = level_add_wall_to_shape(
+                &e->level, copy, v2_add(w->a, off), v2_add(w->b, off));
+            if (new_index >= 0) wall_map[old_index] = new_index;
         }
         if (shape->closed) level_close_shape(&e->level, copy);
         int copy_idx[LEVEL_MAX_WALLS];
@@ -3891,6 +3945,39 @@ static void duplicate_selection(Editor* e) {
         for (int k = 0; k < copy_count; k++) sel_add(e, SEL_WALL, copy_idx[k]);
         made++;
     }
+
+    /* A selected door whose wall wasn't part of a copied shape still gets a
+       usable duplicate: copy its host wall as an open shape under the door. */
+    for (int d = 0; d < old_door_count; d++) {
+        if (!sel->doors[d]) continue;
+        int old_wall = level_find_wall_index(&e->level, e->level.doors[d].wall);
+        if (old_wall < 0 || wall_map[old_wall] >= 0) continue;
+        const Wall src = e->level.walls[old_wall];
+        ShapeId copy = level_add_shape(&e->level);
+        if (copy == 0) break;
+        int new_wall = level_add_wall_to_shape(&e->level, copy,
+                                               v2_add(src.a, off),
+                                               v2_add(src.b, off));
+        if (new_wall < 0) {
+            level_delete_shape(&e->level, copy);
+            continue;
+        }
+        wall_map[old_wall] = new_wall;
+    }
+
+    /* Doors follow their duplicated walls, and a selected door is selected
+       again on the copy. */
+    for (int d = 0; d < old_door_count; d++) {
+        const Door src = e->level.doors[d];
+        int old_wall = level_find_wall_index(&e->level, src.wall);
+        if (old_wall < 0 || wall_map[old_wall] < 0) continue;
+        int idx = level_add_door(&e->level, e->level.walls[wall_map[old_wall]].id,
+                                 src.t, src.width);
+        if (idx < 0) break;
+        if (sel->doors[d]) sel_add(e, SEL_DOOR, idx);
+        made++;
+    }
+
     if (made == 0) {
         set_status(e, true, "Nothing selected to duplicate");
         return;
@@ -3957,6 +4044,7 @@ static void handle_shortcuts(Editor* e) {
         set_status(e, false, e->snap ? "Snap on" : "Snap off");
     }
     if (igIsKeyPressedEx(ImGuiKey_G, false)) e->show_grid = !e->show_grid;
+    if (igIsKeyPressedEx(ImGuiKey_L, false)) toggle_selection_lock(e);
     if (igIsKeyPressedEx(ImGuiKey_H, false)) open_path_modal(e, MODAL_HELP);
     if (igIsKeyPressedEx(ImGuiKey_Delete, false)) {
         if (gesture_is_drag(e)) return;

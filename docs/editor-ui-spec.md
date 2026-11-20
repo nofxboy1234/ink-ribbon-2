@@ -20,7 +20,7 @@ Panels use `ImGuiWindowFlags_NoTitleBar | NoResize | NoMove | NoCollapse | NoScr
 
 One look. Near-black canvas `#040404`. Grid lines at the selected Grid size, subtle at `#333b45` with low alpha, a brighter line every 4 cells and the brightest every 16. The grid gets coarser only when the fine lines would be closer than 4 screen pixels.
 
-Walls `#8b9097`, 2 screen pixels wide, at alpha 70 everywhere. There is no bright wall state, no fill, and no room colour. Doors are always white `#f2f2f2`. Labels are `#e6e6e6`. Stair treads are `#c8ccd2` with a fade that starts at one end of the run and no footprint fill. Selection uses accent `#5aa0c8` with a 2 px outline or handles. Nothing in the editor paints a filled polygon.
+Walls `#8b9097`, 2 screen pixels wide, at alpha 70 everywhere. There is no bright wall state, no fill, and no room colour. Doors are always white `#f2f2f2` 3 px bars. Labels are `#e6e6e6`. Stair treads are `#c8ccd2` with a fade that starts at one end of the run and no footprint fill. Selection uses accent `#5aa0c8` with a 2 px outline or handles. Nothing in the editor paints a filled polygon.
 
 Dark ImGui theme: window background `#101114`, panel `#16181c`, frame `#1d2025`, borders `#2a2e34`, text `#d9dadd`, accent `#4e7f9e`. Rounded corners 3 px. Sentence-case headings.
 
@@ -115,6 +115,7 @@ A wall hit selects that edge. Clicking inside a closed shape selects all of its 
 
 Selection is a bounded set per object kind plus a primary reference. Walls are selected as individual edges. The set is never serialized.
 
+- A selection can be locked with `L` or the inspector's Lock selection checkbox. While locked, canvas presses leave the selection untouched and do not start a gesture, `Delete` and `Ctrl+D` report that the selection is locked, and the object inspector is disabled apart from the lock checkbox. Clearing the selection or pressing `Esc` clears the lock.
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out.
 - A plain press within 7 screen pixels of a wall endpoint starts a corner drag. The level moves the shared vertex and every vertex that must follow, so attached walls stay orthogonal and the outline stays connected. Snap puts the corner on the grid; Snap objects instead aligns it to nearby wall lines and endpoints within 8 screen pixels. Select draws hollow squares at wall endpoints as handles.
@@ -124,6 +125,7 @@ Selection is a bounded set per object kind plus a primary reference. Walls are s
 - Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, labels and stairs by their own move calls, and doors follow their host wall. Object snapping checks every moving wall endpoint and label or stair box edge on each axis, so the nearest side wins; grid snapping still measures the primary anchor.
 - A release without movement collapses a multi-selection to the pressed object.
 - There is no right-click menu. Right-click does nothing.
+- `Ctrl+D` duplicates the selection one grid cell diagonally. Wall shapes keep their closed flag, labels keep text and size, stairs keep every setting (direction, steps, flip, falloff, and both opacities), and doors are re-hosted on the duplicated wall with the same position and width. A selected door whose wall was not duplicated gets a duplicated open wall to sit on.
 - `Delete` or Edit > Delete removes every selected object in one history snapshot. Deleting a wall cascades its doors.
 - The marked sections are a `Span` list of wall id plus two ordered parameters, canonical per wall: intervals merge when they overlap and are cut from the far end back. Each section draws over its wall at double width in the accent colour with a square at each end.
 - `Delete` cuts every marked section through `level_cut_wall_span` in one history snapshot and reports the section and door counts. A selected door, label, or stair still deletes in the same press. Whole selected walls delete only when no section is marked.
@@ -138,7 +140,7 @@ Show properties for the selected object, all edits through `level.*` and committ
 - Label: single-line text input, size slider 8 to 48, position, Delete.
 - Stairs: direction buttons, step count slider `STAIR_MIN_STEPS` to `STAIR_MAX_STEPS`, Flip checkbox, falloff combo, faint and bright opacity sliders, size, position, Delete.
 
-When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
+Above the object properties, show a Lock selection checkbox when anything is selected. While locked, the properties and Delete are disabled; the checkbox stays enabled so the selection can be unlocked. When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
 
 ## Tool options in the left panel
 
@@ -171,7 +173,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 6 tools, `Q` held to keep the drawing tool, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 
