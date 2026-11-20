@@ -59,7 +59,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Drag a rectangle with the Stairs tool. The run takes the panel's direction, step count, falloff, and faint/bright opacities. Flip reverses which end the tread fade starts from, and all of it is saved with the level. Drag any stair edge with Select to resize the footprint.
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
-- Choose how a Select marquee starts and what it picks in the Select tool panel. Start: Empty canvas (only an empty-canvas press begins a marquee), Alt-drag, Right-drag, or M then drag. Picks: Wall sections (the original cut workflow), Inner shape (the smallest fully enclosed closed shape), or Enclosed (every fully enclosed closed shape).
+- Press M (or tick "Marquee next drag" in the Select panel), then drag anywhere to start a marquee, including from inside a closed shape. A drag on empty canvas still starts one without arming. The marquee marks the crossed wall sections for cutting.
 - Select, edit, duplicate, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them. Ctrl+D duplicates the selection one grid cell diagonally and keeps every setting, including door width/position and each stair's direction, steps, flip, falloff, and opacities; doors on duplicated walls come along.
 - Lock the selected objects with L or the inspector checkbox. Locking a wall also locks the doors it hosts. Locked objects stay put while you select and edit other objects. Selecting a locked object and pressing L (or unticking the checkbox) unlocks it. A selection that contains any locked object cannot be moved, reshaped, deleted, duplicated, or edited.
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
@@ -81,8 +81,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 | Drag a wall corner | Resize the walls that meet at that corner |
 | Drag a stair edge | Resize the stair footprint on the grid |
 | Drag on empty canvas | Marquee select and mark crossed wall sections; Shift adds to the selection |
-| Alt-drag / right-drag / M then drag | Start a marquee from inside a shape, according to Select > Start |
-| M | Arm the next marquee when Select > Start is "M then drag" |
+| M | Arm the next marquee so it can start inside a closed shape |
 | Drag a section end | Resize a marked section along its wall |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |

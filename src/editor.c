@@ -69,21 +69,6 @@ typedef enum {
 } Tool;
 
 typedef enum {
-    MARQUEE_START_EMPTY = 0,
-    MARQUEE_START_ALT = 1,
-    MARQUEE_START_RIGHT = 2,
-    MARQUEE_START_LATCH = 3,
-    MARQUEE_START_COUNT
-} MarqueeStart;
-
-typedef enum {
-    MARQUEE_PICK_SECTIONS = 0,
-    MARQUEE_PICK_INNER = 1,
-    MARQUEE_PICK_ENCLOSED = 2,
-    MARQUEE_PICK_COUNT
-} MarqueePick;
-
-typedef enum {
     SEL_NONE = 0,
     SEL_WALL,
     SEL_DOOR,
@@ -155,8 +140,6 @@ typedef struct {
     ShapeId shape;
     Vec2 press_screen;
     Vec2 press_world;
-    /* 0 for a left-button drag, 1 for a right-button marquee. */
-    int button;
     Vec2 cur_world;
     Vec2 anchor;
     Vec2 move_applied;
@@ -236,8 +219,6 @@ struct Editor {
     bool snap;
     bool snap_objects;
     bool show_grid;
-    MarqueeStart marquee_start;
-    MarqueePick marquee_pick;
     bool marquee_armed;
     /* Creation settings for the next object, shown only by the tool that
        uses them. */
@@ -2143,7 +2124,6 @@ static bool wall_section_in_rect(const Wall* wall, Rect box, float* out_t0,
 static void collect_sections(Editor* e, Rect box, bool additive) {
     if (!additive) span_clear(e);
     for (int i = 0; i < e->level.wall_count; i++) {
-        if (e->selection.walls[i]) continue;
         if (e->level.walls[i].locked || wall_has_locked_door(e, i)) continue;
         float t0, t1;
         if (!wall_section_in_rect(&e->level.walls[i], box, &t0, &t1)) continue;
@@ -2151,49 +2131,8 @@ static void collect_sections(Editor* e, Rect box, bool additive) {
     }
 }
 
-static void select_shape_walls(Editor* e, int shape_index) {
-    int indices[LEVEL_MAX_WALLS];
-    int count = level_shape_wall_indices(
-        &e->level, e->level.shapes[shape_index].id, indices, LEVEL_MAX_WALLS);
-    for (int k = 0; k < count; k++) sel_add(e, SEL_WALL, indices[k]);
-}
-
-/* Closed shapes whose whole outline sits inside the box are shape targets for
-   the nested-room marquee modes. */
-static void select_enclosed_shapes(Editor* e, Rect rect, MarqueePick pick) {
-    Vec2 polygon[LEVEL_MAX_WALLS];
-    int best = -1;
-    float best_area = INFINITY;
-    for (int i = 0; i < e->level.shape_count; i++) {
-        const Shape* shape = &e->level.shapes[i];
-        if (!shape->closed) continue;
-        int count = level_shape_polygon(&e->level, shape->id, polygon,
-                                        LEVEL_MAX_WALLS);
-        if (count < 3) continue;
-        bool inside = true;
-        for (int k = 0; k < count; k++) {
-            if (!rect_contains(rect, polygon[k])) {
-                inside = false;
-                break;
-            }
-        }
-        if (!inside) continue;
-        if (pick == MARQUEE_PICK_ENCLOSED) {
-            select_shape_walls(e, i);
-        } else {
-            float area = fabsf(polygon_area(polygon, count));
-            if (area <= best_area) {
-                best_area = area;
-                best = i;
-            }
-        }
-    }
-    if (pick == MARQUEE_PICK_INNER && best >= 0) select_shape_walls(e, best);
-}
-
-/* A marquee selects whole non-wall objects inside the box and either selects
-   enclosed closed shapes or marks the crossed part of each wall, depending on
-   the panel's Marquee picks setting. */
+/* A marquee selects whole non-wall objects inside the box and marks the
+   crossed part of each wall for cutting. */
 static void marquee_select(Editor* e, Rect rect, bool additive) {
     if (!additive) sel_clear(e);
     for (int i = 0; i < e->level.door_count; i++) {
@@ -2213,15 +2152,10 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
             sel_add(e, SEL_STAIRS, i);
         }
     }
-    if (e->marquee_pick != MARQUEE_PICK_SECTIONS) {
-        select_enclosed_shapes(e, rect, e->marquee_pick);
-    }
     if (!sel_has(&e->selection, e->selection.primary.kind, e->selection.primary.index)) {
         sel_promote(e);
     }
-    if (e->marquee_pick == MARQUEE_PICK_SECTIONS) {
-        collect_sections(e, rect, additive);
-    }
+    collect_sections(e, rect, additive);
     int objects = sel_count(&e->selection);
     if (e->span_count > 0 && objects > 0) {
         set_status(e, false, "%d section%s and %d object%s selected",
@@ -2240,8 +2174,7 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
 
 static void begin_select(Editor* e, Vec2 world, ImVec2 mouse);
 
-static void begin_marquee(Editor* e, Vec2 world, ImVec2 mouse, bool additive,
-                          int button) {
+static void begin_marquee(Editor* e, Vec2 world, ImVec2 mouse, bool additive) {
     cancel_gesture(e);
     if (!additive) sel_clear(e);
     Gesture* g = &e->gesture;
@@ -2250,7 +2183,6 @@ static void begin_marquee(Editor* e, Vec2 world, ImVec2 mouse, bool additive,
     g->cur_world = g->press_world;
     g->press_screen = v2(mouse.x, mouse.y);
     g->additive = additive;
-    g->button = button;
     g->moved = false;
     set_status(e, false, additive ? "Additive marquee" : "Marquee");
 }
@@ -2474,8 +2406,7 @@ static void update_drag(Editor* e, bool have_pointer) {
     ImGuiIO* io = igGetIO();
     Gesture* g = &e->gesture;
     if (!gesture_is_drag(e)) return;
-    int button = g->kind == GESTURE_MARQUEE ? g->button : 0;
-    bool down = have_pointer && io->MouseDown[button];
+    bool down = have_pointer && io->MouseDown[0];
     Vec2 world = have_pointer ? screen_to_world(e, io->MousePos) : g->anchor;
 
     switch (g->kind) {
@@ -3070,13 +3001,9 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
     bool shift = io->KeyShift;
     bool ctrl = io->KeyCtrl;
 
-    if (e->marquee_start == MARQUEE_START_ALT && io->KeyAlt && !ctrl) {
-        begin_marquee(e, world, mouse, shift, 0);
-        return;
-    }
-    if (e->marquee_start == MARQUEE_START_LATCH && e->marquee_armed && !ctrl) {
+    if (e->marquee_armed && !ctrl) {
         e->marquee_armed = false;
-        begin_marquee(e, world, mouse, shift, 0);
+        begin_marquee(e, world, mouse, shift);
         return;
     }
 
@@ -3131,7 +3058,7 @@ static void begin_select(Editor* e, Vec2 world, ImVec2 mouse) {
                 return;
             }
         }
-        begin_marquee(e, world, mouse, shift, 0);
+        begin_marquee(e, world, mouse, shift);
         return;
     }
 
@@ -3397,12 +3324,6 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
             default: break;
         }
     }
-
-    if (hovered && e->tool == TOOL_SELECT &&
-        e->marquee_start == MARQUEE_START_RIGHT &&
-        igIsMouseClicked(1) && !gesture_active(e) && !e->pan_active) {
-        begin_marquee(e, world, io->MousePos, io->KeyShift, 1);
-    }
 }
 
 static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
@@ -3633,23 +3554,8 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_SELECT: {
             igDummy((ImVec2){ 0.0f, 3.0f });
-            int start = (int)e->marquee_start;
-            igSetNextItemWidth(120.0f);
-            if (igCombo("Start", &start,
-                        "Empty\0Alt-drag\0Right-drag\0M then drag\0")) {
-                e->marquee_start = (MarqueeStart)start;
-            }
-            int pick = (int)e->marquee_pick;
-            igSetNextItemWidth(120.0f);
-            if (igCombo("Picks", &pick,
-                        "Sections\0Inner shape\0Enclosed\0")) {
-                e->marquee_pick = (MarqueePick)pick;
-            }
-            if (e->marquee_start == MARQUEE_START_LATCH && e->marquee_armed) {
-                small_note("Marquee armed: the next drag starts a marquee.");
-            } else {
-                small_note("Start: where a marquee drag may begin. Picks: wall sections, the innermost enclosed shape, or all enclosed shapes.");
-            }
+            igCheckbox("Marquee next drag", &e->marquee_armed);
+            small_note("Press M, then drag, to start a marquee from inside a shape. A drag on empty canvas also starts one. Picks wall sections; press Delete to cut them.");
             break;
         }
         case TOOL_COUNT:
@@ -4245,8 +4151,7 @@ static void handle_shortcuts(Editor* e) {
     }
     if (igIsKeyPressedEx(ImGuiKey_G, false)) e->show_grid = !e->show_grid;
     if (igIsKeyPressedEx(ImGuiKey_L, false)) toggle_selection_lock(e);
-    if (igIsKeyPressedEx(ImGuiKey_M, false) && e->tool == TOOL_SELECT &&
-        e->marquee_start == MARQUEE_START_LATCH) {
+    if (igIsKeyPressedEx(ImGuiKey_M, false) && e->tool == TOOL_SELECT) {
         e->marquee_armed = !e->marquee_armed;
         set_status(e, false, e->marquee_armed ? "Marquee armed: drag to select"
                                               : "Marquee cancelled");
@@ -4323,8 +4228,6 @@ Editor* editor_create(const char* startup_path) {
     e->snap = true;
     e->snap_objects = true;
     e->show_grid = true;
-    e->marquee_start = MARQUEE_START_EMPTY;
-    e->marquee_pick = MARQUEE_PICK_SECTIONS;
     e->marquee_armed = false;
     e->door_width = 12.0f;
     e->label_size = 10.0f;
