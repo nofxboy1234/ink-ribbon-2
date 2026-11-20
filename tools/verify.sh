@@ -261,7 +261,7 @@ walls = {l[1]: l for l in lines if l[0] == "wall"}
 if len(doors) != 1:
     print(f"{len(doors)} doors after a click, want 1"); raise SystemExit(1)
 door = doors[0]
-if door[1] != "0" or float(door[4]) != 12.0:
+if door[1] != "0" or float(door[4]) != 10.0:
     print("the door is not white at the panel width", door); raise SystemExit(1)
 wall = walls[door[2]]
 a = (float(wall[3]), float(wall[4])); b = (float(wall[5]), float(wall[6]))
@@ -271,7 +271,7 @@ if abs(cx - (-104)) > 0.01 or abs(cy - (-96)) > 0.01:
     print(f"door centre {(cx, cy)} is not the snapped hover point (-104, -96)")
     raise SystemExit(1)
 PYEOF
-echo "PASS hover ghost, click placed a white 12-unit door at the projected point"
+echo "PASS hover ghost, click placed a white 10-unit door at the projected point"
 shot "$out-door-white.png"
 doorwhite=$(maxima "$out-door-white.png" "50x20+455+305")
 python3 - "$doorwhite" <<'PYEOF'

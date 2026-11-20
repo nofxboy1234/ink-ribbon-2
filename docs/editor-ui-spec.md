@@ -152,7 +152,7 @@ Below the six tool buttons and the Q lock row:
 - Select: a **Marquee next drag** checkbox (same as pressing M) and a hint that a wall corner drags to resize.
 - Line: a hint.
 - Rectangle: a hint that overlapping rectangles union.
-- Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 12. New doors are 3 px thick.
+- Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 10. New doors are 3 px thick.
 - Stairs: direction buttons, a steps slider, a Flip checkbox, a falloff combo (Linear, Ease in, Ease out, Smooth), faint and bright opacity sliders, and a hint.
 - Label: a size slider from 8 to 48.
 

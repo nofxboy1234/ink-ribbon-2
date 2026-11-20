@@ -142,7 +142,7 @@ PASS the tool returned to Select after the rectangle action
 PASS two overlapping rectangles are one eight-wall shape with no interior lines
 PASS level structure, doors, stairs, and labels
 PASS the union round-trips through save and load
-PASS hover ghost, click placed a white 12-unit door at the projected point
+PASS hover ghost, click placed a white 10-unit door at the projected point
 PASS the tool returned to Select after placing the door
 PASS Q lock lights, holds the Door tool, and the next unheld action switches
 PASS a stair drag uses the panel direction, steps, and flip

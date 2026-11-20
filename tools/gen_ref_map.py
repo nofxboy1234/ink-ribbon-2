@@ -68,17 +68,17 @@ SHAPES: list[tuple[bool, list[tuple[float, float]]]] = [
 # White door bars in the reference: (x, y) of the bar centre, horizontal flag,
 # width in reference pixels.
 DOORS: list[tuple[float, float, bool, float]] = [
-    (518, 134, False, 12),
-    (632, 143, False, 12),
-    (322, 179, False, 12),
-    (322, 403, False, 12),
-    (149, 388, False, 12),
-    (660, 193, True, 12),
-    (628, 234, True, 12),
+    (518, 134, False, 10),
+    (632, 143, False, 10),
+    (322, 179, False, 10),
+    (322, 403, False, 10),
+    (149, 388, False, 10),
+    (660, 193, True, 10),
+    (628, 234, True, 10),
     # The three blue doors in the reference, drawn white as requested.
-    (72, 138, False, 12),
-    (180, 73, False, 12),
-    (172, 237, False, 12),
+    (72, 138, False, 10),
+    (180, 73, False, 10),
+    (172, 237, False, 10),
 ]
 
 # (x0, y0, x1, y1, direction, steps, bottom). The reference draws the top and

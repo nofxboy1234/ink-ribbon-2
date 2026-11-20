@@ -4229,7 +4229,7 @@ Editor* editor_create(const char* startup_path) {
     e->snap_objects = true;
     e->show_grid = true;
     e->marquee_armed = false;
-    e->door_width = 12.0f;
+    e->door_width = 10.0f;
     e->label_size = 10.0f;
     e->stair_dir = STAIRS_H;
     e->stair_steps = 10;
