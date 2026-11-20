@@ -1722,6 +1722,19 @@ static void test_nav_grid(void) {
             if (a.x <= 0.0f && b.x >= 0.0f) through_door = true;
         }
         check(through_door, "the path crosses from one side of the door to the other");
+        Vec2 smooth[NAV_MAX_PATH];
+        int smooth_count = nav_smooth_path(&nav, path, count, smooth,
+                                           NAV_MAX_PATH);
+        check(smooth_count > 1, "the path smooths to at least two waypoints");
+        bool clear = true;
+        for (int i = 1; i < smooth_count; i++) {
+            if (!nav_line_clear(&nav, smooth[i - 1], smooth[i])) clear = false;
+        }
+        check(clear, "every smoothed segment stays on open cells");
+        check(v2_dist(smooth[0], nav_cell_center(&nav, path[0])) < 0.01f &&
+                  v2_dist(smooth[smooth_count - 1],
+                          nav_cell_center(&nav, path[count - 1])) < 0.01f,
+              "smoothing keeps the route endpoints");
     }
 }
 

@@ -153,7 +153,8 @@ At most one player record exists. The Player section at the bottom of the left p
 - With a player, a play-mode click builds an A* path and starts walking.
 - The nav grid is 8 world units per cell. A cell is open when its centre is inside a closed room or corridor and clears every solid wall by the player radius. Door openings are removed from every collinear wall record, so doors are passable. Stair treads are not walls; stair-side walls remain solid.
 - Hovering in play mode draws the nav cell as a green-bordered square when walkable, and a muted red border when blocked. It also draws the planned A* route from the player to that cell as a green line. After a click, the remaining route is drawn in green while the player walks. The same green hover cell appears while `Place player` is armed in edit mode.
-- A* uses 8-way movement, forbids diagonal corner cutting, and returns cell centres. The player pivots in place before starting a path, then turns and moves smoothly through the cell centres. A faint turning circle is drawn while moving.
+- A* uses 8-way movement and forbids diagonal corner cutting. Its cell route is line-of-sight filtered and Chaikin-rounded, then every smoothed segment is sampled for open cells; if a rounded segment fails, the filtered polyline is used. This route is what is drawn and walked.
+- If the next destination is directly horizontal or vertical behind the player, the player pivots on the spot to face it. Otherwise it turns while moving, with a small turning circle drawn around it.
 - `C` recentres on the player at the current zoom. `Esc` stops the player. `P` returns to editing. The player position and heading are saved in the level.
 
 ## Tool options in the left panel
@@ -176,7 +177,7 @@ There is no Fill palette.
 - Open: modal with a path input plus a small clickable list of `levels/*.lvl`. On load success, history_reset, clear selection, fit. On failure, show the error in the status strip and keep the current level.
 - The save format is `ink-level 3`. A level may carry one `player x y heading` record. The shape record keeps its fill column but writes 0, and the door record keeps its colour column but writes 0. A loaded fill or door colour is ignored. Room records from version 1 to 3 are read and skipped. Stair records keep the optional trailing fade-end flag, falloff, and faint/bright opacities; omitted values load with the linear 0.18/0.68 defaults.
 - Save writes to the current path. Save As opens a path modal with the current path prefilled and lists `levels/*.lvl`. Report success or the error in the status strip.
-- `Ctrl+S` saves, `Ctrl+Shift+S` opens Save As, `Ctrl+O` opens the Open modal.
+- `Ctrl+S` saves, including in play mode, and never toggles Snap. `Ctrl+Shift+S` opens Save As, `Ctrl+O` opens the Open modal.
 - `Ctrl+Z` undo, `Ctrl+Shift+Z` or `Ctrl+Y` redo, disabled while a drag is active.
 
 Use `igInputText` with a stable `char` buffer in the editor. Do not use native file dialogs.

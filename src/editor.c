@@ -39,7 +39,7 @@
 #define SPAN_END_GRAB_PX 9.0f
 #define VERTEX_GRAB_PX 7.0f
 #define PLAYER_SPEED 62.0f
-#define PLAYER_TURN_RATE 9.0f
+#define PLAYER_TURN_RATE 14.0f
 #define PLAYER_RADIUS 3.2f
 #define PLAYER_SPRITE_WORLD 12.0f
 /* One look means a near-black canvas and white lines. A wall and a stair
@@ -263,15 +263,15 @@ struct Editor {
     bool player_place_pending;
     bool nav_ready;
     NavGrid nav;
-    int player_path[NAV_MAX_PATH];
+    Vec2 player_path[NAV_MAX_PATH];
     int player_path_count;
     int player_path_index;
     bool player_moving;
-    bool player_forward;
+    bool player_pivot;
     bool follow_player;
     bool camera_pan_active;
     Vec2 camera_pan_target;
-    int preview_path[NAV_MAX_PATH];
+    Vec2 preview_path[NAV_MAX_PATH];
     int preview_count;
     int preview_start;
     int preview_goal;
@@ -991,7 +991,7 @@ static void set_play_mode(Editor* e, bool on) {
     e->play_mode = on;
     e->player_place_pending = false;
     e->player_moving = false;
-    e->player_forward = false;
+    e->player_pivot = false;
     e->player_path_count = 0;
     e->player_path_index = 0;
     e->camera_pan_active = false;
@@ -1051,17 +1051,33 @@ static void player_command(Editor* e, Vec2 world) {
         e->level.player_pos = nav_cell_center(&e->nav, open_start);
         start = open_start;
     }
-    int count = nav_find_path(&e->nav, start, target, e->player_path,
-                              NAV_MAX_PATH);
+    int cells[NAV_MAX_PATH];
+    int raw = nav_find_path(&e->nav, start, target, cells, NAV_MAX_PATH);
+    if (raw <= 0) {
+        set_status(e, true, "No path to that cell");
+        return;
+    }
+    int count = nav_smooth_path(&e->nav, cells, raw, e->player_path,
+                                NAV_MAX_PATH);
     if (count <= 0) {
         set_status(e, true, "No path to that cell");
         return;
     }
     e->player_path_count = count;
     e->player_path_index = 0;
+    while (e->player_path_index < count - 1 &&
+           v2_dist(e->level.player_pos,
+                   e->player_path[e->player_path_index]) < 0.75f) {
+        e->player_path_index++;
+    }
     e->player_moving = true;
-    e->player_forward = false;
     e->preview_count = 0;
+    Vec2 first = e->player_path[e->player_path_index];
+    Vec2 d = v2_sub(first, e->level.player_pos);
+    float desired = atan2f(d.x, -d.y);
+    bool axis = fabsf(d.x) < 0.75f || fabsf(d.y) < 0.75f;
+    float err = angle_delta(e->level.player_heading, desired);
+    e->player_pivot = axis && fabsf(err) > 2.5f;
     start_camera_pan_to_player(e);
     set_status(e, false, "Walking to cell");
 }
@@ -1097,18 +1113,17 @@ static void update_player(Editor* e, float dt) {
     Vec2 pos = e->level.player_pos;
     float heading = e->level.player_heading;
     while (e->player_path_index < e->player_path_count) {
-        Vec2 target = nav_cell_center(&e->nav,
-                                      e->player_path[e->player_path_index]);
+        Vec2 target = e->player_path[e->player_path_index];
         if (v2_dist(pos, target) > 0.35f) break;
         e->player_path_index++;
     }
     if (e->player_path_index >= e->player_path_count) {
         e->player_moving = false;
-        e->player_forward = false;
+        e->player_pivot = false;
         e->player_path_count = 0;
         return;
     }
-    Vec2 target = nav_cell_center(&e->nav, e->player_path[e->player_path_index]);
+    Vec2 target = e->player_path[e->player_path_index];
     Vec2 delta = v2_sub(target, pos);
     float dist = v2_len(delta);
     if (dist <= 0.0001f) return;
@@ -1116,10 +1131,10 @@ static void update_player(Editor* e, float dt) {
     float desired = atan2f(dir.x, -dir.y);
     float err = angle_delta(heading, desired);
     float turn = PLAYER_TURN_RATE * dt;
-    if (!e->player_forward) {
+    if (e->player_pivot) {
         if (fabsf(err) <= turn) {
             heading = desired;
-            e->player_forward = true;
+            e->player_pivot = false;
         } else {
             heading += clampf(err, -turn, turn);
         }
@@ -1174,8 +1189,12 @@ static void update_player_preview(Editor* e) {
     }
     e->preview_start = start;
     e->preview_goal = goal;
-    e->preview_count = nav_find_path(&e->nav, start, goal, e->preview_path,
-                                     NAV_MAX_PATH);
+    int cells[NAV_MAX_PATH];
+    int raw = nav_find_path(&e->nav, start, goal, cells, NAV_MAX_PATH);
+    e->preview_count = raw > 0
+                           ? nav_smooth_path(&e->nav, cells, raw,
+                                             e->preview_path, NAV_MAX_PATH)
+                           : 0;
 }
 
 static Rect label_world_rect(const Editor* e, const Label* label) {
@@ -1453,7 +1472,7 @@ static void reset_player_runtime(Editor* e) {
     e->player_place_pending = false;
     e->nav_ready = false;
     e->player_moving = false;
-    e->player_forward = false;
+    e->player_pivot = false;
     e->player_path_count = 0;
     e->player_path_index = 0;
     e->follow_player = false;
@@ -1907,7 +1926,7 @@ static void draw_player_path(const Editor* e) {
     if (e->player_moving && e->player_path_count > 0) {
         pts[count++] = world_to_screen(e, e->level.player_pos);
         for (int i = e->player_path_index; i < e->player_path_count; i++) {
-            Vec2 p = nav_cell_center(&e->nav, e->player_path[i]);
+            Vec2 p = e->player_path[i];
             ImVec2 sp = world_to_screen(e, p);
             if (count > 0 && fabsf(sp.x - pts[count - 1].x) < 0.5f &&
                 fabsf(sp.y - pts[count - 1].y) < 0.5f) {
@@ -1918,7 +1937,7 @@ static void draw_player_path(const Editor* e) {
     } else if (!e->player_moving && e->preview_count > 0) {
         pts[count++] = world_to_screen(e, e->level.player_pos);
         for (int i = 0; i < e->preview_count; i++) {
-            Vec2 p = nav_cell_center(&e->nav, e->preview_path[i]);
+            Vec2 p = e->preview_path[i];
             ImVec2 sp = world_to_screen(e, p);
             if (count > 0 && fabsf(sp.x - pts[count - 1].x) < 0.5f &&
                 fabsf(sp.y - pts[count - 1].y) < 0.5f) {
@@ -1957,7 +1976,7 @@ static void draw_player(const Editor* e) {
                               IM_COL32_WHITE);
     if (e->player_moving) {
         ImVec2 center = world_to_screen(e, pos);
-        float radius = 6.0f * e->camera.zoom;
+        float radius = 4.0f * e->camera.zoom;
         ImDrawList_AddCircleEx(dl, center, radius, col32a(0xf0d060, 90),
                                32, 1.5f, 0);
     }
@@ -4528,6 +4547,13 @@ static void handle_shortcuts(Editor* e) {
         return;
     }
     if (e->play_mode) {
+        if (io->KeyCtrl && igIsKeyPressedEx(ImGuiKey_S, false)) {
+            if (io->KeyShift) open_path_modal(e, MODAL_SAVE_AS);
+            else if (e->current_path[0]) save_level_as(e, e->current_path);
+            else open_path_modal(e, MODAL_SAVE_AS);
+            return;
+        }
+        if (io->KeyCtrl) return;
         if (igIsKeyPressedEx(ImGuiKey_C, false)) recenter_player_camera(e);
         else if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
             e->player_moving = false;

@@ -33,6 +33,15 @@ bool nav_cell_is_open(const NavGrid* nav, int index);
    returns the count, or 0 when there is no path. */
 int nav_find_path(const NavGrid* nav, int start, int goal, int* out, int max);
 
+/* True when every sampled point on the segment is on an open nav cell. */
+bool nav_line_clear(const NavGrid* nav, Vec2 a, Vec2 b);
+
+/* Turns raw A* cells into centred, line-of-sight-filtered and Chaikin-rounded
+   waypoints. Falls back to the filtered polyline if a smoothed segment fails
+   the clearance sample. Returns the waypoint count. */
+int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
+                    int max);
+
 /* Cell under a world point, or -1 when outside the grid. */
 int nav_cell_at_world(const NavGrid* nav, Vec2 p);
 

@@ -273,6 +273,84 @@ static int pop_heap(int* heap, float* cost, int* count) {
     return top;
 }
 
+bool nav_line_clear(const NavGrid* nav, Vec2 a, Vec2 b) {
+    float len = v2_dist(a, b);
+    int steps = (int)ceilf(len / 0.5f);
+    if (steps < 1) steps = 1;
+    for (int i = 0; i <= steps; i++) {
+        Vec2 p = v2_lerp(a, b, (float)i / (float)steps);
+        if (!nav_cell_is_open(nav, nav_cell_at(nav, p))) return false;
+    }
+    return true;
+}
+
+int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
+                    int max) {
+    if (!nav || !cells || !out || count <= 0 || max <= 0) return 0;
+    Vec2 pts[NAV_MAX_PATH];
+    int n = 0;
+    for (int i = 0; i < count && n < NAV_MAX_PATH; i++) {
+        Vec2 p = nav_cell_center(nav, cells[i]);
+        if (n == 0 || !v2_equal(p, pts[n - 1], 0.01f)) pts[n++] = p;
+    }
+    if (n == 0) return 0;
+    if (n == 1) {
+        out[0] = pts[0];
+        return 1;
+    }
+
+    Vec2 filtered[NAV_MAX_PATH];
+    int fn = 0;
+    filtered[fn++] = pts[0];
+    int last = 0;
+    while (last < n - 1 && fn < NAV_MAX_PATH) {
+        int next = last + 1;
+        for (int j = n - 1; j > last + 1; j--) {
+            if (nav_line_clear(nav, pts[last], pts[j])) {
+                next = j;
+                break;
+            }
+        }
+        filtered[fn++] = pts[next];
+        last = next;
+    }
+    if (fn < 2) {
+        out[0] = filtered[0];
+        return 1;
+    }
+    if (fn == 2) {
+        int take = fn < max ? fn : max;
+        for (int i = 0; i < take; i++) out[i] = filtered[i];
+        return take;
+    }
+
+    Vec2 smooth[NAV_MAX_PATH];
+    int sn = 0;
+    smooth[sn++] = filtered[0];
+    for (int i = 0; i < fn - 1; i++) {
+        Vec2 q = v2_lerp(filtered[i], filtered[i + 1], 0.25f);
+        Vec2 r = v2_lerp(filtered[i], filtered[i + 1], 0.75f);
+        if (sn == 0 || !v2_equal(q, smooth[sn - 1], 0.01f)) smooth[sn++] = q;
+        if (sn == 0 || !v2_equal(r, smooth[sn - 1], 0.01f)) smooth[sn++] = r;
+    }
+    Vec2 end = filtered[fn - 1];
+    if (!v2_equal(smooth[sn - 1], end, 0.01f)) smooth[sn++] = end;
+    else smooth[sn - 1] = end;
+
+    bool clear = true;
+    for (int i = 1; i < sn; i++) {
+        if (!nav_line_clear(nav, smooth[i - 1], smooth[i])) {
+            clear = false;
+            break;
+        }
+    }
+    const Vec2* use = clear ? smooth : filtered;
+    int un = clear ? sn : fn;
+    int take = un < max ? un : max;
+    for (int i = 0; i < take; i++) out[i] = use[i];
+    return take;
+}
+
 int nav_find_path(const NavGrid* nav, int start, int goal, int* out, int max) {
     if (!nav_cell_is_open(nav, start) || !nav_cell_is_open(nav, goal)) return 0;
     int total = nav->cols * nav->rows;

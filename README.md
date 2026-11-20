@@ -88,6 +88,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 | P | Toggle play mode; click the map to place or walk the player |
 | C | Recentre the camera on the player at the current zoom |
 | Esc | In play mode, stop the player |
+| Ctrl+S | Save, including in play mode; it does not toggle Snap |
 | Drag a section end | Resize a marked section along its wall |
 | Middle drag, or Space plus left drag | Pan |
 | Mouse wheel | Zoom around the cursor |
@@ -138,9 +139,12 @@ grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
 is inside a closed room/corridor outline and its player radius clears every solid
 wall. Door spans are cut out of every collinear wall they sit on, so doors are
 passable; stair treads are not walls, while stair-side walls still block. A* uses
-8-way movement, forbids corner cutting, and paths through door gaps. The player
-pivots in place before starting a new path and then turns and moves smoothly along
-the cell centres. A faint turning circle is drawn while the player is moving.
+8-way movement, forbids corner cutting, and paths through door gaps. The raw A* route is line-of-sight filtered and Chaikin-rounded, then checked
+against the nav grid again, so the drawn and walked route is a short smooth
+polyline rather than a cell-by-cell staircase. If the first destination is
+directly horizontal or vertical behind the player, the player pivots on the
+spot; otherwise it turns while moving, with a small turning circle drawn around
+it.
 
 The camera follows the player while walking but only changes its centre: zoom is
 never altered by play mode, recentring, or path starts. When the player starts
@@ -164,7 +168,7 @@ The player graphic is authored in `assets/player.svg`, rasterised with Krita to
 
 ```text
 PASS build without warnings
-PASS core tests (389 checks)
+PASS core tests (392 checks)
 PASS empty room (040404), faint wall (max 0.340974), white door (max 0.94902)
 PASS save writes fill 0, door colour 0, and no room record
 PASS six tools activate in order on keys 1 to 6
