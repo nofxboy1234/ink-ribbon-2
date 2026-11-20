@@ -120,8 +120,9 @@ Selection is a bounded set per object kind plus a primary reference. Walls are s
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out.
 - A plain press within 7 screen pixels of a wall endpoint starts a corner drag. The level moves the shared vertex and every vertex that must follow, so attached walls stay orthogonal and the outline stays connected. Snap puts the corner on the grid; Snap objects instead aligns it to nearby wall lines and endpoints within 8 screen pixels. Select draws hollow squares at wall endpoints as handles.
+- The Select panel's **Start** combo chooses how a marquee begins: `Empty` (empty canvas only, the original behavior), `Alt-drag`, `Right-drag`, or `M then drag` (press M to arm one drag). The **Picks** combo chooses `Sections` (original wall-section cutting), `Inner shape` (the smallest fully enclosed closed shape), or `Enclosed` (every fully enclosed closed shape). Shape-pick modes suppress wall-section marking entirely.
 - Plain press on empty canvas clears the selection and the marked sections, then starts a marquee. Shift-press on empty canvas starts an additive marquee. Travel under 4 screen pixels is a click.
-- On marquee release, select whole non-wall objects inside the rectangle. Doors use segment intersection, labels and stairs use rect overlap. Walls are never selected whole by a box. The crossed part of every wall is marked as a section instead, clipped in wall parameters to the snapped box.
+- On marquee release, select whole non-wall objects inside the rectangle. Doors use segment intersection, labels and stairs use rect overlap. In `Sections` mode walls are never selected whole by a box; the crossed part of every wall is marked as a section instead, clipped in wall parameters to the snapped box. In the shape-pick modes, fully enclosed closed shapes are selected as whole walls and no sections are marked.
 - Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes.
 - Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, labels and stairs by their own move calls, and doors follow their host wall. Object snapping checks every moving wall endpoint and label or stair box edge on each axis, so the nearest side wins; grid snapping still measures the primary anchor.
 - A release without movement collapses a multi-selection to the pressed object.
@@ -148,7 +149,7 @@ Above the object properties, show a Lock selection checkbox when anything is sel
 Below the six tool buttons and the Q lock row:
 
 - Grid size: combo 4, 8, 16, 32; default 8. A Snap toggle, default on. A Show grid toggle, default on. A Snap objects toggle, default on.
-- Select: a hint that a box across walls marks their crossed sections to cut, and that a wall corner drags to resize.
+- Select: Start and Picks combos (marquee activation and target), plus a hint that a wall corner drags to resize.
 - Line: a hint.
 - Rectangle: a hint that overlapping rectangles union.
 - Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 12. New doors are 3 px thick.
@@ -174,7 +175,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `M` arm the next marquee in M mode, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 
