@@ -41,8 +41,10 @@ wall. Deleting a wall deletes its doors in the same operation, so a door never
 points at a dead host.
 
 Labels and stairs are independent placed objects. The stair footprint is an
-explicit min-corner box, so its edges can be dragged, and `dir`, `steps`, and
-the fade-end flag are stored fields rather than derived UI state.
+explicit min-corner box, so its edges can be dragged, and `dir`, `steps`, the
+fade-end flag, the falloff curve, and the faint/bright end opacities are stored
+fields rather than derived UI state. Older stair records omit the last three,
+so they load with the linear 0.18/0.68 default.
 
 Undo is a ring of `Level` snapshots in `History`. The UI commits one snapshot
 per completed gesture. Command deltas would need a correct inverse for every

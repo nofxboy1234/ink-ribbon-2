@@ -319,7 +319,7 @@ echo "PASS Q lock lights, holds the Door tool, and the next unheld action switch
 
 echo "== stairs drag with a persisted flip =="
 key 5
-click 22 422
+click 22 456
 drag 300 620 500 700
 save_as "$out-stairs-1.lvl"
 xdotool key --clearmodifiers Escape; sleep 0.3

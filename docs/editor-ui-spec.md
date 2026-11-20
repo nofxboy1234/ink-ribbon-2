@@ -9,7 +9,7 @@ One sokol window titled `Ink Ribbon Level Editor`, 1280 by 800 initial size, nea
 The frame builds a full-viewport ImGui layout:
 
 - A main menu bar at the top: File, Edit, View, Help.
-- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the six tool buttons, the Q lock row, then Grid, Snap, and Show grid, then only the active tool's settings.
+- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the six tool buttons, the Q lock row, then Grid, Snap, Show grid, and Snap objects, then only the active tool's settings.
 - A right inspector panel, 300 px wide, same vertical span.
 - A canvas filling the middle. The canvas rect is stored in the editor so the mouse can be converted between screen and world.
 - A one-line status strip overlaid at the bottom of the canvas. It shows the active tool hint, cursor world coordinates, zoom, the current snap size or `snap off`, and the latest action or error.
@@ -95,11 +95,11 @@ There is no marquee door workflow and no door colour menu. The inspector slides 
 
 ## Stairs
 
-Drag a rectangle. Both corners snap with the same rule as the Rectangle tool. The release needs at least one grid cell on each axis, or `STAIR_MIN_SIZE` when Snap is off.
+Drag a rectangle. Both corners snap with the same rule as the Rectangle tool. The release needs at least one grid cell on each axis, or `STAIR_MIN_SIZE` when Snap is off. The panel's falloff and faint/bright opacity sliders are copied to the new stair.
 
 The stair takes the panel's direction and step count and the panel's Flip flag. Flip sets which end of the run the tread fade starts from. The stair is selected, the action commits `Stairs added`, and the tool returns to Select unless Q is held.
 
-Treads draw as faint neutral lines, faint at the start of the fade and brighter at the far end. There is no footprint fill. Dragging a stair edge with Select resizes the footprint. The inspector changes direction, steps, and Flip for the selected stair, and each change commits.
+Treads draw as 3 px neutral lines. The falloff shapes the way opacity travels from the faint end to the bright end, and the two opacity sliders set those end values. Flip chooses which end of the run is the faint one. There is no footprint fill. Dragging a stair edge with Select resizes the footprint. The inspector changes direction, steps, Flip, falloff, and both opacities for the selected stair, and each change commits.
 
 There is no marquee stairs workflow.
 
@@ -117,7 +117,7 @@ Selection is a bounded set per object kind plus a primary reference. Walls are s
 
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out.
-- A plain press within 7 screen pixels of a wall endpoint starts a corner drag. The level moves the shared vertex and every vertex that must follow, so attached walls stay orthogonal and the outline stays connected. Snap puts the corner on the grid. Select draws hollow squares at wall endpoints as handles.
+- A plain press within 7 screen pixels of a wall endpoint starts a corner drag. The level moves the shared vertex and every vertex that must follow, so attached walls stay orthogonal and the outline stays connected. Snap puts the corner on the grid; Snap objects instead aligns it to nearby wall lines and endpoints within 8 screen pixels. Select draws hollow squares at wall endpoints as handles.
 - Plain press on empty canvas clears the selection and the marked sections, then starts a marquee. Shift-press on empty canvas starts an additive marquee. Travel under 4 screen pixels is a click.
 - On marquee release, select whole non-wall objects inside the rectangle. Doors use segment intersection, labels and stairs use rect overlap. Walls are never selected whole by a box. The crossed part of every wall is marked as a section instead, clipped in wall parameters to the snapped box.
 - Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes.
@@ -136,7 +136,7 @@ Show properties for the selected object, all edits through `level.*` and committ
 - Wall: shape id, closed state, wall count, edge index, Delete.
 - Door: wall id, position slider over the host t range, width slider from `DOOR_MIN_WIDTH` to host length, Delete.
 - Label: single-line text input, size slider 8 to 48, position, Delete.
-- Stairs: direction buttons, step count slider `STAIR_MIN_STEPS` to `STAIR_MAX_STEPS`, Flip checkbox, size, position, Delete.
+- Stairs: direction buttons, step count slider `STAIR_MIN_STEPS` to `STAIR_MAX_STEPS`, Flip checkbox, falloff combo, faint and bright opacity sliders, size, position, Delete.
 
 When exactly one object is selected, show its properties. When more than one is selected, show the total, per-kind counts, a short hint, and Delete. When nothing is selected, show level counts and a short controls list.
 
@@ -144,12 +144,12 @@ When exactly one object is selected, show its properties. When more than one is 
 
 Below the six tool buttons and the Q lock row:
 
-- Grid size: combo 4, 8, 16, 32; default 8. A Snap toggle, default on. A Show grid toggle, default on.
+- Grid size: combo 4, 8, 16, 32; default 8. A Snap toggle, default on. A Show grid toggle, default on. A Snap objects toggle, default on.
 - Select: a hint that a box across walls marks their crossed sections to cut, and that a wall corner drags to resize.
 - Line: a hint.
 - Rectangle: a hint that overlapping rectangles union.
 - Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 32.
-- Stairs: direction buttons, a steps slider, a Flip checkbox, and a hint.
+- Stairs: direction buttons, a steps slider, a Flip checkbox, a falloff combo (Linear, Ease in, Ease out, Smooth), faint and bright opacity sliders, and a hint.
 - Label: a size slider from 8 to 48.
 
 There is no Fill palette.
@@ -158,7 +158,7 @@ There is no Fill palette.
 
 - New: `level_init`, `history_reset`, clear selection, fit, path `levels/untitled.lvl`.
 - Open: modal with a path input plus a small clickable list of `levels/*.lvl`. On load success, history_reset, clear selection, fit. On failure, show the error in the status strip and keep the current level.
-- The save format is `ink-level 3`. The shape record keeps its fill column but writes 0, and the door record keeps its colour column but writes 0. A loaded fill or door colour is ignored. Room records from version 1 to 3 are read and skipped. Stair records keep the optional trailing fade-end flag.
+- The save format is `ink-level 3`. The shape record keeps its fill column but writes 0, and the door record keeps its colour column but writes 0. A loaded fill or door colour is ignored. Room records from version 1 to 3 are read and skipped. Stair records keep the optional trailing fade-end flag, falloff, and faint/bright opacities; omitted values load with the linear 0.18/0.68 defaults.
 - Save writes to the current path. Save As opens a path modal with the current path prefilled and lists `levels/*.lvl`. Report success or the error in the status strip.
 - `Ctrl+S` saves, `Ctrl+Shift+S` opens Save As, `Ctrl+O` opens the Open modal.
 - `Ctrl+Z` undo, `Ctrl+Shift+Z` or `Ctrl+Y` redo, disabled while a drag is active.

@@ -46,12 +46,13 @@ Load another level with `./build/editor --level path/to/level.lvl`. The `levels/
 - Press 1 to 6 for Select, Line, Rectangle, Door, Stairs, and Label. After a drawing action the editor returns to Select. Hold Q while the action completes to keep the tool.
 - Drag a rectangle with the Rectangle tool. A rectangle that overlaps or shares an edge with a shape joins it. The outline is rebuilt as one closed loop, so a plus or L shaped room built from several rectangles has no interior lines and no doubled walls. A rectangle that only touches a corner starts a new shape.
 - Hover a wall with the Door tool. A white ghost shows the door at the panel width, centred on the point projected onto the wall and snapped along it. Click to place the door. Drag either end with Select to change its length.
-- Drag a rectangle with the Stairs tool. The run takes the panel's direction and step count. Flip reverses which end the tread fade starts from, and the flag is saved with the level. Drag any stair edge with Select to resize the footprint.
+- Drag a rectangle with the Stairs tool. The run takes the panel's direction, step count, falloff, and faint/bright opacities. Flip reverses which end the tread fade starts from, and all of it is saved with the level. Drag any stair edge with Select to resize the footprint.
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
 - Select, edit, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them.
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
+- Snap dragged lines, edges, and corners to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 
 ## Controls
@@ -89,17 +90,19 @@ Walls are independent axis-aligned segments. Corners meet because the Line tool 
 
 A shape stores only its wall loop and a closed flag. The Rectangle tool adds a rectangle by splitting the shape and the rectangle on their own x and y coordinates, marking the occupied cells, and rebuilding the boundary from the cell edges. Consecutive edges merge into one wall, so the union is one closed loop. The operation replaces the shape's walls and keeps the shape id. A door whose wall survives moves to the matching new wall at the same world centre. A door whose wall becomes interior has no line left and is dropped. The union is stored as walls, so it survives save and load without new records.
 
-Labels store a position, a size, and a string. Stairs store a min-corner box, a direction, a step count, and which end of the run the fade starts from. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread size. The stair flag is the optional last field of the stair record.
+Labels store a position, a size, and a string. Stairs store a min-corner box, a direction, a step count, which end of the run the fade starts from, a falloff curve (linear, ease in, ease out, or smooth), and the opacity at the faint and bright ends. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread spacing. The stair bottom flag, falloff, and opacities are optional trailing fields, so older stair records still load with the linear 0.18/0.68 default.
 
 Selection is UI state and is never saved into a level. It is a bounded set per object kind plus a primary object. Shift-click adds an object, Ctrl-click toggles it, a box replaces or adds to the set, and Delete removes every selected object with one undo step. A box also marks the crossed part of each wall it passes over as a section, and Delete cuts every marked section in the same step. Dragging a wall edge reshapes its shape, and dragging a wall corner moves that corner and every shared vertex that must follow. Selected labels and stairs move as a group when dragged. A door stores its host wall id and a normalized position, so a door travels with its wall and cannot leave it. A door dragged alone still slides along its wall, and a door end still resizes it.
 
 Snap applies to line points, labels, stair boxes and edges, door centres, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
+Snap objects is a second, independent toggle. While it is on, a dragged edge or corner also snaps to nearby wall lines and wall endpoints within 8 screen pixels; object snapping wins on an axis and grid snapping fills the other. It is on by default.
+
 Undo stores whole level snapshots. Each completed change writes one snapshot. A wall click, a drag, and a property edit each undo as their own step. The history keeps 64 levels.
 
 ## One look
 
-The canvas is near-black. Every wall, stair tread, and selection helper is a line. Walls draw at a fixed faint alpha. Doors are always white. Stairs are neutral treads with no footprint fill. Labels are light grey. The editor has no fill palette, no room colour, and no shape fill mode. Loading a level that still carries fill, room, or door colour columns succeeds: the fill and colour values are ignored and the room polygons are skipped. Saving writes the fill and door colour columns as 0 for older readers and writes no room records.
+The canvas is near-black. Every wall, stair tread, and selection helper is a line. Walls draw at a fixed faint alpha. Doors are always white. Stairs are neutral 3 px treads whose opacity follows the per-stair falloff and end opacities, with no footprint fill. Labels are light grey. The editor has no fill palette, no room colour, and no shape fill mode. Loading a level that still carries fill, room, or door colour columns succeeds: the fill and colour values are ignored and the room polygons are skipped. Saving writes the fill and door colour columns as 0 for older readers and writes no room records.
 
 ## Verification
 

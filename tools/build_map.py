@@ -32,11 +32,11 @@ DISPLAY_SIZE = (1280, 800)
 
 # Left panel controls for the current tool. Ctrl-clicking the numeric part of
 # a slider opens its text entry.
-TOOL_SLIDER = (50, 350)
-STAIR_H_BUTTON = (95, 350)
-STAIR_V_BUTTON = (95, 375)
-STAIR_STEPS = (50, 402)
-STAIR_FLIP = (32, 429)
+TOOL_SLIDER = (50, 379)
+STAIR_H_BUTTON = (95, 379)
+STAIR_V_BUTTON = (95, 404)
+STAIR_STEPS = (50, 430)
+STAIR_FLIP = (32, 456)
 
 
 @dataclass(frozen=True)

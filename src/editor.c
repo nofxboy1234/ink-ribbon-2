@@ -27,6 +27,9 @@
    snapped positions once the pointer has actually travelled this far, so a
    plain Select click never moves an off-grid object. */
 #define DRAG_START_PX 4.0f
+/* How close, in screen pixels, a dragged edge or vertex must come to another
+   wall line or endpoint before it snaps to it. */
+#define OBJECT_SNAP_PX 8.0f
 /* A wall corner is a small target, so it answers a press from this close. */
 #define SPAN_END_GRAB_PX 9.0f
 #define VERTEX_GRAB_PX 7.0f
@@ -214,6 +217,7 @@ struct Editor {
 
     float grid_size;
     bool snap;
+    bool snap_objects;
     bool show_grid;
     /* Creation settings for the next object, shown only by the tool that
        uses them. */
@@ -223,6 +227,9 @@ struct Editor {
     StairsDir stair_dir;
     int stair_steps;
     bool stair_flip;
+    StairFade stair_fade;
+    float stair_min_alpha;
+    float stair_max_alpha;
 
     char current_path[512];
     char path_buf[512];
@@ -1254,8 +1261,22 @@ static void draw_grid(Editor* e) {
 /* Tread lines across a stair box, faint at the start of the fade and
    brighter at the far end. bottom says the fade starts at the min end of the
    run; the Flip setting moves it to the max end. */
+#define STAIR_TREAD_PX 3.0f
+
+static float stair_fade_curve(StairFade fade, float frac) {
+    frac = clampf(frac, 0.0f, 1.0f);
+    switch (fade) {
+        case STAIR_FADE_EASE_IN: return frac * frac;
+        case STAIR_FADE_EASE_OUT: return 1.0f - (1.0f - frac) * (1.0f - frac);
+        case STAIR_FADE_SMOOTH: return frac * frac * (3.0f - 2.0f * frac);
+        case STAIR_FADE_LINEAR:
+        default: return frac;
+    }
+}
+
 static void stair_treads(const Editor* e, ImDrawList* dl, Rect r, StairsDir dir,
-                         int steps, bool bottom, unsigned rgb) {
+                         int steps, bool bottom, StairFade fade, float min_alpha,
+                         float max_alpha, unsigned rgb) {
     ImVec2 a = world_to_screen(e, r.min);
     ImVec2 b = world_to_screen(e, r.max);
     bool horizontal = dir == STAIRS_H;
@@ -1265,14 +1286,16 @@ static void stair_treads(const Editor* e, ImDrawList* dl, Rect r, StairsDir dir,
         float offset = (float)k * spacing;
         float frac = run > 0.0001f ? offset / run : 1.0f;
         if (!bottom) frac = 1.0f - frac;
-        float alpha = 0.18f + 0.50f * frac;
+        float alpha = min_alpha + (max_alpha - min_alpha) *
+                                      stair_fade_curve(fade, frac);
+        alpha = clampf(alpha, 0.0f, 1.0f);
         ImU32 tread = col32a(rgb, (unsigned)(alpha * 255.0f));
         if (horizontal) {
             ImVec2 p = world_to_screen(e, v2(r.min.x + offset, r.min.y));
-            ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, tread, 1.0f, 0);
+            ImDrawList_AddLineVEx(dl, p.x, a.y, b.y, tread, STAIR_TREAD_PX, 0);
         } else {
             ImVec2 p = world_to_screen(e, v2(r.min.x, r.min.y + offset));
-            ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, tread, 1.0f, 0);
+            ImDrawList_AddLineHEx(dl, a.x, b.x, p.y, tread, STAIR_TREAD_PX, 0);
         }
     }
 }
@@ -1282,7 +1305,7 @@ static void draw_stairs(const Editor* e) {
     for (int i = 0; i < e->level.stairs_count; i++) {
         const Stairs* s = &e->level.stairs[i];
         stair_treads(e, dl, level_stairs_rect(s), s->dir, s->steps, s->bottom,
-                     STAIR_COL);
+                     s->fade, s->min_alpha, s->max_alpha, STAIR_COL);
     }
 }
 
@@ -2034,6 +2057,111 @@ static void line_finish_pending(Editor* e, ImVec2 mouse, bool moved) {
     }
 }
 
+/* Nearest unselected wall line or endpoint coordinate on one axis. */
+static bool snap_axis_objects(const Editor* e, const bool* skip, float value,
+                              bool x_axis, float tol, float* out) {
+    bool found = false;
+    float best = tol;
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (skip && skip[i]) continue;
+        const Wall* w = &e->level.walls[i];
+        bool vertical = wall_is_vertical(w);
+        float line = x_axis ? w->a.x : w->a.y;
+        bool line_matches = x_axis ? vertical : !vertical;
+        if (line_matches && fabsf(line - value) < best) {
+            best = fabsf(line - value);
+            *out = line;
+            found = true;
+        }
+        /* Endpoints act as vertex targets even on the perpendicular axis. */
+        float va = x_axis ? w->a.x : w->a.y;
+        float vb = x_axis ? w->b.x : w->b.y;
+        if (fabsf(va - value) < best) {
+            best = fabsf(va - value);
+            *out = va;
+            found = true;
+        }
+        if (fabsf(vb - value) < best) {
+            best = fabsf(vb - value);
+            *out = vb;
+            found = true;
+        }
+    }
+    return found;
+}
+
+/* Snap a point to an unselected vertex first, then to wall lines on each axis
+   independently. out_hit_x/out_hit_y say which axes object snapping claimed. */
+static Vec2 snap_point_objects(const Editor* e, const bool* skip, Vec2 p,
+                               float tol, bool* out_hit_x, bool* out_hit_y) {
+    Vec2 out = p;
+    bool hit_x = false;
+    bool hit_y = false;
+    float best = tol;
+    bool vertex = false;
+    for (int i = 0; i < e->level.wall_count; i++) {
+        if (skip && skip[i]) continue;
+        const Wall* w = &e->level.walls[i];
+        Vec2 ends[2] = { w->a, w->b };
+        for (int k = 0; k < 2; k++) {
+            float d = v2_dist(p, ends[k]);
+            if (d < best) {
+                best = d;
+                out = ends[k];
+                vertex = true;
+            }
+        }
+    }
+    if (vertex) {
+        hit_x = true;
+        hit_y = true;
+    } else {
+        float value;
+        if (snap_axis_objects(e, skip, p.x, true, tol, &value)) {
+            out.x = value;
+            hit_x = true;
+        }
+        if (snap_axis_objects(e, skip, p.y, false, tol, &value)) {
+            out.y = value;
+            hit_y = true;
+        }
+    }
+    if (out_hit_x) *out_hit_x = hit_x;
+    if (out_hit_y) *out_hit_y = hit_y;
+    return out;
+}
+
+/* Object snap wins on the axes it finds a target for; grid snap fills the
+   rest. With both toggles off this returns p unchanged. */
+static Vec2 snap_edit_point(const Editor* e, const bool* skip, Vec2 p) {
+    Vec2 out = p;
+    bool hit_x = false;
+    bool hit_y = false;
+    if (e->snap_objects) {
+        float tol = OBJECT_SNAP_PX / (e->camera.zoom > 0.0001f ? e->camera.zoom : 1.0f);
+        out = snap_point_objects(e, skip, p, tol, &hit_x, &hit_y);
+    }
+    if (e->snap) {
+        Vec2 grid = snap_grid(p, e->grid_size);
+        if (!hit_x) out.x = grid.x;
+        if (!hit_y) out.y = grid.y;
+    }
+    return out;
+}
+
+static float snap_edit_axis(const Editor* e, const bool* skip, float value,
+                            bool x_axis) {
+    if (e->snap_objects) {
+        float tol = OBJECT_SNAP_PX / (e->camera.zoom > 0.0001f ? e->camera.zoom : 1.0f);
+        float snapped;
+        if (snap_axis_objects(e, skip, value, x_axis, tol, &snapped)) {
+            return snapped;
+        }
+    }
+    if (e->snap) return snap_scalar(value, e->grid_size);
+    return value;
+}
+
 /* True once the pointer has moved far enough for a press to count as a drag.
    Until then a press is a click and must leave the document untouched, even
    when the object is not on the current snap grid. */
@@ -2075,10 +2203,8 @@ static void update_drag(Editor* e, bool have_pointer) {
                 if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
                 Vec2 raw = v2_sub(world, g->press_world);
                 Vec2 delta = raw;
-                if (e->snap) {
-                    Vec2 goal = snap_grid(v2_add(g->anchor, raw), e->grid_size);
-                    delta = v2_sub(goal, g->anchor);
-                }
+                Vec2 goal = snap_edit_point(e, g->walls, v2_add(g->anchor, raw));
+                delta = v2_sub(goal, g->anchor);
                 Vec2 step = v2_sub(delta, g->move_applied);
                 if (fabsf(step.x) > 0.0001f || fabsf(step.y) > 0.0001f) {
                     bool moved_any = level_move_walls(&e->level, g->walls,
@@ -2149,7 +2275,15 @@ static void update_drag(Editor* e, bool have_pointer) {
         case GESTURE_VERTEX: {
             if (down) {
                 if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
-                Vec2 target = snapped(e, world);
+                bool skip[LEVEL_MAX_WALLS] = { false };
+                for (int i = 0; i < e->level.wall_count; i++) {
+                    const Wall* w = &e->level.walls[i];
+                    if (v2_equal(w->a, g->vertex, 0.0001f) ||
+                        v2_equal(w->b, g->vertex, 0.0001f)) {
+                        skip[i] = true;
+                    }
+                }
+                Vec2 target = snap_edit_point(e, skip, world);
                 if (!v2_equal(target, g->vertex, 0.0001f) &&
                     level_move_vertex(&e->level, g->vertex, target)) {
                     g->vertex = target;
@@ -2174,16 +2308,16 @@ static void update_drag(Editor* e, bool have_pointer) {
                 if (!have_pointer || !past_drag_start(e, io->MousePos)) break;
                 Vec2 raw = v2_sub(world, g->press_world);
                 Vec2 total = raw;
-                if (e->snap) {
-                    total.x = g->ref_wall_x >= 0
-                                  ? snap_scalar(g->ref_start_x + raw.x,
-                                                e->grid_size) - g->ref_start_x
-                                  : 0.0f;
-                    total.y = g->ref_wall_y >= 0
-                                  ? snap_scalar(g->ref_start_y + raw.y,
-                                                e->grid_size) - g->ref_start_y
-                                  : 0.0f;
-                }
+                total.x = g->ref_wall_x >= 0
+                              ? snap_edit_axis(e, g->walls,
+                                               g->ref_start_x + raw.x, true) -
+                                    g->ref_start_x
+                              : 0.0f;
+                total.y = g->ref_wall_y >= 0
+                              ? snap_edit_axis(e, g->walls,
+                                               g->ref_start_y + raw.y, false) -
+                                    g->ref_start_y
+                              : 0.0f;
                 Vec2 step = v2_sub(total, g->move_applied);
                 if (fabsf(step.x) > 0.0001f || fabsf(step.y) > 0.0001f) {
                     float before_x = g->ref_wall_x >= 0
@@ -2292,7 +2426,7 @@ static void update_drag(Editor* e, bool have_pointer) {
                                          : STAIR_MIN_SIZE;
                 if (g->stair_edge == STAIR_EDGE_LEFT ||
                     g->stair_edge == STAIR_EDGE_RIGHT) {
-                    float x = e->snap ? snap_scalar(world.x, e->grid_size) : world.x;
+                    float x = snap_edit_axis(e, NULL, world.x, true);
                     if (g->stair_edge == STAIR_EDGE_LEFT) {
                         next.min.x = fminf(x, g->stair_fixed - min_size);
                     } else {
@@ -2300,7 +2434,7 @@ static void update_drag(Editor* e, bool have_pointer) {
                     }
                 } else if (g->stair_edge == STAIR_EDGE_TOP ||
                            g->stair_edge == STAIR_EDGE_BOTTOM) {
-                    float y = e->snap ? snap_scalar(world.y, e->grid_size) : world.y;
+                    float y = snap_edit_axis(e, NULL, world.y, false);
                     if (g->stair_edge == STAIR_EDGE_TOP) {
                         next.min.y = fminf(y, g->stair_fixed - min_size);
                     } else {
@@ -2520,6 +2654,8 @@ static void finish_stairs_drag(Editor* e, bool have_pointer) {
     /* The panel's Flip setting picks which end of the run the fade starts
        from; the inspector toggles it for one stair afterwards. */
     e->level.stairs[idx].bottom = e->stair_flip;
+    level_set_stairs_fade(&e->level, idx, e->stair_fade, e->stair_min_alpha,
+                          e->stair_max_alpha);
     sel_only(e, SEL_STAIRS, idx);
     cancel_gesture(e);
     commit(e, "Stairs added");
@@ -2553,6 +2689,7 @@ static void draw_shape_preview(const Editor* e) {
     ImVec2 b = world_to_screen(e, r.max);
     if (g->kind == GESTURE_STAIRS_DRAW) {
         stair_treads(e, dl, r, e->stair_dir, e->stair_steps, e->stair_flip,
+                     e->stair_fade, e->stair_min_alpha, e->stair_max_alpha,
                      ACCENT_COL);
     }
     ImDrawList_AddRectEx(dl, a, b, col32(ACCENT_COL), 0.0f, 1.0f, 0);
@@ -3117,6 +3254,7 @@ static void draw_left_panel(Editor* e) {
     igCheckbox("Snap", &e->snap);
     igSameLineEx(0.0f, 12.0f);
     igCheckbox("Show grid", &e->show_grid);
+    igCheckbox("Snap objects", &e->snap_objects);
 
     switch (e->tool) {
         case TOOL_LINE:
@@ -3147,6 +3285,20 @@ static void draw_left_panel(Editor* e) {
             igSliderInt("Steps", &e->stair_steps, STAIR_MIN_STEPS,
                         STAIR_MAX_STEPS);
             igCheckbox("Flip", &e->stair_flip);
+            int fade = (int)e->stair_fade;
+            igSetNextItemWidth(104.0f);
+            if (igCombo("Falloff", &fade, "Linear\0Ease in\0Ease out\0Smooth\0")) {
+                e->stair_fade = (StairFade)fade;
+            }
+            igSetNextItemWidth(84.0f);
+            igSliderFloatEx("Min", &e->stair_min_alpha, 0.0f, 1.0f, "%.2f", 0);
+            igSetNextItemWidth(84.0f);
+            igSliderFloatEx("Max", &e->stair_max_alpha, 0.0f, 1.0f, "%.2f", 0);
+            if (e->stair_min_alpha > e->stair_max_alpha) {
+                float swap = e->stair_min_alpha;
+                e->stair_min_alpha = e->stair_max_alpha;
+                e->stair_max_alpha = swap;
+            }
             small_note("Drag a rectangle for the run. Flip reverses which end the fade starts from.");
             break;
         }
@@ -3288,6 +3440,25 @@ static void inspector_stairs(Editor* e, int idx) {
         s->bottom = flip;
         commit(e, "Stairs flip changed");
     }
+    int fade = (int)s->fade;
+    igSetNextItemWidth(128.0f);
+    if (igCombo("Falloff", &fade, "Linear\0Ease in\0Ease out\0Smooth\0")) {
+        level_set_stairs_fade(&e->level, idx, (StairFade)fade, s->min_alpha,
+                              s->max_alpha);
+        commit(e, "Stairs falloff changed");
+    }
+    float min_alpha = s->min_alpha;
+    igSetNextItemWidth(128.0f);
+    if (igSliderFloatEx("Min opacity", &min_alpha, 0.0f, 1.0f, "%.2f", 0)) {
+        level_set_stairs_fade(&e->level, idx, s->fade, min_alpha, s->max_alpha);
+    }
+    if (igIsItemDeactivatedAfterEdit()) commit(e, "Stairs opacity changed");
+    float max_alpha = s->max_alpha;
+    igSetNextItemWidth(128.0f);
+    if (igSliderFloatEx("Max opacity", &max_alpha, 0.0f, 1.0f, "%.2f", 0)) {
+        level_set_stairs_fade(&e->level, idx, s->fade, s->min_alpha, max_alpha);
+    }
+    if (igIsItemDeactivatedAfterEdit()) commit(e, "Stairs opacity changed");
     igText("Width   %.1f", s->width);
     igText("Length  %.1f", s->length);
     igText("Position %.1f, %.1f", s->pos.x, s->pos.y);
@@ -3744,12 +3915,16 @@ Editor* editor_create(const char* startup_path) {
     e->selection.primary.index = -1;
     e->grid_size = 8.0f;
     e->snap = true;
+    e->snap_objects = true;
     e->show_grid = true;
     e->door_width = 32.0f;
     e->label_size = 10.0f;
     e->stair_dir = STAIRS_H;
     e->stair_steps = 10;
     e->stair_flip = false;
+    e->stair_fade = STAIR_FADE_LINEAR;
+    e->stair_min_alpha = STAIR_ALPHA_MIN;
+    e->stair_max_alpha = STAIR_ALPHA_MAX;
     e->fit_pending = true;
     e->modal = MODAL_NONE;
     e->request_modal = MODAL_NONE;

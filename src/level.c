@@ -1183,6 +1183,9 @@ int level_add_stairs(Level* level, Rect rect, StairsDir dir, int steps) {
         clamp_steps(steps),
         dir,
         false,
+        STAIR_FADE_LINEAR,
+        STAIR_ALPHA_MIN,
+        STAIR_ALPHA_MAX,
     };
     return index;
 }
@@ -1200,6 +1203,25 @@ bool level_set_stairs(Level* level, int stairs_index, StairsDir dir, int steps) 
     if (dir != STAIRS_H && dir != STAIRS_V) return false;
     level->stairs[stairs_index].dir = dir;
     level->stairs[stairs_index].steps = clamp_steps(steps);
+    return true;
+}
+
+bool level_set_stairs_fade(Level* level, int stairs_index, StairFade fade,
+                           float min_alpha, float max_alpha) {
+    if (stairs_index < 0 || stairs_index >= level->stairs_count) return false;
+    if (fade < 0 || fade >= STAIR_FADE_COUNT) return false;
+    if (!isfinite(min_alpha) || !isfinite(max_alpha)) return false;
+    Stairs* stairs = &level->stairs[stairs_index];
+    min_alpha = clampf(min_alpha, 0.0f, 1.0f);
+    max_alpha = clampf(max_alpha, 0.0f, 1.0f);
+    if (min_alpha > max_alpha) {
+        float swap = min_alpha;
+        min_alpha = max_alpha;
+        max_alpha = swap;
+    }
+    stairs->fade = fade;
+    stairs->min_alpha = min_alpha;
+    stairs->max_alpha = max_alpha;
     return true;
 }
 
@@ -1276,9 +1298,10 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
     }
     for (int i = 0; ok && i < level->stairs_count; i++) {
         const Stairs* s = &level->stairs[i];
-        ok = fprintf(f, "stairs %.3f %.3f %d %d %.3f %.3f %d\n",
+        ok = fprintf(f, "stairs %.3f %.3f %d %d %.3f %.3f %d %d %.3f %.3f\n",
                      s->pos.x, s->pos.y, (int)s->dir, s->steps,
-                     s->width, s->length, s->bottom ? 1 : 0) >= 0;
+                     s->width, s->length, s->bottom ? 1 : 0, (int)s->fade,
+                     s->min_alpha, s->max_alpha) >= 0;
     }
 
     int write_errno = 0;
@@ -1493,13 +1516,47 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 ok = fail_line(err, line_no, "malformed stairs record");
                 break;
             }
-            /* Prototype builds append which end of the run is the bottom. Old
-               files omit it, so it stays optional. */
+            /* Prototype builds append which end of the run is the bottom.
+               Later records add the fade shape and its two opacities. Old
+               files omit any of them, so each tail field is optional. */
             int bottom = 0;
+            int fade = STAIR_FADE_LINEAR;
+            float min_alpha = STAIR_ALPHA_MIN;
+            float max_alpha = STAIR_ALPHA_MAX;
             char* extra = next_token(&save);
-            if (extra && (!parse_int(extra, &bottom) || next_token(&save))) {
-                ok = fail_line(err, line_no, "malformed stairs record");
+            if (extra) {
+                if (!parse_int(extra, &bottom)) {
+                    ok = fail_line(err, line_no, "malformed stairs record");
+                    break;
+                }
+                extra = next_token(&save);
+                if (extra) {
+                    if (!parse_int(extra, &fade)) {
+                        ok = fail_line(err, line_no, "malformed stairs record");
+                        break;
+                    }
+                    char* tok_min = next_token(&save);
+                    if (tok_min) {
+                        char* tok_max = next_token(&save);
+                        if (!tok_max || !parse_float(tok_min, &min_alpha) ||
+                            !parse_float(tok_max, &max_alpha) ||
+                            next_token(&save)) {
+                            ok = fail_line(err, line_no, "malformed stairs record");
+                            break;
+                        }
+                    }
+                }
+            }
+            if (fade < 0 || fade >= STAIR_FADE_COUNT) {
+                ok = fail_line(err, line_no, "bad stairs falloff");
                 break;
+            }
+            min_alpha = clampf(min_alpha, 0.0f, 1.0f);
+            max_alpha = clampf(max_alpha, 0.0f, 1.0f);
+            if (min_alpha > max_alpha) {
+                float swap = min_alpha;
+                min_alpha = max_alpha;
+                max_alpha = swap;
             }
             if (dir != STAIRS_H && dir != STAIRS_V) {
                 ok = fail_line(err, line_no, "bad stairs direction");
@@ -1526,7 +1583,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             }
             tmp.stairs[tmp.stairs_count++] =
                 (Stairs){ box.min, width, length, kept_steps, (StairsDir)dir,
-                          bottom != 0 };
+                          bottom != 0, (StairFade)fade, min_alpha, max_alpha };
         } else {
             ok = fail_line(err, line_no, "unknown record '%s'", tag);
         }

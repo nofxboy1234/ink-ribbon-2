@@ -305,6 +305,19 @@ static void test_stairs(void) {
     Rect v = level_stairs_rect(&level.stairs[1]);
     check(nearv(v.min, v2(100, 100)) && nearv(v.max, v2(144, 160)),
           "stairs V footprint is the stored box, not derived from steps");
+    check(level.stairs[0].fade == STAIR_FADE_LINEAR &&
+              nearf(level.stairs[0].min_alpha, STAIR_ALPHA_MIN) &&
+              nearf(level.stairs[0].max_alpha, STAIR_ALPHA_MAX),
+          "a new stair uses the linear default fade");
+    check(level_set_stairs_fade(&level, 0, STAIR_FADE_SMOOTH, 0.9f, 0.1f) &&
+              level.stairs[0].fade == STAIR_FADE_SMOOTH &&
+              nearf(level.stairs[0].min_alpha, 0.1f) &&
+              nearf(level.stairs[0].max_alpha, 0.9f),
+          "set stairs fade keeps min below max");
+    check(!level_set_stairs_fade(&level, 0, (StairFade)99, 0.1f, 0.9f) &&
+              !level_set_stairs_fade(&level, 0, STAIR_FADE_LINEAR, NAN, 0.9f) &&
+              !level_set_stairs_fade(&level, 9, STAIR_FADE_LINEAR, 0.1f, 0.9f),
+          "set stairs fade rejects a bad enum, a non-finite opacity, or a bad index");
 
     check(level_set_stairs(&level, 0, STAIRS_V, 10), "set stairs direction");
     check(nearv(level.stairs[0].pos, v2(100, 100)) &&
@@ -529,6 +542,8 @@ static void test_stairs_flip(void) {
           "add a stair for the flip roundtrip");
     check(!level.stairs[0].bottom, "a new stair starts with the fade at the min end");
     level.stairs[0].bottom = true;
+    check(level_set_stairs_fade(&level, 0, STAIR_FADE_EASE_OUT, 0.25f, 0.9f),
+          "set a custom stair fade before saving");
 
     char path[256];
     snprintf(path, sizeof path, "/tmp/ink_ribbon_flip_%ld.lvl", (long)getpid());
@@ -542,8 +557,8 @@ static void test_stairs_flip(void) {
         file[got] = '\0';
         fclose(f);
     }
-    check(strstr(file, "stairs 0.000 0.000 0 6 100.000 50.000 1\n") != NULL,
-          "the saved stair carries the flip flag");
+    check(strstr(file, "stairs 0.000 0.000 0 6 100.000 50.000 1 2 0.250 0.900\n") != NULL,
+          "the saved stair carries the flip flag, falloff, and opacities");
 
     Level loaded;
     level_init(&loaded);
@@ -551,13 +566,17 @@ static void test_stairs_flip(void) {
           "load the flipped stair");
     check(loaded.stairs[0].bottom && loaded.stairs[0].steps == 6 &&
               nearf(loaded.stairs[0].width, 100) &&
-              nearf(loaded.stairs[0].length, 50),
-          "the flip flag and footprint survive save and load");
+              nearf(loaded.stairs[0].length, 50) &&
+              loaded.stairs[0].fade == STAIR_FADE_EASE_OUT &&
+              nearf(loaded.stairs[0].min_alpha, 0.25f) &&
+              nearf(loaded.stairs[0].max_alpha, 0.9f),
+          "the flip flag, footprint, falloff, and opacities survive save and load");
     level.stairs[0].bottom = false;
     check(level_save(&level, path, &err), "save an unflipped stair");
     level_init(&loaded);
-    check(level_load(&loaded, path, &err) && !loaded.stairs[0].bottom,
-          "the unflipped flag survives save and load");
+    check(level_load(&loaded, path, &err) && !loaded.stairs[0].bottom &&
+              loaded.stairs[0].fade == STAIR_FADE_EASE_OUT,
+          "the unflipped flag and falloff survive save and load");
     remove(path);
 }
 
@@ -611,7 +630,7 @@ static void test_save_load(void) {
           "save writes label text as the rest of the line");
     check(strstr(file, "label 0.000 0.000 8.000 bad name\n") != NULL,
           "save replaces control characters in label text with spaces");
-    check(strstr(file, "stairs 42.000 50.000 0 6 72.000 44.000 0\n") != NULL,
+    check(strstr(file, "stairs 42.000 50.000 0 6 72.000 44.000 0 0 0.180 0.680\n") != NULL,
           "save writes the explicit resized stair footprint");
 
     Level dst;
