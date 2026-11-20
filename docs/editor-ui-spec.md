@@ -37,7 +37,7 @@ The camera stores a world-space center and a zoom in screen pixels per world uni
 ImGui clears the pointer position to `-FLT_MAX` when the window loses focus. Never feed that value into `screen_to_world` or into a preview. Check `mouse_available` first, draw no preview without a pointer, and release any drag at its last applied position.
 
 - Mouse wheel zooms around the cursor, clamped 0.15 to 6. Zoom is immediate, with no catch-up animation.
-- In play mode the camera follows the player while the player is walking, changing only the centre and never the zoom. `C` recentres on the player at the current zoom. Middle-drag pans immediately, sets follow off, and has no catch-up animation.
+- In play mode the camera follows the player while walking, changing only the centre and never the zoom. When a path starts with the camera offset, or when `C` is pressed, the camera smoothly pans to the player at the current zoom. Middle-drag pans immediately, cancels the pan, sets follow off, and has no catch-up animation. Wheel zoom is immediate and does not start a pan.
 - Middle-drag pans. Space plus left-drag pans.
 - `F` or View > Fit frames the level bounds with margin. If the level is empty, center 0,0 at zoom 1.
 - On startup, load `levels/re2-library.lvl` if it exists, then fit.
@@ -152,7 +152,7 @@ At most one player record exists. The Player section at the bottom of the left p
 - In edit mode, Place player arms a click on a walkable nav cell and places the player at that cell's centre, without entering play mode. Esc cancels the armed placement. The same placement happens on the first play-mode click when no player exists.
 - With a player, a play-mode click builds an A* path and starts walking.
 - The nav grid is 8 world units per cell. A cell is open when its centre is inside a closed room or corridor and clears every solid wall by the player radius. Door openings are removed from every collinear wall record, so doors are passable. Stair treads are not walls; stair-side walls remain solid.
-- Hovering in play mode draws the nav cell as a green-bordered square when walkable, and a muted red border when blocked.
+- Hovering in play mode draws the nav cell as a green-bordered square when walkable, and a muted red border when blocked. It also draws the planned A* route from the player to that cell as a green line. After a click, the remaining route is drawn in green while the player walks. The same green hover cell appears while `Place player` is armed in edit mode.
 - A* uses 8-way movement, forbids diagonal corner cutting, and returns cell centres. The player pivots in place before starting a path, then turns and moves smoothly through the cell centres. A faint turning circle is drawn while moving.
 - `C` recentres on the player at the current zoom. `Esc` stops the player. `P` returns to editing. The player position and heading are saved in the level.
 

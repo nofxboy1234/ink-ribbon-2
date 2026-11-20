@@ -269,6 +269,12 @@ struct Editor {
     bool player_moving;
     bool player_forward;
     bool follow_player;
+    bool camera_pan_active;
+    Vec2 camera_pan_target;
+    int preview_path[NAV_MAX_PATH];
+    int preview_count;
+    int preview_start;
+    int preview_goal;
     sg_image player_image;
     sg_view player_view;
     sg_sampler player_sampler;
@@ -962,14 +968,22 @@ static int nav_nearest_open_cell(const NavGrid* nav, int cell, int rings) {
     return -1;
 }
 
+static void start_camera_pan_to_player(Editor* e) {
+    if (!e->level.player_present) return;
+    e->follow_player = true;
+    e->camera_pan_target = e->level.player_pos;
+    e->camera_pan_active =
+        v2_dist(e->camera.center, e->camera_pan_target) > 0.01f;
+    if (!e->camera_pan_active) e->camera.center = e->camera_pan_target;
+}
+
 static void recenter_player_camera(Editor* e) {
     if (!e->level.player_present) {
         set_status(e, true, "No player to center on");
         return;
     }
-    e->camera.center = e->level.player_pos;
-    e->follow_player = true;
-    set_status(e, false, "Centered on player");
+    start_camera_pan_to_player(e);
+    set_status(e, false, "Centering on player");
 }
 
 static void set_play_mode(Editor* e, bool on) {
@@ -980,6 +994,8 @@ static void set_play_mode(Editor* e, bool on) {
     e->player_forward = false;
     e->player_path_count = 0;
     e->player_path_index = 0;
+    e->camera_pan_active = false;
+    e->preview_count = 0;
     cancel_gesture(e);
     sel_clear(e);
     span_clear(e);
@@ -1045,7 +1061,8 @@ static void player_command(Editor* e, Vec2 world) {
     e->player_path_index = 0;
     e->player_moving = true;
     e->player_forward = false;
-    e->follow_player = true;
+    e->preview_count = 0;
+    start_camera_pan_to_player(e);
     set_status(e, false, "Walking to cell");
 }
 
@@ -1117,7 +1134,48 @@ static void update_player(Editor* e, float dt) {
     }
     e->level.player_pos = pos;
     e->level.player_heading = heading;
-    if (e->follow_player) e->camera.center = pos;
+}
+
+static void update_camera(Editor* e, float dt) {
+    if (!e->play_mode || !e->level.player_present) {
+        e->camera_pan_active = false;
+        return;
+    }
+    if (e->camera_pan_active && e->follow_player) {
+        Vec2 target = e->level.player_pos;
+        e->camera_pan_target = target;
+        float t = 1.0f - expf(-10.0f * dt);
+        if (dt <= 0.0f) t = 1.0f;
+        e->camera.center = v2_lerp(e->camera.center, target, t);
+        if (v2_dist(e->camera.center, target) < 0.12f) {
+            e->camera.center = target;
+            e->camera_pan_active = false;
+        }
+    } else if (e->follow_player && e->player_moving) {
+        e->camera.center = e->level.player_pos;
+    }
+}
+
+static void update_player_preview(Editor* e) {
+    if (!e->play_mode || !e->nav_ready || !e->level.player_present ||
+        e->player_moving || !e->cursor_valid) {
+        e->preview_count = 0;
+        return;
+    }
+    int goal = nav_cell_at_world(&e->nav, e->cursor_world);
+    if (!nav_cell_is_open(&e->nav, goal)) {
+        e->preview_count = 0;
+        return;
+    }
+    int start = nav_cell_at_world(&e->nav, e->level.player_pos);
+    if (start == e->preview_start && goal == e->preview_goal &&
+        e->preview_count > 0) {
+        return;
+    }
+    e->preview_start = start;
+    e->preview_goal = goal;
+    e->preview_count = nav_find_path(&e->nav, start, goal, e->preview_path,
+                                     NAV_MAX_PATH);
 }
 
 static Rect label_world_rect(const Editor* e, const Label* label) {
@@ -1399,6 +1457,10 @@ static void reset_player_runtime(Editor* e) {
     e->player_path_count = 0;
     e->player_path_index = 0;
     e->follow_player = false;
+    e->camera_pan_active = false;
+    e->preview_count = 0;
+    e->preview_start = -1;
+    e->preview_goal = -1;
 }
 
 static void new_level(Editor* e) {
@@ -1820,7 +1882,10 @@ static void draw_labels(const Editor* e) {
 }
 
 static void draw_nav_hover(const Editor* e) {
-    if (!e->play_mode || !e->nav_ready || !e->cursor_valid) return;
+    if ((!e->play_mode && !e->player_place_pending) || !e->nav_ready ||
+        !e->cursor_valid) {
+        return;
+    }
     int cell = nav_cell_at_world(&e->nav, e->cursor_world);
     if (!nav_cell_valid(&e->nav, cell)) return;
     Vec2 c = nav_cell_center(&e->nav, cell);
@@ -1833,6 +1898,39 @@ static void draw_nav_hover(const Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     ImDrawList_AddRectFilledEx(dl, a, b, fill, 0.0f, 0);
     ImDrawList_AddRectEx(dl, a, b, edge, 0.0f, 2.0f, 0);
+}
+
+static void draw_player_path(const Editor* e) {
+    if (!e->play_mode || !e->level.player_present) return;
+    ImVec2 pts[NAV_MAX_PATH + 2];
+    int count = 0;
+    if (e->player_moving && e->player_path_count > 0) {
+        pts[count++] = world_to_screen(e, e->level.player_pos);
+        for (int i = e->player_path_index; i < e->player_path_count; i++) {
+            Vec2 p = nav_cell_center(&e->nav, e->player_path[i]);
+            ImVec2 sp = world_to_screen(e, p);
+            if (count > 0 && fabsf(sp.x - pts[count - 1].x) < 0.5f &&
+                fabsf(sp.y - pts[count - 1].y) < 0.5f) {
+                continue;
+            }
+            pts[count++] = sp;
+        }
+    } else if (!e->player_moving && e->preview_count > 0) {
+        pts[count++] = world_to_screen(e, e->level.player_pos);
+        for (int i = 0; i < e->preview_count; i++) {
+            Vec2 p = nav_cell_center(&e->nav, e->preview_path[i]);
+            ImVec2 sp = world_to_screen(e, p);
+            if (count > 0 && fabsf(sp.x - pts[count - 1].x) < 0.5f &&
+                fabsf(sp.y - pts[count - 1].y) < 0.5f) {
+                continue;
+            }
+            pts[count++] = sp;
+        }
+    }
+    if (count < 2) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    ImDrawList_AddPolyline(dl, pts, count, col32a(0x58d68d, 65), 5.0f, 0);
+    ImDrawList_AddPolyline(dl, pts, count, col32a(0x7df0aa, 220), 1.8f, 0);
 }
 
 static void draw_player(const Editor* e) {
@@ -3563,6 +3661,7 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
             e->camera.zoom = nz;
             Vec2 after = screen_to_world(e, io->MousePos);
             e->camera.center = v2_add(e->camera.center, v2_sub(before, after));
+            e->camera_pan_active = false;
             if (e->play_mode && e->follow_player && e->level.player_present) {
                 e->camera.center = e->level.player_pos;
             }
@@ -3574,6 +3673,7 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
         (io->MouseDown[2] || (space && io->MouseDown[0] && !gesture_active(e)))) {
         e->pan_active = true;
         e->follow_player = false;
+        e->camera_pan_active = false;
     }
     if (e->pan_active) {
         bool held = io->MouseDown[2] || (space && io->MouseDown[0]);
@@ -3656,6 +3756,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
         draw_door_ghost(e);
     }
     draw_labels(e);
+    draw_player_path(e);
     draw_player(e);
 
     if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
@@ -3870,8 +3971,13 @@ static void draw_left_panel(Editor* e) {
         small_note("Click a walkable nav cell to place the player.");
     } else {
         if (igButtonEx("Place player", (ImVec2){ -FLT_MIN, 24.0f })) {
+            e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                     PLAYER_RADIUS);
             e->player_place_pending = true;
-            set_status(e, false, "Click a walkable nav cell to place the player");
+            set_status(e, e->nav_ready,
+                       e->nav_ready
+                           ? "Click a green nav cell to place the player"
+                           : "No navigation grid for this level");
         }
         small_note("Or enter play mode and click the map.");
     }
@@ -4672,6 +4778,8 @@ void editor_frame(Editor* e) {
     e->canvas = rect_from_points(v2(canvas_x0, e->menu_height), v2(canvas_x1, bottom));
 
     update_player(e, io->DeltaTime);
+    update_camera(e, io->DeltaTime);
+    update_player_preview(e);
     draw_left_panel(e);
     draw_inspector(e);
     draw_canvas(e, io->MousePos, mouse_available(io->MousePos));

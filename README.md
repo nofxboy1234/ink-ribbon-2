@@ -66,7 +66,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Snap dragged lines, edges, corners, and every side of a moving selection to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
-- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, play-mode clicks path the player to the clicked cell with A*; the arrow turns smoothly, pivots in place before starting from rest, follows the path through rooms and doors, and ends on the cell centre. A green-bordered square marks the hovered nav cell.
+- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, play-mode clicks path the player to the clicked cell with A*; the arrow turns smoothly, pivots in place before starting from rest, follows the path through rooms and doors, and ends on the cell centre. A green-bordered square marks the hovered nav cell, and the planned route is drawn as a green line: a preview while hovering and the remaining route while walking.
 - While walking, the camera follows the player at the current zoom. C recentres on the player without changing zoom. Middle-drag pans immediately, with no catch-up animation, and mouse-wheel zoom stays immediate.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 - Duplicate with Ctrl+D and lock a selection with L.
@@ -143,8 +143,11 @@ pivots in place before starting a new path and then turns and moves smoothly alo
 the cell centres. A faint turning circle is drawn while the player is moving.
 
 The camera follows the player while walking but only changes its centre: zoom is
-never altered by play mode, recentring, or path starts. Middle-drag and wheel zoom
-apply immediately, and middle-drag disables follow until the next move or `C`.
+never altered by play mode, recentring, or path starts. When the player starts
+moving with the camera offset, or when `C` is pressed, the camera makes a smooth
+pan to the player at the current zoom. Middle-drag and wheel zoom apply
+immediately, with no catch-up animation; middle-drag disables follow until the
+next move or `C`.
 
 The player graphic is authored in `assets/player.svg`, rasterised with Krita to
 `assets/player.png`, and packed by `tools/gen_player_sprite.py` into
