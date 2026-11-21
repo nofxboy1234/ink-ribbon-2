@@ -143,13 +143,15 @@ passable; stair treads are not walls, while stair-side walls still block. A* use
 quadratic Bezier arc. Arc radii start at 10 world units and shrink until the
 sampled curve stays on open nav cells, so the drawn and walked route is a smooth
 curve with no stair-step or sharp corner. A route that crosses a doorway is
-inserted with a short straight passage through the opening's centre, so the
-player never hugs a door jamb. The player follows the dense curve at a constant
-speed rather than hopping between grid waypoints. If the first destination is
+routed through the opening's centre; only that centre point is inserted, never a
+sideways perpendicular detour, so door approaches cannot double back or loop.
+The player follows the dense curve at a constant speed rather than hopping
+between grid waypoints. If the first destination is
 directly horizontal or vertical behind the player, the player pivots on the
-spot; otherwise it turns while moving. A visible 10-unit turning ring is drawn
-around the player whenever it is moving, so the turn is readable even when the
-target is diagonally behind.
+spot; otherwise it steers with a limited turn rate and follows the resulting
+turning-circle arc while moving. A visible 10-unit turning ring is drawn around
+the player whenever it is moving, so the turn is readable even when the target
+is diagonally behind.
 
 The camera follows the player while walking but only changes its centre: zoom is
 never altered by play mode, recentring, or path starts. When the player starts

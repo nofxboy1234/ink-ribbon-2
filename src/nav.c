@@ -343,6 +343,7 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
     /* Route through the centre of each doorway the filtered polyline crosses,
        instead of letting the grid cells pick a side of the opening. */
     Vec2 routed[NAV_MAX_PATH];
+    bool door_flag[NAV_MAX_PATH] = { false };
     int rn = 0;
     routed[rn++] = filtered[0];
     for (int i = 0; i < fn - 1; i++) {
@@ -380,23 +381,21 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
             hit_count++;
         }
         for (int h = 0; h < hit_count; h++) {
-            const NavDoor* nd = &nav->doors[hit_doors[h]];
-            Vec2 c = nd->center;
-            Vec2 normal = nd->vertical ? v2(1.0f, 0.0f) : v2(0.0f, 1.0f);
-            float sign = nd->vertical ? (b.x > a.x ? 1.0f : -1.0f)
-                                      : (b.y > a.y ? 1.0f : -1.0f);
-            float off = nd->half + 4.0f;
-            Vec2 pre = v2_sub(c, v2_scale(normal, off * sign));
-            Vec2 post = v2_add(c, v2_scale(normal, off * sign));
-            if (!v2_equal(pre, routed[rn - 1], 0.02f)) routed[rn++] = pre;
-            if (!v2_equal(c, routed[rn - 1], 0.02f)) routed[rn++] = c;
-            if (!v2_equal(post, routed[rn - 1], 0.02f)) routed[rn++] = post;
+            Vec2 c = nav->doors[hit_doors[h]].center;
+            if (!v2_equal(c, routed[rn - 1], 0.02f)) {
+                door_flag[rn] = true;
+                routed[rn++] = c;
+            }
         }
         if (!v2_equal(b, routed[rn - 1], 0.02f)) routed[rn++] = b;
     }
+    bool filtered_door[NAV_MAX_PATH] = { false };
     if (rn >= 2) {
         fn = rn;
-        for (int i = 0; i < rn; i++) filtered[i] = routed[i];
+        for (int i = 0; i < rn; i++) {
+            filtered[i] = routed[i];
+            filtered_door[i] = door_flag[i];
+        }
     }
 
     const float radii[] = { 10.0f, 7.0f, 4.5f, 2.5f, 1.2f };
@@ -406,6 +405,12 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
         sn = 0;
         smooth[sn++] = filtered[0];
         for (int i = 1; i < fn - 1; i++) {
+            if (filtered_door[i]) {
+                if (!v2_equal(filtered[i], smooth[sn - 1], 0.02f)) {
+                    smooth[sn++] = filtered[i];
+                }
+                continue;
+            }
             Vec2 prev = filtered[i - 1];
             Vec2 cur = filtered[i];
             Vec2 next = filtered[i + 1];
@@ -415,7 +420,10 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
             Vec2 d0 = v2_scale(v2_sub(cur, prev), 1.0f / l0);
             Vec2 d1 = v2_scale(v2_sub(next, cur), 1.0f / l1);
             float dot = d0.x * d1.x + d0.y * d1.y;
-            float radius = radii[ri];
+            if (dot < -1.0f) dot = -1.0f;
+            if (dot > 1.0f) dot = 1.0f;
+            float angle = acosf(dot);
+            float radius = radii[ri] * (0.25f + 0.75f * (1.0f - angle / 3.14159265f));
             if (radius > l0 * 0.45f) radius = l0 * 0.45f;
             if (radius > l1 * 0.45f) radius = l1 * 0.45f;
             if (dot > 0.999f || radius < 0.2f) {
