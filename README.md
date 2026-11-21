@@ -149,9 +149,8 @@ The player follows the dense curve at a constant speed rather than hopping
 between grid waypoints. If the first destination is
 directly horizontal or vertical behind the player, the player pivots on the
 spot; otherwise it steers with a limited turn rate and follows the resulting
-turning-circle arc while moving. A visible 16-unit turning ring is drawn around
-the player whenever it is moving, so the turn is readable even when the target
-is diagonally behind.
+turning-circle arc while moving. The turn arc is no longer outlined by a
+separate ring.
 
 The camera follows the player while walking but only changes its centre: zoom is
 never altered by play mode, recentring, or path starts. When the player starts

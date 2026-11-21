@@ -2003,12 +2003,6 @@ static void draw_player(const Editor* e) {
                               (ImVec2){ 0, 0 }, (ImVec2){ 1, 0 },
                               (ImVec2){ 1, 1 }, (ImVec2){ 0, 1 },
                               IM_COL32_WHITE);
-    if (e->player_moving) {
-        ImVec2 center = world_to_screen(e, pos);
-        float radius = 16.0f * e->camera.zoom;
-        ImDrawList_AddCircleEx(dl, center, radius, col32a(0xf0d060, 150),
-                               48, 1.8f, 0);
-    }
 }
 
 static void draw_selection_handles(ImDrawList* dl, ImVec2 pmin, ImVec2 pmax) {
