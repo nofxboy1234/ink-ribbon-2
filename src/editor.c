@@ -1195,7 +1195,6 @@ static void execute_waypoints(Editor* e) {
         return;
     }
     int waypoints = e->player_waypoint_count;
-    clear_waypoints(e);
     set_status(e, false, "Walking %d waypoint%s", waypoints,
                waypoints == 1 ? "" : "s");
 }
@@ -1249,6 +1248,17 @@ static void place_player_click(Editor* e, Vec2 world) {
     e->follow_player = false;
     commit(e, "Player placed");
     set_status(e, false, "Player placed");
+}
+
+static void update_waypoint_progress(Editor* e) {
+    while (e->player_waypoint_count > 0 &&
+           v2_dist(e->level.player_pos, e->player_waypoints[0]) < 1.2f) {
+        for (int i = 1; i < e->player_waypoint_count; i++) {
+            e->player_waypoints[i - 1] = e->player_waypoints[i];
+        }
+        e->player_waypoint_count--;
+        e->preview_count = 0;
+    }
 }
 
 static void update_player(Editor* e, float dt) {
@@ -1312,6 +1322,7 @@ static void update_player(Editor* e, float dt) {
     }
     e->level.player_pos = pos;
     e->level.player_heading = heading;
+    update_waypoint_progress(e);
 }
 
 static void update_camera(Editor* e, float dt) {
