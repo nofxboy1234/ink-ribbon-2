@@ -1743,6 +1743,23 @@ static void test_nav_grid(void) {
     }
 }
 
+static void test_nav_solid_wall(void) {
+    Level level;
+    level_init(&level);
+    int walls[4];
+    ShapeId room = add_rectangle(&level, v2(-100, -100), 200, 200, walls);
+    level_close_shape(&level, room);
+    level_add_wall(&level, v2(-100, 5), v2(100, 5));
+    NavGrid nav;
+    check(nav_build(&nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav builds with a solid horizontal wall");
+    int start = nav_cell_at_world(&nav, v2(0, -30));
+    int goal = nav_cell_at_world(&nav, v2(0, 50));
+    int path[NAV_MAX_PATH];
+    check(nav_find_path(&nav, start, goal, path, NAV_MAX_PATH) == 0,
+          "A* cannot cross a solid wall on a diagonal");
+}
+
 static void test_player(void) {
     Level level;
     level_init(&level);
@@ -1796,6 +1813,7 @@ int main(void) {
     test_delete_edge_reopens_shape();
     test_save_load_shapes();
     test_nav_grid();
+    test_nav_solid_wall();
     test_player();
 
     if (failures == 0) {

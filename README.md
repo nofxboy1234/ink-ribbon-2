@@ -173,7 +173,7 @@ The player graphic is authored in `assets/player.svg`, rasterised with Krita to
 
 ```text
 PASS build without warnings
-PASS core tests (393 checks)
+PASS core tests (395 checks)
 PASS empty room (040404), faint wall (max 0.340974), white door (max 0.94902)
 PASS save writes fill 0, door colour 0, and no room record
 PASS six tools activate in order on keys 1 to 6

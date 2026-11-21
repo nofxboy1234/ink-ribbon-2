@@ -500,10 +500,12 @@ int nav_find_path(const NavGrid* nav, int start, int goal, int* out, int max) {
         int cx = current % nav->cols;
         int cy = current / nav->cols;
         for (int dir = 0; dir < 8; dir++) {
+            /* 0=E, 1=W, 2=S, 3=N, 4=NE, 5=NW, 6=SE, 7=SW. This must match
+               the bit assignment used by the link builder exactly. */
             int nx = cx + ((dir == 0 || dir == 4 || dir == 6) ? 1 :
                            (dir == 1 || dir == 5 || dir == 7) ? -1 : 0);
-            int ny = cy + ((dir == 2 || dir == 4 || dir == 5) ? 1 :
-                           (dir == 3 || dir == 6 || dir == 7) ? -1 : 0);
+            int ny = cy + ((dir == 2 || dir == 6 || dir == 7) ? 1 :
+                           (dir == 3 || dir == 4 || dir == 5) ? -1 : 0);
             if (nx < 0 || ny < 0 || nx >= nav->cols || ny >= nav->rows) continue;
             int next = ny * nav->cols + nx;
             if (!(nav->links[current] & (1u << dir))) continue;
