@@ -2114,31 +2114,38 @@ static void draw_waypoints(const Editor* e) {
     }
 }
 
+static int append_draw_point(ImVec2* pts, int count, ImVec2 p, float min_px) {
+    if (count > 0) {
+        float dx = p.x - pts[count - 1].x;
+        float dy = p.y - pts[count - 1].y;
+        if (dx * dx + dy * dy < min_px * min_px) return count;
+    }
+    pts[count++] = p;
+    return count;
+}
+
 static void draw_player_path(const Editor* e) {
     if (!e->play_mode || !e->level.player_present) return;
     ImVec2 pts[NAV_MAX_PATH + 2];
     int count = 0;
+    const float min_px = 2.0f;
     if (e->player_moving && e->player_path_count > 0) {
-        pts[count++] = world_to_screen(e, e->level.player_pos);
+        count = append_draw_point(pts, count,
+                                  world_to_screen(e, e->level.player_pos),
+                                  min_px);
         for (int i = e->player_path_index; i < e->player_path_count; i++) {
-            Vec2 p = e->player_path[i];
-            ImVec2 sp = world_to_screen(e, p);
-            if (count > 0 && fabsf(sp.x - pts[count - 1].x) < 0.5f &&
-                fabsf(sp.y - pts[count - 1].y) < 0.5f) {
-                continue;
-            }
-            pts[count++] = sp;
+            count = append_draw_point(pts, count,
+                                      world_to_screen(e, e->player_path[i]),
+                                      min_px);
         }
     } else if (!e->player_moving && e->preview_count > 0) {
-        pts[count++] = world_to_screen(e, e->level.player_pos);
+        count = append_draw_point(pts, count,
+                                  world_to_screen(e, e->level.player_pos),
+                                  min_px);
         for (int i = 0; i < e->preview_count; i++) {
-            Vec2 p = e->preview_path[i];
-            ImVec2 sp = world_to_screen(e, p);
-            if (count > 0 && fabsf(sp.x - pts[count - 1].x) < 0.5f &&
-                fabsf(sp.y - pts[count - 1].y) < 0.5f) {
-                continue;
-            }
-            pts[count++] = sp;
+            count = append_draw_point(pts, count,
+                                      world_to_screen(e, e->preview_path[i]),
+                                      min_px);
         }
     }
     if (count < 2) return;
