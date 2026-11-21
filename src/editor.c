@@ -1048,6 +1048,30 @@ static bool start_player_path(Editor* e, const int* cells, int raw) {
     return true;
 }
 
+static bool start_player_vec_path(Editor* e, const Vec2* pts, int count) {
+    if (!e->level.player_present || count <= 0) return false;
+    for (int i = 0; i < count && i < NAV_MAX_PATH; i++) {
+        e->player_path[i] = pts[i];
+    }
+    e->player_path_count = count < NAV_MAX_PATH ? count : NAV_MAX_PATH;
+    e->player_path_index = 0;
+    while (e->player_path_index < e->player_path_count - 1 &&
+           v2_dist(e->level.player_pos,
+                   e->player_path[e->player_path_index]) < 0.75f) {
+        e->player_path_index++;
+    }
+    e->player_moving = true;
+    e->preview_count = 0;
+    Vec2 first = e->player_path[e->player_path_index];
+    Vec2 d = v2_sub(first, e->level.player_pos);
+    float desired = atan2f(d.x, -d.y);
+    bool axis = fabsf(d.x) < 0.75f || fabsf(d.y) < 0.75f;
+    float err = angle_delta(e->level.player_heading, desired);
+    e->player_pivot = axis && fabsf(err) > 2.5f;
+    start_camera_pan_to_player(e);
+    return true;
+}
+
 static void player_command(Editor* e, Vec2 world) {
     if (!e->nav_ready) {
         e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
@@ -1122,7 +1146,7 @@ static bool add_waypoint(Editor* e, int cell) {
     return true;
 }
 
-static int build_waypoint_cells(Editor* e, int extra, int* cells, int max) {
+static int build_waypoint_path(Editor* e, int extra, Vec2* out, int max) {
     int n = 0;
     int from = nav_cell_at_world(&e->nav, e->level.player_pos);
     if (!nav_cell_is_open(&e->nav, from)) {
@@ -1136,14 +1160,23 @@ static int build_waypoint_cells(Editor* e, int extra, int* cells, int max) {
                      ? nav_cell_at_world(&e->nav, e->player_waypoints[i])
                      : extra;
         if (!nav_cell_is_open(&e->nav, to)) return 0;
-        int leg[NAV_MAX_PATH];
-        int ln = nav_find_path(&e->nav, from, to, leg, NAV_MAX_PATH);
+        int cells[NAV_MAX_PATH];
+        int raw = nav_find_path(&e->nav, from, to, cells, NAV_MAX_PATH);
+        if (raw <= 0) return 0;
+        Vec2 leg[NAV_MAX_PATH];
+        int ln = nav_smooth_path(&e->nav, cells, raw, leg, NAV_MAX_PATH);
         if (ln <= 0) return 0;
         for (int k = 0; k < ln; k++) {
-            if (n == 0 || cells[n - 1] != leg[k]) {
+            if (n == 0 || v2_dist(out[n - 1], leg[k]) > 0.01f) {
                 if (n >= max) return 0;
-                cells[n++] = leg[k];
+                out[n++] = leg[k];
             }
+        }
+        /* The marker is the exact end of this leg. */
+        Vec2 mark = nav_cell_center(&e->nav, to);
+        if (n == 0 || v2_dist(out[n - 1], mark) > 0.01f) {
+            if (n >= max) return 0;
+            out[n++] = mark;
         }
         from = to;
     }
@@ -1155,13 +1188,9 @@ static void execute_waypoints(Editor* e) {
         set_status(e, true, "No waypoints queued");
         return;
     }
-    int cells[NAV_MAX_PATH];
-    int n = build_waypoint_cells(e, -1, cells, NAV_MAX_PATH);
-    if (n <= 0) {
-        set_status(e, true, "No path through those waypoints");
-        return;
-    }
-    if (!start_player_path(e, cells, n)) {
+    Vec2 pts[NAV_MAX_PATH];
+    int n = build_waypoint_path(e, -1, pts, NAV_MAX_PATH);
+    if (n <= 0 || !start_player_vec_path(e, pts, n)) {
         set_status(e, true, "No path through those waypoints");
         return;
     }
@@ -1326,8 +1355,7 @@ static void update_player_preview(Editor* e) {
         e->preview_count > 0) {
         return;
     }
-    int cells[NAV_MAX_PATH];
-    int n = build_waypoint_cells(e, extra, cells, NAV_MAX_PATH);
+    int n = build_waypoint_path(e, extra, e->preview_path, NAV_MAX_PATH);
     if (n <= 0) {
         e->preview_count = 0;
         return;
@@ -1335,8 +1363,7 @@ static void update_player_preview(Editor* e) {
     e->preview_start = start_cell;
     e->preview_goal = extra;
     e->preview_wp_count = e->player_waypoint_count;
-    e->preview_count = nav_smooth_path(&e->nav, cells, n, e->preview_path,
-                                       NAV_MAX_PATH);
+    e->preview_count = n;
 }
 
 static Rect label_world_rect(const Editor* e, const Label* label) {
