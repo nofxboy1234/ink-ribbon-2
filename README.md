@@ -149,7 +149,7 @@ The player follows the dense curve at a constant speed rather than hopping
 between grid waypoints. If the first destination is
 directly horizontal or vertical behind the player, the player pivots on the
 spot; otherwise it steers with a limited turn rate and follows the resulting
-turning-circle arc while moving. A visible 10-unit turning ring is drawn around
+turning-circle arc while moving. A visible 16-unit turning ring is drawn around
 the player whenever it is moving, so the turn is readable even when the target
 is diagonally behind.
 

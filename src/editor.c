@@ -39,7 +39,7 @@
 #define SPAN_END_GRAB_PX 9.0f
 #define VERTEX_GRAB_PX 7.0f
 #define PLAYER_SPEED 55.0f
-#define PLAYER_TURN_RATE 6.0f
+#define PLAYER_TURN_RATE 3.5f
 #define PLAYER_RADIUS 3.2f
 #define PLAYER_SPRITE_WORLD 12.0f
 /* One look means a near-black canvas and white lines. A wall and a stair
@@ -2005,7 +2005,7 @@ static void draw_player(const Editor* e) {
                               IM_COL32_WHITE);
     if (e->player_moving) {
         ImVec2 center = world_to_screen(e, pos);
-        float radius = 10.0f * e->camera.zoom;
+        float radius = 16.0f * e->camera.zoom;
         ImDrawList_AddCircleEx(dl, center, radius, col32a(0xf0d060, 150),
                                48, 1.8f, 0);
     }
