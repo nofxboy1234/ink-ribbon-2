@@ -42,6 +42,7 @@
 #define PLAYER_TURN_RATE 10.0f
 #define PLAYER_RADIUS 3.2f
 #define PLAYER_SPRITE_WORLD 12.0f
+#define PLAYER_MAX_WAYPOINTS 32
 /* One look means a near-black canvas and white lines. A wall and a stair
    tread draw at the same faint alpha, and nothing is ever filled. */
 #define CANVAS_BG 0x040404
@@ -265,6 +266,8 @@ struct Editor {
     NavGrid nav;
     Vec2 player_path[NAV_MAX_PATH];
     int player_path_count;
+    Vec2 player_waypoints[PLAYER_MAX_WAYPOINTS];
+    int player_waypoint_count;
     int player_path_index;
     bool player_moving;
     bool player_pivot;
@@ -275,6 +278,7 @@ struct Editor {
     int preview_count;
     int preview_start;
     int preview_goal;
+    int preview_wp_count;
     sg_image player_image;
     sg_view player_view;
     sg_sampler player_sampler;
@@ -994,6 +998,7 @@ static void set_play_mode(Editor* e, bool on) {
     e->player_pivot = false;
     e->player_path_count = 0;
     e->player_path_index = 0;
+    e->player_waypoint_count = 0;
     e->camera_pan_active = false;
     e->preview_count = 0;
     cancel_gesture(e);
@@ -1009,14 +1014,38 @@ static void set_play_mode(Editor* e, bool on) {
                 e->level.player_pos = nav_cell_center(&e->nav, open);
             }
             recenter_player_camera(e);
-            set_status(e, false, "Play mode: click the map to move");
+            set_status(e, false, "Play mode: click waypoints; double-click to walk");
         } else {
-            set_status(e, false, "Play mode: click the map to place the player");
+            set_status(e, false, "Play mode: click to place the player");
         }
     } else {
         e->follow_player = false;
         set_status(e, false, "Edit mode");
     }
+}
+
+static bool start_player_path(Editor* e, const int* cells, int raw) {
+    if (!e->level.player_present || raw <= 0) return false;
+    int count = nav_smooth_path(&e->nav, cells, raw, e->player_path,
+                                NAV_MAX_PATH);
+    if (count <= 0) return false;
+    e->player_path_count = count;
+    e->player_path_index = 0;
+    while (e->player_path_index < count - 1 &&
+           v2_dist(e->level.player_pos,
+                   e->player_path[e->player_path_index]) < 0.75f) {
+        e->player_path_index++;
+    }
+    e->player_moving = true;
+    e->preview_count = 0;
+    Vec2 first = e->player_path[e->player_path_index];
+    Vec2 d = v2_sub(first, e->level.player_pos);
+    float desired = atan2f(d.x, -d.y);
+    bool axis = fabsf(d.x) < 0.75f || fabsf(d.y) < 0.75f;
+    float err = angle_delta(e->level.player_heading, desired);
+    e->player_pivot = axis && fabsf(err) > 2.5f;
+    start_camera_pan_to_player(e);
+    return true;
 }
 
 static void player_command(Editor* e, Vec2 world) {
@@ -1053,33 +1082,124 @@ static void player_command(Editor* e, Vec2 world) {
     }
     int cells[NAV_MAX_PATH];
     int raw = nav_find_path(&e->nav, start, target, cells, NAV_MAX_PATH);
-    if (raw <= 0) {
+    if (!start_player_path(e, cells, raw)) {
         set_status(e, true, "No path to that cell");
         return;
     }
-    int count = nav_smooth_path(&e->nav, cells, raw, e->player_path,
-                                NAV_MAX_PATH);
-    if (count <= 0) {
-        set_status(e, true, "No path to that cell");
-        return;
-    }
-    e->player_path_count = count;
-    e->player_path_index = 0;
-    while (e->player_path_index < count - 1 &&
-           v2_dist(e->level.player_pos,
-                   e->player_path[e->player_path_index]) < 0.75f) {
-        e->player_path_index++;
-    }
-    e->player_moving = true;
-    e->preview_count = 0;
-    Vec2 first = e->player_path[e->player_path_index];
-    Vec2 d = v2_sub(first, e->level.player_pos);
-    float desired = atan2f(d.x, -d.y);
-    bool axis = fabsf(d.x) < 0.75f || fabsf(d.y) < 0.75f;
-    float err = angle_delta(e->level.player_heading, desired);
-    e->player_pivot = axis && fabsf(err) > 2.5f;
-    start_camera_pan_to_player(e);
     set_status(e, false, "Walking to cell");
+}
+
+static void clear_waypoints(Editor* e) {
+    e->player_waypoint_count = 0;
+    e->preview_count = 0;
+}
+
+static bool add_waypoint(Editor* e, int cell) {
+    if (!nav_cell_is_open(&e->nav, cell)) return false;
+    Vec2 p = nav_cell_center(&e->nav, cell);
+    if (e->player_waypoint_count > 0 &&
+        v2_dist(e->player_waypoints[e->player_waypoint_count - 1], p) < 0.01f) {
+        return true;
+    }
+    if (e->player_waypoint_count >= PLAYER_MAX_WAYPOINTS) {
+        set_status(e, true, "Waypoint limit reached");
+        return false;
+    }
+    int from = e->player_waypoint_count > 0
+                   ? nav_cell_at_world(&e->nav,
+                                       e->player_waypoints[e->player_waypoint_count - 1])
+                   : nav_cell_at_world(&e->nav, e->level.player_pos);
+    int leg[NAV_MAX_PATH];
+    if (nav_find_path(&e->nav, from, cell, leg, NAV_MAX_PATH) <= 0) {
+        set_status(e, true, "No path to that waypoint");
+        return false;
+    }
+    e->player_waypoints[e->player_waypoint_count++] = p;
+    e->preview_count = 0;
+    set_status(e, false, "%d waypoint%s queued; double-click to walk",
+               e->player_waypoint_count,
+               e->player_waypoint_count == 1 ? "" : "s");
+    return true;
+}
+
+static int build_waypoint_cells(Editor* e, int extra, int* cells, int max) {
+    int n = 0;
+    int from = nav_cell_at_world(&e->nav, e->level.player_pos);
+    if (!nav_cell_is_open(&e->nav, from)) {
+        from = nav_nearest_open_cell(&e->nav, from, 3);
+    }
+    if (from < 0) return 0;
+    int targets = e->player_waypoint_count + (extra >= 0 ? 1 : 0);
+    if (targets <= 0) return 0;
+    for (int i = 0; i < targets; i++) {
+        int to = i < e->player_waypoint_count
+                     ? nav_cell_at_world(&e->nav, e->player_waypoints[i])
+                     : extra;
+        if (!nav_cell_is_open(&e->nav, to)) return 0;
+        int leg[NAV_MAX_PATH];
+        int ln = nav_find_path(&e->nav, from, to, leg, NAV_MAX_PATH);
+        if (ln <= 0) return 0;
+        for (int k = 0; k < ln; k++) {
+            if (n == 0 || cells[n - 1] != leg[k]) {
+                if (n >= max) return 0;
+                cells[n++] = leg[k];
+            }
+        }
+        from = to;
+    }
+    return n;
+}
+
+static void execute_waypoints(Editor* e) {
+    if (!e->level.player_present || e->player_waypoint_count <= 0) {
+        set_status(e, true, "No waypoints queued");
+        return;
+    }
+    int cells[NAV_MAX_PATH];
+    int n = build_waypoint_cells(e, -1, cells, NAV_MAX_PATH);
+    if (n <= 0) {
+        set_status(e, true, "No path through those waypoints");
+        return;
+    }
+    if (!start_player_path(e, cells, n)) {
+        set_status(e, true, "No path through those waypoints");
+        return;
+    }
+    int waypoints = e->player_waypoint_count;
+    clear_waypoints(e);
+    set_status(e, false, "Walking %d waypoint%s", waypoints,
+               waypoints == 1 ? "" : "s");
+}
+
+static void player_click_play(Editor* e, Vec2 world, bool double_click) {
+    if (!e->nav_ready) {
+        e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                 PLAYER_RADIUS);
+    }
+    int cell = nav_cell_at_world(&e->nav, world);
+    if (!e->level.player_present) {
+        player_command(e, world);
+        return;
+    }
+    if (!nav_cell_is_open(&e->nav, cell)) {
+        set_status(e, true, "Click a walkable nav cell");
+        return;
+    }
+    if (e->player_moving) {
+        e->player_moving = false;
+        e->player_path_count = 0;
+        clear_waypoints(e);
+    }
+    if (double_click) {
+        if (e->player_waypoint_count == 0 ||
+            v2_dist(e->player_waypoints[e->player_waypoint_count - 1],
+                    nav_cell_center(&e->nav, cell)) > 0.01f) {
+            if (!add_waypoint(e, cell)) return;
+        }
+        execute_waypoints(e);
+        return;
+    }
+    add_waypoint(e, cell);
 }
 
 static void place_player_click(Editor* e, Vec2 world) {
@@ -1187,28 +1307,36 @@ static void update_camera(Editor* e, float dt) {
 
 static void update_player_preview(Editor* e) {
     if (!e->play_mode || !e->nav_ready || !e->level.player_present ||
-        e->player_moving || !e->cursor_valid) {
+        e->player_moving) {
         e->preview_count = 0;
         return;
     }
-    int goal = nav_cell_at_world(&e->nav, e->cursor_world);
-    if (!nav_cell_is_open(&e->nav, goal)) {
+    int extra = -1;
+    if (e->cursor_valid) {
+        int cell = nav_cell_at_world(&e->nav, e->cursor_world);
+        if (nav_cell_is_open(&e->nav, cell)) extra = cell;
+    }
+    if (e->player_waypoint_count == 0 && extra < 0) {
         e->preview_count = 0;
         return;
     }
-    int start = nav_cell_at_world(&e->nav, e->level.player_pos);
-    if (start == e->preview_start && goal == e->preview_goal &&
+    int start_cell = nav_cell_at_world(&e->nav, e->level.player_pos);
+    if (start_cell == e->preview_start && extra == e->preview_goal &&
+        e->player_waypoint_count == e->preview_wp_count &&
         e->preview_count > 0) {
         return;
     }
-    e->preview_start = start;
-    e->preview_goal = goal;
     int cells[NAV_MAX_PATH];
-    int raw = nav_find_path(&e->nav, start, goal, cells, NAV_MAX_PATH);
-    e->preview_count = raw > 0
-                           ? nav_smooth_path(&e->nav, cells, raw,
-                                             e->preview_path, NAV_MAX_PATH)
-                           : 0;
+    int n = build_waypoint_cells(e, extra, cells, NAV_MAX_PATH);
+    if (n <= 0) {
+        e->preview_count = 0;
+        return;
+    }
+    e->preview_start = start_cell;
+    e->preview_goal = extra;
+    e->preview_wp_count = e->player_waypoint_count;
+    e->preview_count = nav_smooth_path(&e->nav, cells, n, e->preview_path,
+                                       NAV_MAX_PATH);
 }
 
 static Rect label_world_rect(const Editor* e, const Label* label) {
@@ -1489,6 +1617,7 @@ static void reset_player_runtime(Editor* e) {
     e->player_pivot = false;
     e->player_path_count = 0;
     e->player_path_index = 0;
+    e->player_waypoint_count = 0;
     e->follow_player = false;
     e->camera_pan_active = false;
     e->preview_count = 0;
@@ -1931,6 +2060,20 @@ static void draw_nav_hover(const Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     ImDrawList_AddRectFilledEx(dl, a, b, fill, 0.0f, 0);
     ImDrawList_AddRectEx(dl, a, b, edge, 0.0f, 2.0f, 0);
+}
+
+static void draw_waypoints(const Editor* e) {
+    if (!e->play_mode || e->player_waypoint_count <= 0) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    for (int i = 0; i < e->player_waypoint_count; i++) {
+        ImVec2 p = world_to_screen(e, e->player_waypoints[i]);
+        ImU32 col = col32a(0x7df0aa, 220);
+        ImDrawList_AddRectFilledEx(dl, (ImVec2){ p.x - 3, p.y - 3 },
+                                   (ImVec2){ p.x + 3, p.y + 3 }, col, 0.0f, 0);
+        ImDrawList_AddRectEx(dl, (ImVec2){ p.x - 5, p.y - 5 },
+                             (ImVec2){ p.x + 5, p.y + 5 }, col32a(0x58d68d, 160),
+                             0.0f, 1.0f, 0);
+    }
 }
 
 static void draw_player_path(const Editor* e) {
@@ -3746,7 +3889,7 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
 
     if (hovered && igIsMouseClicked(0) && !e->pan_active) {
         if (e->play_mode) {
-            player_command(e, world);
+            player_click_play(e, world, igIsMouseDoubleClicked(0) != 0);
             return;
         }
         if (e->player_place_pending) {
@@ -3811,6 +3954,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     }
     draw_labels(e);
     draw_player_path(e);
+    draw_waypoints(e);
     draw_player(e);
 
     if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
@@ -4013,10 +4157,11 @@ static void draw_left_panel(Editor* e) {
             level_remove_player(&e->level);
             e->player_moving = false;
             e->player_path_count = 0;
+            clear_waypoints(e);
             e->follow_player = false;
             set_status(e, false, "Player removed");
         }
-        small_note("Click the map to walk. C recenters on the player at the current zoom.");
+        small_note("Click to add waypoints; double-click to walk. C recenters at the current zoom.");
     } else if (e->player_place_pending) {
         if (igButtonEx("Cancel placement", (ImVec2){ -FLT_MIN, 24.0f })) {
             e->player_place_pending = false;
@@ -4266,6 +4411,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Ctrl+Z undo, Ctrl+Shift+Z redo");
         igTextDisabled("Ctrl+S save, Ctrl+O open");
         igTextDisabled("P play mode   C center player   Esc stop");
+        igTextDisabled("Play: click waypoints, double-click to walk");
         igTextDisabled("Middle-drag or Space+drag pans");
         igTextDisabled("Wheel zooms around the cursor");
         igTextDisabled("Ctrl+0 resets the zoom to 100 percent");
@@ -4593,6 +4739,7 @@ static void handle_shortcuts(Editor* e) {
         else if (igIsKeyPressedEx(ImGuiKey_Escape, false)) {
             e->player_moving = false;
             e->player_path_count = 0;
+            clear_waypoints(e);
             set_status(e, false, "Player stopped");
         } else if (igIsKeyPressedEx(ImGuiKey_F, false)) {
             e->fit_pending = true;
