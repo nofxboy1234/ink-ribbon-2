@@ -1146,6 +1146,74 @@ static bool add_waypoint(Editor* e, int cell) {
     return true;
 }
 
+static int path_index_near(const Vec2* pts, int n, Vec2 p) {
+    for (int i = 0; i < n; i++) {
+        if (v2_dist(pts[i], p) < 0.05f) return i;
+    }
+    return -1;
+}
+
+static void smooth_waypoint_joins(Editor* e, Vec2* pts, int* count, int max) {
+    for (int wi = e->player_waypoint_count - 1; wi >= 0; wi--) {
+        Vec2 wp = e->player_waypoints[wi];
+        int k = path_index_near(pts, *count, wp);
+        if (k <= 0 || k >= *count - 1) continue;
+        Vec2 prev = pts[k - 1];
+        Vec2 next = pts[k + 1];
+        float l0 = v2_dist(prev, wp);
+        float l1 = v2_dist(wp, next);
+        if (l0 < 0.01f || l1 < 0.01f) continue;
+        Vec2 d0 = v2_scale(v2_sub(wp, prev), 1.0f / l0);
+        Vec2 d1 = v2_scale(v2_sub(next, wp), 1.0f / l1);
+        bool done = false;
+        const float radii[] = { 12.0f, 8.0f, 5.0f, 2.5f };
+        for (int ri = 0; ri < (int)(sizeof radii / sizeof radii[0]) && !done;
+             ri++) {
+            float r = radii[ri];
+            if (r > l1 * 0.8f) r = l1 * 0.8f;
+            if (r < 0.2f) continue;
+            Vec2 B = v2_add(wp, v2_scale(d1, r));
+            Vec2 P1 = v2_add(wp, v2_scale(d0, r / 3.0f));
+            Vec2 P2 = v2_sub(B, v2_scale(d1, r / 3.0f));
+            int steps = (int)ceilf(r / 0.5f);
+            if (steps < 6) steps = 6;
+            if (steps > 36) steps = 36;
+            Vec2 curve[64];
+            int cn = 0;
+            for (int j = 1; j <= steps; j++) {
+                float t = (float)j / (float)steps;
+                float u = 1.0f - t;
+                Vec2 q = v2_add(
+                    v2_add(v2_scale(wp, u * u * u),
+                           v2_scale(P1, 3.0f * u * u * t)),
+                    v2_add(v2_scale(P2, 3.0f * u * t * t),
+                           v2_scale(B, t * t * t)));
+                if (cn == 0 || v2_dist(q, curve[cn - 1]) > 0.01f) {
+                    curve[cn++] = q;
+                }
+            }
+            int b = k + 1;
+            while (b < *count && v2_dist(pts[b], wp) < r) b++;
+            Vec2 trial[NAV_MAX_PATH];
+            int tn = 0;
+            for (int i = 0; i <= k; i++) trial[tn++] = pts[i];
+            for (int i = 0; i < cn; i++) trial[tn++] = curve[i];
+            for (int i = b; i < *count; i++) trial[tn++] = pts[i];
+            bool clear = tn > 1 && tn <= max;
+            for (int i = 1; clear && i < tn; i++) {
+                if (!nav_line_clear(&e->nav, trial[i - 1], trial[i])) {
+                    clear = false;
+                }
+            }
+            if (clear) {
+                for (int i = 0; i < tn; i++) pts[i] = trial[i];
+                *count = tn;
+                done = true;
+            }
+        }
+    }
+}
+
 static int build_waypoint_path(Editor* e, int extra, Vec2* out, int max) {
     int n = 0;
     int from = nav_cell_at_world(&e->nav, e->level.player_pos);
@@ -1180,6 +1248,7 @@ static int build_waypoint_path(Editor* e, int extra, Vec2* out, int max) {
         }
         from = to;
     }
+    smooth_waypoint_joins(e, out, &n, max);
     return n;
 }
 
