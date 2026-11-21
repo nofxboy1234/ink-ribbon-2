@@ -55,7 +55,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 ## What you can do
 
 - Press 1 to 6 for Select, Line, Rectangle, Door, Stairs, and Label. After a drawing action the editor returns to Select. Hold Q while the action completes to keep the tool.
-- Drag a rectangle with the Rectangle tool. A rectangle that overlaps or shares an edge with a shape joins it. The outline is rebuilt as one closed loop, so a plus or L shaped room built from several rectangles has no interior lines and no doubled walls. A rectangle that only touches a corner starts a new shape.
+- Drag a rectangle with the Rectangle tool. A rectangle that overlaps or shares an edge with a shape joins it. The outline is rebuilt as one closed loop, so a plus or L shaped room built from several rectangles has no interior lines and no doubled walls. A rectangle that only touches a corner starts a new shape, and a rectangle drawn fully inside another stays as a separate nested outline.
 - Hover a wall with the Door tool. A white ghost shows the door at the panel width, centred on the point projected onto the wall and snapped along it. Click to place the door. Drag either end with Select to change its length.
 - Drag a rectangle with the Stairs tool. The run takes the panel's direction, step count, falloff, and faint/bright opacities. Flip reverses which end the tread fade starts from, and all of it is saved with the level. Drag any stair edge with Select to resize the footprint.
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
@@ -138,7 +138,9 @@ same click also works in play mode when no player exists. The nav
 grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
 is inside a closed room/corridor outline and its player radius clears every solid
 wall. Door spans are cut out of every collinear wall they sit on, so doors are
-passable; stair treads are not walls, while stair-side walls still block. A* uses
+passable; stair treads are not walls, while stair-side rails and walls still
+block. Stair ends stay open so a run can be climbed, and a rectangle/line
+segment that would cut through a rail or solid wall is rejected. A* uses
 8-way movement, forbids corner cutting, and paths through door gaps. The raw A* route is line-of-sight filtered, then each corner is replaced by a
 quadratic Bezier arc. Arc radii start at 10 world units and shrink until the
 sampled curve stays on open nav cells, so the drawn and walked route is a smooth
@@ -173,7 +175,7 @@ The player graphic is authored in `assets/player.svg`, rasterised with Krita to
 
 ```text
 PASS build without warnings
-PASS core tests (395 checks)
+PASS core tests (396 checks)
 PASS empty room (040404), faint wall (max 0.340974), white door (max 0.94902)
 PASS save writes fill 0, door colour 0, and no room record
 PASS six tools activate in order on keys 1 to 6

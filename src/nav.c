@@ -75,6 +75,30 @@ static int wall_solid_spans(const Level* level, const Wall* wall, float radius,
     return count;
 }
 
+static int stair_rails(const Level* level, Vec2 seg[][2], int max) {
+    int n = 0;
+    for (int i = 0; i < level->stairs_count && n + 2 <= max; i++) {
+        const Stairs* st = &level->stairs[i];
+        Rect r = level_stairs_rect(st);
+        if (st->dir == STAIRS_V) {
+            seg[n][0] = v2(r.min.x, r.min.y);
+            seg[n][1] = v2(r.min.x, r.max.y);
+            n++;
+            seg[n][0] = v2(r.max.x, r.min.y);
+            seg[n][1] = v2(r.max.x, r.max.y);
+            n++;
+        } else {
+            seg[n][0] = v2(r.min.x, r.min.y);
+            seg[n][1] = v2(r.max.x, r.min.y);
+            n++;
+            seg[n][0] = v2(r.min.x, r.max.y);
+            seg[n][1] = v2(r.max.x, r.max.y);
+            n++;
+        }
+    }
+    return n;
+}
+
 static bool point_clear_of_walls(const Level* level, Vec2 p, float radius) {
     float t0[LEVEL_MAX_DOORS];
     float t1[LEVEL_MAX_DOORS];
@@ -85,6 +109,13 @@ static bool point_clear_of_walls(const Level* level, Vec2 p, float radius) {
             Vec2 a = segment_point(w->a, w->b, t0[k]);
             Vec2 b = segment_point(w->a, w->b, t1[k]);
             if (point_segment_dist(p, a, b) < radius) return false;
+        }
+    }
+    Vec2 rails[LEVEL_MAX_STAIRS * 2][2];
+    int rail_count = stair_rails(level, rails, LEVEL_MAX_STAIRS * 2);
+    for (int i = 0; i < rail_count; i++) {
+        if (point_segment_dist(p, rails[i][0], rails[i][1]) < radius) {
+            return false;
         }
     }
     return true;
@@ -103,6 +134,11 @@ static bool edge_clear_of_walls(const Level* level, Vec2 a, Vec2 b,
             if (segment_crosses(a, b, c, d)) return false;
         }
     }
+    Vec2 rails[LEVEL_MAX_STAIRS * 2][2];
+    int rail_count = stair_rails(level, rails, LEVEL_MAX_STAIRS * 2);
+    for (int i = 0; i < rail_count; i++) {
+        if (segment_crosses(a, b, rails[i][0], rails[i][1])) return false;
+    }
     return true;
 }
 
@@ -110,6 +146,8 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
     if (!nav || !level || cell < 1.0f) return false;
     memset(nav, 0, sizeof *nav);
     nav->cell = cell;
+    nav->radius = radius;
+    nav->level = level;
     if (level->wall_count == 0 && level->stairs_count == 0) return false;
     Rect bounds = level_bounds(level);
     float pad = cell * 2.0f;
@@ -296,6 +334,8 @@ static int pop_heap(int* heap, float* cost, int* count) {
 }
 
 bool nav_line_clear(const NavGrid* nav, Vec2 a, Vec2 b) {
+    if (!nav || !nav->level) return false;
+    if (!edge_clear_of_walls(nav->level, a, b, nav->radius)) return false;
     float len = v2_dist(a, b);
     int steps = (int)ceilf(len / 0.5f);
     if (steps < 1) steps = 1;

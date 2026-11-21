@@ -2313,6 +2313,32 @@ static bool rect_covers_shape_area(const Editor* e, Rect r, const Vec2* pts,
     return false;
 }
 
+/* A rectangle strictly inside an existing room is a new nested outline, not a
+   union. Corners must be strictly inside so sharing an outer edge still joins
+   the normal way. */
+static bool rect_inside_shape(const Editor* e, Rect r, const Vec2* pts,
+                              int count) {
+    float g = e->grid_size > 1.0f ? e->grid_size : 1.0f;
+    for (float y = r.min.y + g * 0.25f; y < r.max.y; y += g * 0.5f) {
+        for (float x = r.min.x + g * 0.25f; x < r.max.x; x += g * 0.5f) {
+            if (!point_in_polygon(pts, count, v2(x, y))) return false;
+        }
+    }
+    Vec2 corners[4] = {
+        r.min, v2(r.max.x, r.min.y), r.max, v2(r.min.x, r.max.y)
+    };
+    for (int c = 0; c < 4; c++) {
+        if (!point_in_polygon(pts, count, corners[c])) return false;
+        for (int i = 0; i < count; i++) {
+            if (point_segment_dist(corners[c], pts[i], pts[(i + 1) % count]) <
+                0.01f) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /* True when a's outline already covered real area of b's outline. The merge
    after a drag is for a move that makes rectangles overlap; a shape that was
    already containing another must not swallow it just because it moved a
@@ -3209,6 +3235,7 @@ static int union_rect_into_shapes(Editor* e, Rect r, int* dropped) {
         int count = level_shape_polygon(&e->level, shape->id, polygon,
                                         LEVEL_MAX_WALLS);
         if (count < 3) continue;
+        if (rect_inside_shape(e, r, polygon, count)) continue;
         if (!rect_covers_shape_area(e, r, polygon, count)) continue;
         if (level_union_rect(&e->level, shape->id, r, dropped) == LEVEL_UNION_OK) {
             return 1;
@@ -3922,7 +3949,7 @@ static void draw_left_panel(Editor* e) {
             break;
         case TOOL_RECT:
             igDummy((ImVec2){ 0.0f, 3.0f });
-            small_note("Drag a grid-aligned rectangle. Overlapping rectangles union; one that only touches keeps its own outline.");
+            small_note("Drag a grid-aligned rectangle. Overlapping rectangles union; one that only touches or sits fully inside keeps its own outline.");
             break;
         case TOOL_DOOR:
             igDummy((ImVec2){ 0.0f, 3.0f });

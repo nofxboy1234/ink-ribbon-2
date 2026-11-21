@@ -24,7 +24,8 @@ A shape is one drawn wall loop: a `Shape` record with a closed flag, plus the
 walls that belong to it. Walls stay independent axis-aligned segments with a
 monotonic `WallId` and a `ShapeId`. Wall order inside a shape is the order the
 walls were added, so the loop polygon is a traversal, not a second geometry
-copy. The Rectangle tool adds its four walls in loop order and the union writes
+copy. The Rectangle tool adds its four walls in loop order. A rectangle fully inside an
+existing room is kept as a new nested shape rather than unioned; the union writes
 its loop in traversal order. There is no vertex pool: corners meet because the
 Line tool starts each segment at the previous endpoint, and a reshape carries
 every endpoint that coincides with the moved line. A corner drag groups the

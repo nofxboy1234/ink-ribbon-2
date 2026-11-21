@@ -1705,6 +1705,8 @@ static void test_nav_grid(void) {
     check(start >= 0 && goal >= 0, "nav finds the start and goal cells");
     check(nav_find_path(&nav, start, goal, path, NAV_MAX_PATH) == 0,
           "a solid wall blocks the path");
+    check(!nav_line_clear(&nav, v2(-20, 20), v2(20, 20)),
+          "a short line across a solid wall is not clear");
 
     check(level_add_door(&level, inner_id, 0.5f, 20.0f) == 0,
           "add a door through the blocking wall");

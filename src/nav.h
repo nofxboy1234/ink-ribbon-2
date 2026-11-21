@@ -17,10 +17,12 @@ typedef struct {
 
 typedef struct {
     float cell;
+    float radius;
     Vec2 origin;
     int cols;
     int rows;
     bool built;
+    const Level* level;
     NavDoor doors[LEVEL_MAX_DOORS];
     int door_count;
     bool open[NAV_MAX_CELLS];

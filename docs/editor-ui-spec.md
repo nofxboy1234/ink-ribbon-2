@@ -151,7 +151,7 @@ At most one player record exists. The Player section at the bottom of the left p
 
 - In edit mode, Place player arms a click on a walkable nav cell and places the player at that cell's centre, without entering play mode. Esc cancels the armed placement. The same placement happens on the first play-mode click when no player exists.
 - With a player, a play-mode click builds an A* path and starts walking.
-- The nav grid is 8 world units per cell. A cell is open when its centre is inside a closed room or corridor and clears every solid wall by the player radius. Door openings are removed from every collinear wall record, so doors are passable. Stair treads are not walls; stair-side walls remain solid.
+- The nav grid is 8 world units per cell. A cell is open when its centre is inside a closed room or corridor and clears every solid wall by the player radius. Door openings are removed from every collinear wall record, so doors are passable. Stair treads are not walls; the two long side rails remain solid while the short ends stay open for climbing. Smoothed route segments are also checked against actual wall and rail intersections, not just sampled cell centres.
 - Hovering in play mode draws the nav cell as a green-bordered square when walkable, and a muted red border when blocked. It also draws the planned A* route from the player to that cell as a green line. After a click, the remaining route is drawn in green while the player walks. The same green hover cell appears while `Place player` is armed in edit mode.
 - A* uses 8-way movement and forbids diagonal corner cutting. Its cell route is line-of-sight filtered, then each interior corner is replaced by a quadratic Bezier arc. Arc radii start at 10 world units and shrink until the sampled arc stays on open cells. The resulting dense waypoints are what is drawn, previewed, and walked.
 - Any filtered segment that crosses a door line near the opening is split at that door's centre only. The centre is a fixed, unrounded waypoint: no sideways pre/post detour is inserted, which previously produced loops near doorways.
@@ -166,7 +166,7 @@ Below the six tool buttons and the Q lock row:
 - Grid size: combo 4, 8, 16, 32; default 8. A Snap toggle, default on. A Show grid toggle, default on. A Snap objects toggle, default on.
 - Select: a **Marquee next drag** checkbox (same as pressing M) and a hint that a wall corner drags to resize.
 - Line: a hint.
-- Rectangle: a hint that overlapping rectangles union.
+- Rectangle: a hint that overlapping rectangles union, while a rectangle fully inside another stays separate.
 - Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 10. New doors are 3 px thick.
 - Stairs: direction buttons, a steps slider, a Flip checkbox, a falloff combo (Linear, Ease in, Ease out, Smooth), faint and bright opacity sliders, and a hint.
 - Label: a size slider from 8 to 48.
