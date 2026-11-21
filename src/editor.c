@@ -2128,7 +2128,7 @@ static void draw_player_path(const Editor* e) {
     if (!e->play_mode || !e->level.player_present) return;
     ImVec2 pts[NAV_MAX_PATH + 2];
     int count = 0;
-    const float min_px = 2.0f;
+    const float min_px = 3.0f;
     if (e->player_moving && e->player_path_count > 0) {
         count = append_draw_point(pts, count,
                                   world_to_screen(e, e->level.player_pos),
@@ -2151,7 +2151,12 @@ static void draw_player_path(const Editor* e) {
     if (count < 2) return;
     ImDrawList* dl = igGetWindowDrawList();
     ImDrawList_AddPolyline(dl, pts, count, col32a(0x58d68d, 65), 5.0f, 0);
-    ImDrawList_AddPolyline(dl, pts, count, col32a(0x7df0aa, 220), 1.8f, 0);
+    /* A thin anti-aliased core can break into dotted pixels on near-vertical
+       segments. Draw the bright core without AA over the soft glow. */
+    ImDrawFlags flags = dl->Flags;
+    dl->Flags &= ~ImDrawListFlags_AntiAliasedLines;
+    ImDrawList_AddPolyline(dl, pts, count, col32a(0x7df0aa, 220), 2.0f, 0);
+    dl->Flags = flags;
 }
 
 static void draw_player(const Editor* e) {
