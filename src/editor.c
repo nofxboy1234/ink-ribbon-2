@@ -39,7 +39,7 @@
 #define SPAN_END_GRAB_PX 9.0f
 #define VERTEX_GRAB_PX 7.0f
 #define PLAYER_SPEED 55.0f
-#define PLAYER_TURN_RATE 3.5f
+#define PLAYER_TURN_RATE 10.0f
 #define PLAYER_RADIUS 3.2f
 #define PLAYER_SPRITE_WORLD 12.0f
 /* One look means a near-black canvas and white lines. A wall and a stair
@@ -1138,42 +1138,27 @@ static void update_player(Editor* e, float dt) {
             heading += clampf(err, -turn, turn);
         }
     } else {
-        /* Steer with a limited turn rate. Targets behind the player get a real
-           turning-circle arc; normal path points are approached directly so
-           the player cannot orbit a close waypoint forever. */
+        /* Turn in place only for axis-behind targets; otherwise rotate toward
+           the next path point while moving directly along the route. */
         heading += clampf(err, -turn, turn);
-        float step = PLAYER_SPEED * dt;
-        bool arc = fabsf(err) > 1.2f && cosf(err) < -0.1f;
-        Vec2 move = arc ? v2(sinf(heading), -cosf(heading)) : dir;
-        Vec2 next = v2_add(pos, v2_scale(move, step));
-        bool clear = e->nav_ready &&
-                     nav_cell_is_open(&e->nav,
-                                      nav_cell_at_world(&e->nav, next));
-        if (!clear) {
-            /* If the turning arc would enter a wall, slide along the route
-               instead. The route itself is collision-checked. */
-            Vec2 near = e->player_path[e->player_path_index];
-            Vec2 to_near = v2_sub(near, pos);
-            float nd = v2_len(to_near);
-            Vec2 fallback = pos;
-            if (nd > 0.001f) {
-                float fd = fminf(nd, step);
-                fallback = v2_add(pos, v2_scale(to_near, fd / nd));
+        float remaining = PLAYER_SPEED * dt;
+        while (remaining > 0.0f &&
+               e->player_path_index < e->player_path_count) {
+            Vec2 next = e->player_path[e->player_path_index];
+            Vec2 to = v2_sub(next, pos);
+            float d = v2_len(to);
+            if (d <= 0.0001f) {
+                e->player_path_index++;
+                continue;
             }
-            if (e->nav_ready &&
-                nav_cell_is_open(&e->nav,
-                                 nav_cell_at_world(&e->nav, fallback))) {
-                next = fallback;
+            if (d <= remaining) {
+                pos = next;
+                remaining -= d;
+                e->player_path_index++;
             } else {
-                next = pos;
+                pos = v2_add(pos, v2_scale(to, remaining / d));
+                remaining = 0.0f;
             }
-        }
-        pos = next;
-        if (v2_dist(pos, target) < 0.6f) e->player_path_index++;
-        if (e->player_path_index == e->player_path_count - 1 &&
-            v2_dist(pos, e->player_path[e->player_path_count - 1]) < 1.2f) {
-            pos = e->player_path[e->player_path_count - 1];
-            e->player_path_index++;
         }
     }
     e->level.player_pos = pos;
