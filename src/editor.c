@@ -1170,9 +1170,9 @@ static void rdp_keep(const Vec2* pts, int a, int b, float tol, bool* keep) {
 }
 
 static Vec2 catmull_point(Vec2 p0, Vec2 p1, Vec2 p2, Vec2 p3, float t) {
-    float d0 = sqrtf(fmaxf(v2_dist(p0, p1), 1e-4f));
-    float d1 = sqrtf(fmaxf(v2_dist(p1, p2), 1e-4f));
-    float d2 = sqrtf(fmaxf(v2_dist(p2, p3), 1e-4f));
+    float d0 = fmaxf(v2_dist(p0, p1), 1e-3f);
+    float d1 = fmaxf(v2_dist(p1, p2), 1e-3f);
+    float d2 = fmaxf(v2_dist(p2, p3), 1e-3f);
     float t0 = 0.0f;
     float t1 = t0 + d0;
     float t2 = t1 + d1;
