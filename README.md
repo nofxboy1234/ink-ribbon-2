@@ -148,9 +148,9 @@ curve with no stair-step or sharp corner. A route that crosses a doorway is
 routed through the opening's centre; only that centre point is inserted, never a
 sideways perpendicular detour, so door approaches cannot double back or loop.
 The player follows the dense curve at a constant speed rather than hopping
-between grid waypoints. If the first destination is directly horizontal or
-vertical behind the player, the player pivots on the spot; otherwise it turns
-toward the route while moving along it. There is no turning-circle arc and no
+between grid waypoints. When starting from rest the player pivots on the spot to
+face the first route direction; once moving it follows the smoothed curve, so
+direction changes trace a turning-circle arc rather than a sharp corner. There is no turning-circle arc and no
 separate turning ring.
 
 The camera follows the player while walking but only changes its centre: zoom is

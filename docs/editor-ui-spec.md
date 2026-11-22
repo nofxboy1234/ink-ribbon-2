@@ -157,7 +157,7 @@ At most one player record exists. The Player section at the bottom of the left p
 - A* uses 8-way movement and forbids diagonal corner cutting. Its cell route is line-of-sight filtered, then each interior corner is replaced by a quadratic Bezier arc. Arc radii start at 10 world units and shrink until the sampled arc stays on open cells. The resulting dense waypoints are what is drawn, previewed, and walked.
 - Any filtered segment that crosses a door line near the opening is split at that door's centre only. The centre is a fixed, unrounded waypoint: no sideways pre/post detour is inserted, which previously produced loops near doorways.
 - The player consumes the frame's travel across as many dense curve samples as needed, giving a constant-speed follow instead of stopping at each sample.
-- If the next destination is directly horizontal or vertical behind the player, the player pivots on the spot to face it. Otherwise it rotates toward the route while moving directly along the smoothed waypoints. There is no turning-circle arc.
+- When starting from rest, the player rotates on the spot to face the first route direction. Once moving, it follows the smoothed waypoints and their curved joins, so direction changes trace a turning-circle arc rather than a sharp corner.
 - `C` recentres on the player at the current zoom. `Esc` stops the player. `P` returns to editing. The player position and heading are saved in the level.
 
 ## Tool options in the left panel

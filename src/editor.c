@@ -1041,9 +1041,8 @@ static bool start_player_path(Editor* e, const int* cells, int raw) {
     Vec2 first = e->player_path[e->player_path_index];
     Vec2 d = v2_sub(first, e->level.player_pos);
     float desired = atan2f(d.x, -d.y);
-    bool axis = fabsf(d.x) < 0.75f || fabsf(d.y) < 0.75f;
     float err = angle_delta(e->level.player_heading, desired);
-    e->player_pivot = axis && fabsf(err) > 2.5f;
+    e->player_pivot = fabsf(err) > 0.05f;
     start_camera_pan_to_player(e);
     return true;
 }
@@ -1065,9 +1064,8 @@ static bool start_player_vec_path(Editor* e, const Vec2* pts, int count) {
     Vec2 first = e->player_path[e->player_path_index];
     Vec2 d = v2_sub(first, e->level.player_pos);
     float desired = atan2f(d.x, -d.y);
-    bool axis = fabsf(d.x) < 0.75f || fabsf(d.y) < 0.75f;
     float err = angle_delta(e->level.player_heading, desired);
-    e->player_pivot = axis && fabsf(err) > 2.5f;
+    e->player_pivot = fabsf(err) > 0.05f;
     start_camera_pan_to_player(e);
     return true;
 }
@@ -1153,6 +1151,8 @@ static int path_index_near(const Vec2* pts, int n, Vec2 p) {
     return -1;
 }
 
+/* Pass the route through each waypoint with a cubic that leaves the marker
+   tangent to the incoming segment and eases into the next leg. */
 static void smooth_waypoint_joins(Editor* e, Vec2* pts, int* count, int max) {
     for (int wi = e->player_waypoint_count - 1; wi >= 0; wi--) {
         Vec2 wp = e->player_waypoints[wi];
@@ -1166,7 +1166,7 @@ static void smooth_waypoint_joins(Editor* e, Vec2* pts, int* count, int max) {
         Vec2 d0 = v2_scale(v2_sub(wp, prev), 1.0f / l0);
         Vec2 d1 = v2_scale(v2_sub(next, wp), 1.0f / l1);
         bool done = false;
-        const float radii[] = { 12.0f, 8.0f, 5.0f, 2.5f };
+        const float radii[] = { 14.0f, 10.0f, 6.0f, 3.0f };
         for (int ri = 0; ri < (int)(sizeof radii / sizeof radii[0]) && !done;
              ri++) {
             float r = radii[ri];
@@ -1177,7 +1177,7 @@ static void smooth_waypoint_joins(Editor* e, Vec2* pts, int* count, int max) {
             Vec2 P2 = v2_sub(B, v2_scale(d1, r / 3.0f));
             int steps = (int)ceilf(r / 0.5f);
             if (steps < 6) steps = 6;
-            if (steps > 36) steps = 36;
+            if (steps > 40) steps = 40;
             Vec2 curve[64];
             int cn = 0;
             for (int j = 1; j <= steps; j++) {
@@ -1213,6 +1213,7 @@ static void smooth_waypoint_joins(Editor* e, Vec2* pts, int* count, int max) {
         }
     }
 }
+
 
 static int build_waypoint_path(Editor* e, int extra, Vec2* out, int max) {
     int n = 0;
