@@ -66,7 +66,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
 - Snap to the grid on placement, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns snapping off. The Rectangle tool always snaps to the grid because a rectangle is a grid cell.
 - Snap dragged lines, edges, corners, and every side of a moving selection to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on.
-- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, each play-mode click queues a waypoint at that cell. Green markers and the combined route show the sequence. The route is rebuilt as one uniform Catmull-Rom spline through sparse A* anchors and every waypoint centre. Uniform knots give the broad looping turns on sharp reversals shown in the reference, while the line still passes through every marker. **double-click** executes it, walking through the waypoints in order and removing each marker as it is reached, then ending on the last cell centre. The arrow rotates toward the route, pivots in place for axis-behind starts, follows rooms and doors, and draws the remaining route while walking. Esc clears the queue.
+- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, each play-mode click queues a waypoint at that cell. Green markers and the planned route show the sequence. The route is plain A* through the 8-unit grid cells, with no curve smoothing. **double-click** executes it, walking cell to cell through the waypoints in order and removing each marker as it is reached, then ending on the last cell centre. The player rotates toward the next cell and follows rooms and doors. Esc clears the queue.
 - While walking, the camera follows the player at the current zoom. C recentres on the player without changing zoom. Middle-drag pans immediately, with no catch-up animation, and mouse-wheel zoom stays immediate.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 - Duplicate with Ctrl+D and lock a selection with L.
@@ -141,17 +141,11 @@ wall. Door spans are cut out of every collinear wall they sit on, so doors are
 passable; stair treads are not walls, while stair-side rails and walls still
 block. Stair ends stay open so a run can be climbed, and a rectangle/line
 segment that would cut through a rail or solid wall is rejected. A* uses
-8-way movement, forbids corner cutting, and paths through door gaps. The raw A* route is line-of-sight filtered, then each corner is replaced by a
-quadratic Bezier arc. Arc radii start at 10 world units and shrink until the
-sampled curve stays on open nav cells, so the drawn and walked route is a smooth
-curve with no stair-step or sharp corner. A route that crosses a doorway is
-routed through the opening's centre; only that centre point is inserted, never a
-sideways perpendicular detour, so door approaches cannot double back or loop.
-The player follows the dense curve at a constant speed rather than hopping
-between grid waypoints. When starting from rest the player pivots on the spot to
-face the first route direction; once moving it follows the smoothed curve, so
-direction changes trace a turning-circle arc rather than a sharp corner. There is no turning-circle arc and no
-separate turning ring.
+8-way movement, forbids corner cutting, and paths through door gaps. The route is the raw A* cell chain. No spline, no corner rounding and no
+line-of-sight shortcut changes it, so the green line follows the grid with
+right-angle steps. The player rotates on the spot to face the first cell, then
+moves from cell centre to cell centre while turning toward each next cell. There
+is no turning-circle arc and no turning ring.
 
 The camera follows the player while walking but only changes its centre: zoom is
 never altered by play mode, recentring, or path starts. When the player starts

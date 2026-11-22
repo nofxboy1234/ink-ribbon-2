@@ -1144,145 +1144,7 @@ static bool add_waypoint(Editor* e, int cell) {
     return true;
 }
 
-static int path_index_near(const Vec2* pts, int n, Vec2 p) {
-    for (int i = 0; i < n; i++) {
-        if (v2_dist(pts[i], p) < 0.05f) return i;
-    }
-    return -1;
-}
 
-static void rdp_keep(const Vec2* pts, int a, int b, float tol, bool* keep) {
-    if (b <= a + 1) return;
-    float worst = 0.0f;
-    int at = -1;
-    for (int i = a + 1; i < b; i++) {
-        float d = point_segment_dist(pts[i], pts[a], pts[b]);
-        if (d > worst) {
-            worst = d;
-            at = i;
-        }
-    }
-    if (at >= 0 && worst > tol) {
-        keep[at] = true;
-        rdp_keep(pts, a, at, tol, keep);
-        rdp_keep(pts, at, b, tol, keep);
-    }
-}
-
-static Vec2 catmull_point(Vec2 p0, Vec2 p1, Vec2 p2, Vec2 p3, float t) {
-    /* Uniform knots: the broad, loopy turn shape closest to the reference. */
-    float d0 = 1.0f;
-    float d1 = 1.0f;
-    float d2 = 1.0f;
-    float t0 = 0.0f;
-    float t1 = t0 + d0;
-    float t2 = t1 + d1;
-    float t3 = t2 + d2;
-    float tt = lerpf(t1, t2, t);
-    Vec2 a1 = v2_lerp(p0, p1, (tt - t0) / (t1 - t0));
-    Vec2 a2 = v2_lerp(p1, p2, (tt - t1) / (t2 - t1));
-    Vec2 a3 = v2_lerp(p2, p3, (tt - t2) / (t3 - t2));
-    Vec2 b1 = v2_lerp(a1, a2, (tt - t0) / (t2 - t0));
-    Vec2 b2 = v2_lerp(a2, a3, (tt - t1) / (t3 - t1));
-    return v2_lerp(b1, b2, (tt - t1) / (t2 - t1));
-}
-
-static int catmull_route(const Vec2* anchors, int n, Vec2* out, int max) {
-    if (n < 2) {
-        if (n == 1) out[0] = anchors[0];
-        return n;
-    }
-    int on = 0;
-    out[on++] = anchors[0];
-    for (int i = 0; i < n - 1; i++) {
-        Vec2 p1 = anchors[i];
-        Vec2 p2 = anchors[i + 1];
-        Vec2 p0 = i > 0 ? anchors[i - 1]
-                        : v2_sub(v2_scale(p1, 2.0f), p2);
-        Vec2 p3 = i + 2 < n ? anchors[i + 2]
-                            : v2_sub(v2_scale(p2, 2.0f), p1);
-        float span = v2_dist(p1, p2);
-        int steps = (int)ceilf(span / 0.5f);
-        if (steps < 8) steps = 8;
-        if (steps > 64) steps = 64;
-        for (int k = 1; k <= steps; k++) {
-            float t = (float)k / (float)steps;
-            Vec2 q = k == steps ? p2 : catmull_point(p0, p1, p2, p3, t);
-            if (on >= max) return 0;
-            if (!v2_equal(q, out[on - 1], 0.01f)) out[on++] = q;
-        }
-    }
-    return on;
-}
-
-/* One Catmull-Rom route through sparse anchors, so the line sweeps through
-   every waypoint centre instead of making a local corner at each one. */
-static int smooth_route(Editor* e, Vec2* pts, int count, int max) {
-    if (count < 3) return count;
-    int breaks[PLAYER_MAX_WAYPOINTS + 2];
-    int bn = 0;
-    breaks[bn++] = 0;
-    for (int wi = 0; wi < e->player_waypoint_count; wi++) {
-        int k = path_index_near(pts, count, e->player_waypoints[wi]);
-        if (k > 0 && k < count - 1) breaks[bn++] = k;
-    }
-    breaks[bn++] = count - 1;
-    for (int i = 1; i < bn; i++) {
-        if (breaks[i] <= breaks[i - 1]) {
-            for (int j = i; j < bn - 1; j++) breaks[j] = breaks[j + 1];
-            bn--;
-            i--;
-        }
-    }
-
-    Vec2 fallback[NAV_MAX_PATH];
-    int fn = 0;
-    const float tols[] = { 4.0f, 2.5f, 1.2f, 0.6f };
-    for (int ti = 0; ti < (int)(sizeof tols / sizeof tols[0]); ti++) {
-        Vec2 anchors[NAV_MAX_PATH];
-        int an = 0;
-        for (int b = 0; b < bn - 1; b++) {
-            int a = breaks[b];
-            int z = breaks[b + 1];
-            bool keep[NAV_MAX_PATH] = { false };
-            keep[0] = true;
-            keep[z - a] = true;
-            rdp_keep(pts + a, 0, z - a, tols[ti], keep);
-            for (int i = 0; i <= z - a; i++) {
-                if (!keep[i]) continue;
-                Vec2 q = pts[a + i];
-                if (an == 0 || !v2_equal(q, anchors[an - 1], 0.01f)) {
-                    if (an >= NAV_MAX_PATH) break;
-                    anchors[an++] = q;
-                }
-            }
-        }
-        if (an < 2) continue;
-        Vec2 trial[NAV_MAX_PATH];
-        int tn = catmull_route(anchors, an, trial, max);
-        if (tn < 2) continue;
-        if (fn == 0) {
-            fn = tn;
-            for (int i = 0; i < tn; i++) fallback[i] = trial[i];
-        }
-        bool clear = true;
-        for (int i = 1; i < tn; i++) {
-            if (!nav_segment_clear_soft(&e->nav, trial[i - 1], trial[i])) {
-                clear = false;
-                break;
-            }
-        }
-        if (clear) {
-            for (int i = 0; i < tn; i++) pts[i] = trial[i];
-            return tn;
-        }
-    }
-    if (fn > 0) {
-        for (int i = 0; i < fn; i++) pts[i] = fallback[i];
-        return fn;
-    }
-    return count;
-}
 
 
 static int build_waypoint_path(Editor* e, int extra, Vec2* out, int max) {
@@ -1302,26 +1164,17 @@ static int build_waypoint_path(Editor* e, int extra, Vec2* out, int max) {
         int cells[NAV_MAX_PATH];
         int raw = nav_find_path(&e->nav, from, to, cells, NAV_MAX_PATH);
         if (raw <= 0) return 0;
-        Vec2 leg[NAV_MAX_PATH];
-        int ln = nav_smooth_path(&e->nav, cells, raw, leg, NAV_MAX_PATH);
-        if (ln <= 0) return 0;
-        for (int k = 0; k < ln; k++) {
-            if (n == 0 || v2_dist(out[n - 1], leg[k]) > 0.01f) {
+        for (int k = 0; k < raw; k++) {
+            Vec2 q = nav_cell_center(&e->nav, cells[k]);
+            if (n == 0 || v2_dist(out[n - 1], q) > 0.01f) {
                 if (n >= max) return 0;
-                out[n++] = leg[k];
+                out[n++] = q;
             }
-        }
-        /* The marker is the exact end of this leg. */
-        Vec2 mark = nav_cell_center(&e->nav, to);
-        if (n == 0 || v2_dist(out[n - 1], mark) > 0.01f) {
-            if (n >= max) return 0;
-            out[n++] = mark;
         }
         from = to;
     }
-    return smooth_route(e, out, n, max);
+    return n;
 }
-
 static void execute_waypoints(Editor* e) {
     if (!e->level.player_present || e->player_waypoint_count <= 0) {
         set_status(e, true, "No waypoints queued");
