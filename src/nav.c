@@ -346,6 +346,11 @@ bool nav_line_clear(const NavGrid* nav, Vec2 a, Vec2 b) {
     return true;
 }
 
+bool nav_segment_clear_soft(const NavGrid* nav, Vec2 a, Vec2 b) {
+    if (!nav || !nav->level) return false;
+    return edge_clear_of_walls(nav->level, a, b, 0.75f);
+}
+
 int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
                     int max) {
     if (!nav || !cells || !out || count <= 0 || max <= 0) return 0;

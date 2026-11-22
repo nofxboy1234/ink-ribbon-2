@@ -1201,7 +1201,7 @@ static void smooth_waypoint_joins(Editor* e, Vec2* pts, int* count, int max) {
             for (int i = b; i < *count; i++) trial[tn++] = pts[i];
             bool clear = tn > 1 && tn <= max;
             for (int i = 1; clear && i < tn; i++) {
-                if (!nav_line_clear(&e->nav, trial[i - 1], trial[i])) {
+                if (!nav_segment_clear_soft(&e->nav, trial[i - 1], trial[i])) {
                     clear = false;
                 }
             }

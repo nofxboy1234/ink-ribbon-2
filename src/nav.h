@@ -46,6 +46,10 @@ int nav_find_path(const NavGrid* nav, int start, int goal, int* out, int max);
 /* True when every sampled point on the segment is on an open nav cell. */
 bool nav_line_clear(const NavGrid* nav, Vec2 a, Vec2 b);
 
+/* Wall/rail intersection test with a small clearance, for smoothing bends
+   near walls without letting them pass through geometry. */
+bool nav_segment_clear_soft(const NavGrid* nav, Vec2 a, Vec2 b);
+
 /* Turns raw A* cells into centred, line-of-sight-filtered and Chaikin-rounded
    waypoints. Falls back to the filtered polyline if a smoothed segment fails
    the clearance sample. Returns the waypoint count. */
