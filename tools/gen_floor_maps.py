@@ -205,14 +205,6 @@ FLOORS: dict[str, dict] = {
         # Shelving and locker outlines visible on the 2F map. These are
         # non-colliding detail lines, like the 1F counters and rails.
         "detail_shapes": [
-            (True, [(522, 292), (535, 292), (535, 302), (548, 302),
-                    (548, 312), (561, 312), (561, 320), (574, 320),
-                    (574, 312), (587, 312), (587, 302), (600, 302),
-                    (600, 292), (602, 292), (602, 360), (634, 360),
-                    (640, 360), (640, 470), (634, 470), (634, 520),
-                    (640, 520), (640, 552), (489, 552), (489, 520),
-                    (495, 520), (495, 470), (489, 470), (489, 360),
-                    (522, 360)]),
             (True, [(330, 300), (390, 300), (390, 330), (330, 330)]),
             (True, [(410, 320), (455, 320), (455, 345), (410, 345)]),
             (True, [(330, 390), (390, 390), (390, 420), (330, 420)]),
@@ -532,7 +524,6 @@ def build_floor(floor: str) -> list[str]:
         lines.append(f"wall {wid} {sid} {wa[0]:.3f} {wa[1]:.3f} {wb[0]:.3f} {wb[1]:.3f} 1")
         wid += 1
         sid += 1
-    append_detail(lines, data, sid, wid, floor, False)
     for wi, t, width, hidden in auto_connect_doors(walls, data["doors"], floor):
         lines.append(f"door 0 {wi} {t:.4f} {width:.3f} {hidden}")
     for x0, y0, x1, y1, direction, steps, bottom in data["stairs"]:
