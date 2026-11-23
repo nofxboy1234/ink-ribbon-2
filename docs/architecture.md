@@ -128,6 +128,14 @@ a click on a floor that does not own the player is refused with the owner
 floor's name; the camera fits the viewed floor instead of staying parked on the
 player elsewhere.
 
+Navigation uses the player as the walking seed. `nav_build` clears cells by the
+player radius, then floods from the player's cell across connected clear cells,
+so a room assembled from several open Line and Rectangle shapes is one navigable
+region even when no individual shape loop encloses it. This also covers rooms
+whose rectangle edges were replaced by line segments. With no player marker,
+the closed-shape or geometric-loop test is used instead so the placement click
+still has valid cells.
+
 `OnionSkin` in `Level` stores the image path, show flag, opacity, move offset,
 scale, frozen fit rectangle, checked floor index, and floor opacity. The editor
 copies its live fields into the active floor before saving and before switching

@@ -1834,6 +1834,37 @@ static void test_onion_skins(void) {
     remove(path);
 }
 
+static void test_hybrid_room_navigation(void) {
+    Level level;
+    level_init(&level);
+    ShapeId a = level_add_shape(&level);
+    ShapeId b = level_add_shape(&level);
+    check(a != 0 && b != 0, "start two partial wall chains");
+    /* Two open chains whose walls together enclose the player's room. */
+    level_add_wall_to_shape(&level, a, v2(0, 0), v2(100, 0));
+    level_add_wall_to_shape(&level, a, v2(100, 0), v2(100, 100));
+    level_add_wall_to_shape(&level, b, v2(100, 100), v2(0, 100));
+    level_add_wall_to_shape(&level, b, v2(0, 100), v2(0, 0));
+    level_place_player(&level, v2(50, 50), 0.0f);
+
+    NavGrid* nav = malloc(sizeof(NavGrid));
+    check(nav && nav_build(nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav builds from the player's hybrid room");
+    if (nav) {
+        int cell = nav_cell_at_world(nav, v2(50, 50));
+        check(nav_cell_is_open(nav, cell),
+              "a room assembled from multiple open chains is walkable");
+        int a_cell = nav_cell_at_world(nav, v2(20, 20));
+        int b_cell = nav_cell_at_world(nav, v2(80, 80));
+        int cells[NAV_MAX_PATH];
+        check(nav_cell_is_open(nav, a_cell) &&
+                  nav_cell_is_open(nav, b_cell) &&
+                  nav_find_path(nav, a_cell, b_cell, cells, NAV_MAX_PATH) > 0,
+              "paths cross a hybrid room assembled from open chains");
+        free(nav);
+    }
+}
+
 static void test_line_loop_navigation(void) {
     Level level;
     level_init(&level);
@@ -1927,36 +1958,21 @@ static void test_floors(void) {
                                                : v2(fi == 1 ? -300.0f : -280.0f,
                                                     0.0f);
         int start = nav_cell_at_world(nav, start_pos);
-        bool start_open = nav_cell_is_open(nav, start);
-        /* Skip the full reference check while a floor still contains a shape
-           that is neither explicitly closed nor a geometric loop. That is a
-           layout still being drawn, not a navigation regression. */
-        bool finished = true;
-        Vec2 polygon[LEVEL_MAX_WALLS];
-        for (int i = 0; i < level->shape_count && finished; i++) {
-            if (level->shapes[i].closed) continue;
-            if (level_shape_loop_polygon(level, level->shapes[i].id, polygon,
-                                         LEVEL_MAX_WALLS) < 3) {
-                finished = false;
+        check(nav_cell_is_open(nav, start), "floor start cell is walkable");
+        int reachable = 0;
+        int wanted = level->stairs_count;
+        for (int i = 0; i < wanted; i++) {
+            Rect r = level_stairs_rect(&level->stairs[i]);
+            Vec2 c = v2((r.min.x + r.max.x) * 0.5f,
+                        (r.min.y + r.max.y) * 0.5f);
+            int cell = nav_cell_at_world(nav, c);
+            int path[NAV_MAX_PATH];
+            if (nav_cell_is_open(nav, cell) &&
+                nav_find_path(nav, start, cell, path, NAV_MAX_PATH) > 0) {
+                reachable++;
             }
         }
-        if (!level->player_present || (start_open && finished)) {
-            check(start_open, "floor start cell is walkable");
-            int reachable = 0;
-            int wanted = level->stairs_count;
-            for (int i = 0; i < wanted; i++) {
-                Rect r = level_stairs_rect(&level->stairs[i]);
-                Vec2 c = v2((r.min.x + r.max.x) * 0.5f,
-                            (r.min.y + r.max.y) * 0.5f);
-                int cell = nav_cell_at_world(nav, c);
-                int path[NAV_MAX_PATH];
-                if (nav_cell_is_open(nav, cell) &&
-                    nav_find_path(nav, start, cell, path, NAV_MAX_PATH) > 0) {
-                    reachable++;
-                }
-            }
-            check(reachable == wanted, "every stairwell is reachable on foot");
-        }
+        check(reachable == wanted, "every stairwell is reachable on foot");
         free(nav);
     }
 
@@ -1986,6 +2002,7 @@ int main(void) {
     test_stairs();
     test_stairs_flip();
     test_onion_skins();
+    test_hybrid_room_navigation();
     test_line_loop_navigation();
     test_rect_union();
     test_rect_union_save_load();

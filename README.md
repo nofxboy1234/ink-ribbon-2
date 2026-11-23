@@ -205,11 +205,12 @@ level record (`player x y heading`), so a map holds at most one marker. In edit
 mode, use **Place player** in the Player section and click a walkable cell; the
 same click also works in play mode when no player exists. The nav
 grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
-is inside a closed room/corridor outline and its player radius clears every
-solid wall. A line chain whose walls form one loop counts as closed for
-navigation even if its saved flag was off; loading normalizes such shapes to
-closed. Door spans are cut out of every collinear wall they sit on, so doors
-are passable; stair treads are not walls, while stair-side rails and walls still
+clears every solid wall by the player radius. With a player present, the grid
+floods outward from the player's own cell through the clear, connected space,
+so a room assembled from several open Lines and Rectangles is navigable even
+when no single shape closes. Without a player, a cell must also lie inside a
+closed room or a line chain whose walls form one loop. Door spans are cut out
+of every collinear wall they sit on, so doors are passable; stair treads are not walls, while stair-side rails and walls still
 block. Stair ends stay open so a run can be climbed, and a rectangle/line
 segment that would cut through a rail or solid wall is rejected. Stairs are
 drawn and walked over like any other open floor; they do not switch levels. A*

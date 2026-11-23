@@ -236,13 +236,64 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
     }
 
     Vec2 center[NAV_MAX_CELLS];
+    static bool clear_cell[NAV_MAX_CELLS];
+    static int queue[NAV_MAX_CELLS];
     for (int y = 0; y < nav->rows; y++) {
         for (int x = 0; x < nav->cols; x++) {
             int i = y * nav->cols + x;
             center[i] = v2(nav->origin.x + (x + 0.5f) * cell,
                            nav->origin.y + (y + 0.5f) * cell);
-            nav->open[i] = inside_any_shape_loop(level, center[i]) &&
-                           point_clear_of_cached(level, spans, center[i], radius);
+            clear_cell[i] =
+                point_clear_of_cached(level, spans, center[i], radius);
+            nav->open[i] = false;
+        }
+    }
+
+    /* A placed player is the strongest statement about where walking is
+       possible. Flood the clear cells connected to it, so a room assembled
+       from several open line and rectangle shapes is navigable even though
+       no single shape is a closed loop. Without a player, keep the closed or
+       geometric-loop room test used when choosing a placement. */
+    int player_cell = -1;
+    if (level->player_present) {
+        int px = (int)floorf((level->player_pos.x - nav->origin.x) / cell);
+        int py = (int)floorf((level->player_pos.y - nav->origin.y) / cell);
+        if (px >= 0 && py >= 0 && px < nav->cols && py < nav->rows) {
+            player_cell = py * nav->cols + px;
+        }
+    }
+    if (player_cell >= 0 && clear_cell[player_cell]) {
+        int head = 0;
+        int tail = 0;
+        nav->open[player_cell] = true;
+        queue[tail++] = player_cell;
+        static const int dx4[4] = { 1, -1, 0, 0 };
+        static const int dy4[4] = { 0, 0, 1, -1 };
+        while (head < tail) {
+            int i = queue[head++];
+            int x = i % nav->cols;
+            int y = i / nav->cols;
+            for (int d = 0; d < 4; d++) {
+                int nx = x + dx4[d];
+                int ny = y + dy4[d];
+                if (nx < 0 || ny < 0 || nx >= nav->cols ||
+                    ny >= nav->rows) {
+                    continue;
+                }
+                int j = ny * nav->cols + nx;
+                if (nav->open[j] || !clear_cell[j]) continue;
+                if (!edge_clear_of_cached(level, spans, center[i], center[j],
+                                          radius)) {
+                    continue;
+                }
+                nav->open[j] = true;
+                queue[tail++] = j;
+            }
+        }
+    } else {
+        for (int i = 0; i < total; i++) {
+            nav->open[i] = clear_cell[i] &&
+                           inside_any_shape_loop(level, center[i]);
         }
     }
     for (int y = 0; y < nav->rows; y++) {
