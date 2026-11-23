@@ -18,6 +18,23 @@
 #include <string.h>
 #include <sys/stat.h>
 
+/* PNG, JPEG, BMP, TGA, GIF, and the other stb formats are decoded in-process
+   so the onion-skin image needs no external tool. */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wtype-limits"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_FAILURE_USERMSG
+#include "../vendor/stb/stb_image.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #define PANEL_LEFT_W 190.0f
 #define PANEL_RIGHT_W 300.0f
 #define FLOOR_MAX 3
@@ -104,6 +121,7 @@ typedef enum {
     MODAL_OPEN,
     MODAL_SAVE_AS,
     MODAL_HELP,
+    MODAL_IMAGE,
 } Modal;
 
 typedef enum {
@@ -223,6 +241,21 @@ struct Editor {
        -1 hides it. onion_alpha scales every onion line's opacity. */
     int onion_floor;
     float onion_alpha;
+    /* One external image can be skinned under the active floor at the same
+       time as the floor skin. The image is fitted to the floor bounds. */
+    bool image_onion_on;
+    float image_onion_alpha;
+    char image_onion_path[512];
+    int image_onion_w;
+    int image_onion_h;
+    sg_image image_onion_image;
+    sg_view image_onion_view;
+    sg_sampler image_onion_sampler;
+    ImTextureID image_onion_texture;
+    /* A replaced texture stays alive until the next frame, after the draw
+       list recorded with it has been submitted. */
+    sg_image image_onion_retired_image;
+    sg_view image_onion_retired_view;
     /* Which floor owns the single player marker. The marker lives only in
        that floor's Level, so viewing another floor never shows the player. */
     int player_floor;
@@ -263,6 +296,7 @@ struct Editor {
 
     char current_path[512];
     char path_buf[512];
+    char image_path_buf[512];
     char status[512];
     bool status_error;
     Modal modal;
@@ -425,6 +459,159 @@ static bool primary_anchor(const Editor* e, Vec2* out) {
 static bool mouse_available(ImVec2 p) {
     return isfinite(p.x) && isfinite(p.y) &&
            p.x > -0.5f * FLT_MAX && p.y > -0.5f * FLT_MAX;
+}
+
+/* The image skin is fitted inside the active floor's bounds, preserving its
+   aspect ratio, so selecting a reference image always puts it on screen. */
+static Rect image_onion_rect(const Editor* e) {
+    float iw = (float)e->image_onion_w;
+    float ih = (float)e->image_onion_h;
+    Rect b = level_bounds(&e->level);
+    float bw = b.max.x - b.min.x;
+    float bh = b.max.y - b.min.y;
+    if (bw < 1.0f || bh < 1.0f) {
+        /* An empty level has no bounds to fit into; show native pixels. */
+        Vec2 c = e->camera.center;
+        return (Rect){ v2(c.x - iw * 0.5f, c.y - ih * 0.5f),
+                       v2(c.x + iw * 0.5f, c.y + ih * 0.5f) };
+    }
+    float aspect = iw / ih;
+    float dw = bw;
+    float dh = bh;
+    if (bw / bh > aspect) {
+        dw = bh * aspect;
+    } else {
+        dh = bw / aspect;
+    }
+    Vec2 c = v2((b.min.x + b.max.x) * 0.5f, (b.min.y + b.max.y) * 0.5f);
+    return (Rect){ v2(c.x - dw * 0.5f, c.y - dh * 0.5f),
+                   v2(c.x + dw * 0.5f, c.y + dh * 0.5f) };
+}
+
+static const char* path_leaf(const char* path) {
+    const char* slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static void flush_retired_image_onion(Editor* e) {
+    if (e->image_onion_retired_view.id) {
+        sg_destroy_view(e->image_onion_retired_view);
+        e->image_onion_retired_view = (sg_view){ 0 };
+    }
+    if (e->image_onion_retired_image.id) {
+        sg_destroy_image(e->image_onion_retired_image);
+        e->image_onion_retired_image = (sg_image){ 0 };
+    }
+}
+
+static void retire_image_onion(Editor* e) {
+    flush_retired_image_onion(e);
+    e->image_onion_retired_view = e->image_onion_view;
+    e->image_onion_retired_image = e->image_onion_image;
+    e->image_onion_view = (sg_view){ 0 };
+    e->image_onion_image = (sg_image){ 0 };
+    e->image_onion_texture = 0;
+    e->image_onion_w = 0;
+    e->image_onion_h = 0;
+    e->image_onion_path[0] = '\0';
+    e->image_onion_on = false;
+}
+
+static void release_image_onion(Editor* e) {
+    retire_image_onion(e);
+    flush_retired_image_onion(e);
+}
+
+bool editor_load_onion_image(Editor* e, const char* path) {
+    if (!e || !path || !path[0]) return false;
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_set_flip_vertically_on_load(0);
+    unsigned char* pixels = stbi_load(path, &width, &height, &channels, 4);
+    if (!pixels) {
+        const char* why = stbi_failure_reason();
+        snprintf(e->modal_error, sizeof e->modal_error, "Could not load %s: %s",
+                 path, why ? why : "unknown image error");
+        set_status(e, true, "%s", e->modal_error);
+        return false;
+    }
+    if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        stbi_image_free(pixels);
+        snprintf(e->modal_error, sizeof e->modal_error,
+                 "Image is too large (maximum 8192 by 8192)");
+        set_status(e, true, "%s", e->modal_error);
+        return false;
+    }
+
+    sg_image_desc image_desc = { 0 };
+    image_desc.width = width;
+    image_desc.height = height;
+    image_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+    image_desc.data.ptr = pixels;
+    image_desc.data.size = (size_t)width * (size_t)height * 4u;
+    sg_image image = sg_make_image(&image_desc);
+    stbi_image_free(pixels);
+    if (!image.id || sg_query_image_state(image) == SG_RESOURCESTATE_FAILED) {
+        if (image.id) sg_destroy_image(image);
+        snprintf(e->modal_error, sizeof e->modal_error,
+                 "Could not upload the image texture");
+        set_status(e, true, "%s", e->modal_error);
+        return false;
+    }
+    sg_view_desc view_desc = { 0 };
+    view_desc.texture.image = image;
+    sg_view view = sg_make_view(&view_desc);
+    if (!view.id) {
+        sg_destroy_image(image);
+        snprintf(e->modal_error, sizeof e->modal_error,
+                 "Could not create the image texture view");
+        set_status(e, true, "%s", e->modal_error);
+        return false;
+    }
+
+    retire_image_onion(e);
+    e->image_onion_image = image;
+    e->image_onion_view = view;
+    e->image_onion_texture = (ImTextureID)simgui_imtextureid_with_sampler(
+        e->image_onion_view, e->image_onion_sampler);
+    e->image_onion_w = width;
+    e->image_onion_h = height;
+    snprintf(e->image_onion_path, sizeof e->image_onion_path, "%s", path);
+    e->image_onion_on = true;
+    e->image_path_buf[0] = '\0';
+    snprintf(e->image_path_buf, sizeof e->image_path_buf, "%s", path);
+    e->modal_error[0] = '\0';
+    set_status(e, false, "Image onion %s (%d x %d)", path_leaf(path), width,
+               height);
+    return true;
+}
+
+/* A native picker is optional; the path field in the modal always works. */
+static bool pick_image_path(char* out, size_t cap) {
+#if defined(__linux__)
+    const char* command =
+        "zenity --file-selection --title='Choose an onion-skin image' "
+        "--file-filter='Images | *.png *.jpg *.jpeg *.bmp *.tga *.gif *.psd *.hdr' "
+        "2>/dev/null";
+    FILE* pipe = popen(command, "r");
+    if (!pipe) return false;
+    char buffer[512];
+    size_t n = fread(buffer, 1, sizeof buffer - 1, pipe);
+    int status = pclose(pipe);
+    if (status != 0 || n == 0) return false;
+    buffer[n] = '\0';
+    while (n > 0 && (buffer[n - 1] == '\n' || buffer[n - 1] == '\r')) {
+        buffer[--n] = '\0';
+    }
+    if (n == 0 || n >= cap) return false;
+    memcpy(out, buffer, n + 1);
+    return true;
+#else
+    (void)out;
+    (void)cap;
+    return false;
+#endif
 }
 
 static float screen_dist(ImVec2 a, ImVec2 b) {
@@ -2190,6 +2377,30 @@ static void draw_labels_level(const Editor* e, const Level* level,
 
 static void draw_labels(const Editor* e) {
     draw_labels_level(e, &e->level, 1.0f);
+}
+
+/* The selected external image, fitted to the active floor. It draws under the
+   floor skin so both onions can be visible at once. */
+static void draw_image_onion(const Editor* e) {
+    if (e->play_mode || !e->image_onion_on || !e->image_onion_texture ||
+        e->image_onion_w <= 0 || e->image_onion_h <= 0) {
+        return;
+    }
+    float alpha = clampf(e->image_onion_alpha, 0.0f, 1.0f);
+    if (alpha <= 0.0f) return;
+    Rect r = image_onion_rect(e);
+    ImDrawList* dl = igGetWindowDrawList();
+    ImVec2 p1 = world_to_screen(e, r.min);
+    ImVec2 p2 = world_to_screen(e, v2(r.max.x, r.min.y));
+    ImVec2 p3 = world_to_screen(e, r.max);
+    ImVec2 p4 = world_to_screen(e, v2(r.min.x, r.max.y));
+    ImTextureRef tex = { 0 };
+    tex._TexID = e->image_onion_texture;
+    ImDrawList_AddImageQuadEx(dl, tex, p1, p2, p3, p4,
+                              (ImVec2){ 0, 0 }, (ImVec2){ 1, 0 },
+                              (ImVec2){ 1, 1 }, (ImVec2){ 0, 1 },
+                              col32a(0xffffff,
+                                     (unsigned)(alpha * 255.0f + 0.5f)));
 }
 
 /* A faint copy of the checked floor's linework, drawn under the active floor.
@@ -4243,6 +4454,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     ImDrawList_AddRectFilledEx(dl, v2_to_im(e->canvas.min), v2_to_im(e->canvas.max),
                                col32(CANVAS_BG), 0.0f, 0);
     draw_grid(e);
+    draw_image_onion(e);
     draw_onion_skin(e);
     draw_nav_hover(e);
     draw_shape_preview(e);
@@ -4451,9 +4663,43 @@ static void draw_left_panel(Editor* e) {
         default:
             break;
     }
+    if (!e->play_mode) {
+        igDummy((ImVec2){ 0.0f, 8.0f });
+        heading("Image onion");
+        if (e->image_onion_texture) {
+            igCheckbox("Show image", &e->image_onion_on);
+            igSetNextItemWidth(84.0f);
+            igSliderFloatEx("Opacity", &e->image_onion_alpha, 0.05f, 1.0f, "%.2f",
+                            0);
+            char image_note[640];
+            snprintf(image_note, sizeof image_note, "%s (%d x %d)",
+                     path_leaf(e->image_onion_path), e->image_onion_w,
+                     e->image_onion_h);
+            small_note(image_note);
+            if (igButtonEx("Replace image...", (ImVec2){ -FLT_MIN, 24.0f })) {
+                e->request_modal = MODAL_IMAGE;
+                e->modal_error[0] = '\0';
+                if (e->image_onion_path[0]) {
+                    snprintf(e->image_path_buf, sizeof e->image_path_buf, "%s",
+                             e->image_onion_path);
+                }
+            }
+            if (igButtonEx("Clear image", (ImVec2){ -FLT_MIN, 24.0f })) {
+                release_image_onion(e);
+                set_status(e, false, "Image onion cleared");
+            }
+        } else {
+            if (igButtonEx("Load image...", (ImVec2){ -FLT_MIN, 24.0f })) {
+                e->request_modal = MODAL_IMAGE;
+                e->modal_error[0] = '\0';
+                e->image_path_buf[0] = '\0';
+            }
+            small_note("Pick a PNG, JPEG, BMP, TGA, or GIF, or drop one on the window.");
+        }
+    }
     if (e->floor_count > 1 && !e->play_mode) {
         igDummy((ImVec2){ 0.0f, 8.0f });
-        heading("Onion skin");
+        heading("Floor onion");
         if (e->onion_floor >= 0 && e->onion_floor < e->floor_count) {
             igText("Showing %s under %s", FLOOR_LABELS[e->onion_floor],
                    FLOOR_LABELS[e->floor_index]);
@@ -4775,6 +5021,7 @@ static const char* modal_name(Modal m) {
         case MODAL_OPEN: return "Open level";
         case MODAL_SAVE_AS: return "Save level as";
         case MODAL_HELP: return "Controls";
+        case MODAL_IMAGE: return "Image onion skin";
         case MODAL_NONE:
         default: return "";
     }
@@ -4838,6 +5085,11 @@ static void draw_help_modal(Editor* e) {
     igText("Enter closes a wall chain.");
     igBullet();
     igText("Backspace removes the last chain wall.");
+    igText("Onion skins");
+    igBullet();
+    igText("Load an image in the left panel or drop one on the window.");
+    igBullet();
+    igText("Check a box beside a floor tab to overlay that floor.");
     igText("File");
     igBullet();
     igText("Ctrl+S save, Ctrl+Shift+S save as.");
@@ -4888,6 +5140,46 @@ static void draw_modals(Editor* e) {
         }
         if (e->modal == MODAL_HELP) {
             draw_help_modal(e);
+        } else if (e->modal == MODAL_IMAGE) {
+            igText("Choose an image file");
+            if (e->path_focus) igSetKeyboardFocusHere();
+            ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
+            if (e->path_focus) input_flags |= ImGuiInputTextFlags_AutoSelectAll;
+            igSetNextItemWidth(360.0f);
+            bool enter = igInputText("Path", e->image_path_buf,
+                                     sizeof e->image_path_buf, input_flags);
+            e->path_focus = false;
+#if defined(__linux__)
+            if (igButtonEx("Browse...", (ImVec2){ 120.0f, 28.0f })) {
+                char picked[512];
+                if (pick_image_path(picked, sizeof picked)) {
+                    snprintf(e->image_path_buf, sizeof e->image_path_buf, "%s",
+                             picked);
+                    if (editor_load_onion_image(e, picked)) {
+                        igCloseCurrentPopup();
+                        e->modal = MODAL_NONE;
+                    }
+                }
+            }
+            igSameLineEx(0.0f, 6.0f);
+#endif
+            if (e->modal_error[0]) {
+                igTextColored(v4c(ERROR_COL, 1.0f), "%s", e->modal_error);
+            }
+            igDummy((ImVec2){ 0.0f, 4.0f });
+            bool do_action = enter;
+            if (igButtonEx("Load", (ImVec2){ 120.0f, 28.0f })) do_action = true;
+            igSameLineEx(0.0f, 6.0f);
+            if (igButtonEx("Cancel", (ImVec2){ 100.0f, 28.0f })) {
+                igCloseCurrentPopup();
+                e->modal = MODAL_NONE;
+            }
+            if (do_action && e->modal != MODAL_NONE) {
+                if (editor_load_onion_image(e, e->image_path_buf)) {
+                    igCloseCurrentPopup();
+                    e->modal = MODAL_NONE;
+                }
+            }
         } else if (e->modal == MODAL_OPEN || e->modal == MODAL_SAVE_AS) {
             igText("%s", e->modal == MODAL_OPEN ? "Open a level file" : "Save the level to a path");
             if (e->path_focus) igSetKeyboardFocusHere();
@@ -5281,6 +5573,8 @@ Editor* editor_create(const char* startup_path) {
     e->player_floor = -1;
     e->onion_floor = -1;
     e->onion_alpha = 0.25f;
+    e->image_onion_on = false;
+    e->image_onion_alpha = 0.35f;
     history_reset(&e->floor_history[e->floor_index], &e->level);
 
     e->camera.center = v2(0.0f, 0.0f);
@@ -5323,6 +5617,7 @@ Editor* editor_create(const char* startup_path) {
     e->player_sampler = sg_make_sampler(&sampler_desc);
     e->player_texture = (ImTextureID)simgui_imtextureid_with_sampler(
         e->player_view, e->player_sampler);
+    e->image_onion_sampler = sg_make_sampler(&sampler_desc);
     snprintf(e->current_path, sizeof e->current_path, "%s", "levels/re2-library.lvl");
     snprintf(e->path_buf, sizeof e->path_buf, "%s", e->current_path);
 
@@ -5412,6 +5707,10 @@ Editor* editor_create(const char* startup_path) {
 
 void editor_destroy(Editor* e) {
     if (!e) return;
+    release_image_onion(e);
+    if (e->image_onion_sampler.id) {
+        sg_destroy_sampler(e->image_onion_sampler);
+    }
     if (e->player_sampler.id) sg_destroy_sampler(e->player_sampler);
     if (e->player_view.id) sg_destroy_view(e->player_view);
     if (e->player_image.id) sg_destroy_image(e->player_image);
@@ -5421,6 +5720,7 @@ void editor_destroy(Editor* e) {
 
 void editor_frame(Editor* e) {
     if (!e) return;
+    flush_retired_image_onion(e);
     ImGuiIO* io = igGetIO();
     e->display_w = io->DisplaySize.x;
     e->display_h = io->DisplaySize.y;

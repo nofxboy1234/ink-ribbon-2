@@ -89,8 +89,13 @@ so it is clickable in edit and play mode, and canvas input is skipped while the
 pointer is over it. In edit mode each tab also carries an onion-skin checkbox.
 `Editor.onion_floor` holds at most one floor; `draw_onion_skin` reads
 that floor's `Level` before the active level and scales every wall,
-tread, door, and label by `Editor.onion_alpha`. The checkboxes and skin are
-edit-mode only.
+tread, door, and label by `Editor.onion_alpha`.
+
+A second, independent skin comes from an external file. `editor_load_onion_image`
+decodes it with stb_image and uploads an RGBA8 texture; `draw_image_onion` fits
+that texture inside `level_bounds` of the active floor and draws it below the
+floor skin. The image has its own opacity, show toggle, and path, so one image
+and one floor skin can be visible together. Both skins are edit-mode only.
 
 The three files use one world coordinate system. `tools/gen_floor_maps.py`
 traces 1F and 2F in their own screenshot pixels and applies the measured

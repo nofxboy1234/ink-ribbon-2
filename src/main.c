@@ -109,6 +109,16 @@ static void cleanup(void) {
 }
 
 static void input(const sapp_event* ev) {
+    if (editor && ev->type == SAPP_EVENTTYPE_FILES_DROPPED) {
+        int count = sapp_get_num_dropped_files();
+        for (int i = 0; i < count; i++) {
+            const char* path = sapp_get_dropped_file_path(i);
+            if (path && path[0]) {
+                editor_load_onion_image(editor, path);
+                break;
+            }
+        }
+    }
     simgui_handle_event(ev);
 }
 
@@ -129,6 +139,9 @@ sapp_desc sokol_main(int argc, char* argv[]) {
         .window_title = "Ink Ribbon Level Editor",
         .width = 1280,
         .height = 800,
+        .enable_dragndrop = true,
+        .max_dropped_files = 4,
+        .max_dropped_file_path_length = 4096,
         .logger.func = slog_func,
     };
 }

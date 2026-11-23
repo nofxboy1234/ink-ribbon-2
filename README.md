@@ -94,9 +94,15 @@ selector never covers a wing.
 In edit mode each floor tab has a checkbox on its left. Checking one draws that
 floor's walls, doors, stairs, and labels as an onion skin under the active
 floor. Only one floor can be checked; checking another moves the skin, and
-clicking the checked box clears it. The **Onion skin** opacity slider in the
-left panel scales the skin. Both the checkboxes and the skin are hidden in play
-mode.
+clicking the checked box clears it. The **Floor onion** opacity slider in the
+left panel scales it.
+
+The **Image onion** section loads an external image and draws it under the
+current floor, fitted to that floor's bounds with its own opacity and **Show
+image** toggle. Choose a PNG, JPEG, BMP, TGA, or GIF through the path dialog,
+the native **Browse...** picker when available, or by dropping a file on the
+window. The image skin and the floor skin are independent, so both can be
+visible at once. Both onion layers are hidden in play mode.
 
 Each floor is a complete `Level` with its own undo history, so undo never
 crosses a floor. Ctrl+S writes every loaded floor back to its file; Save As
