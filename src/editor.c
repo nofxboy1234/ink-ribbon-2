@@ -1132,6 +1132,7 @@ static void player_command(Editor* e, Vec2 world) {
     Vec2 target_pos = nav_cell_center(&e->nav, target);
     if (!e->level.player_present) {
         level_place_player(&e->level, target_pos, 0.0f);
+        e->player_floor = e->floor_index;
         e->follow_player = true;
         e->camera.center = target_pos;
         set_status(e, false, "Player placed");
@@ -1297,9 +1298,19 @@ static void place_player_click(Editor* e, Vec2 world) {
     set_status(e, false, "Player placed");
 }
 
-static void update_waypoint_progress(Editor* e) {
+/* The player keeps moving on the floor that owns it, even while another floor
+   is being viewed. The active document is only used when it is that floor. */
+static Level* player_move_level(Editor* e) {
+    if (e->player_floor >= 0 && e->player_floor < e->floor_count &&
+        e->player_floor != e->floor_index) {
+        return &e->floor_levels[e->player_floor];
+    }
+    return &e->level;
+}
+
+static void update_waypoint_progress(Editor* e, Level* level) {
     while (e->player_waypoint_count > 0 &&
-           v2_dist(e->level.player_pos, e->player_waypoints[0]) < 1.2f) {
+           v2_dist(level->player_pos, e->player_waypoints[0]) < 1.2f) {
         for (int i = 1; i < e->player_waypoint_count; i++) {
             e->player_waypoints[i - 1] = e->player_waypoints[i];
         }
@@ -1309,15 +1320,16 @@ static void update_waypoint_progress(Editor* e) {
 }
 
 static void update_player(Editor* e, float dt) {
-    if (!e->play_mode || !e->level.player_present || !e->player_moving) return;
+    if (!e->play_mode || !e->player_moving) return;
     if (dt <= 0.0f) return;
     if (dt > 0.05f) dt = 0.05f;
-    if (!e->nav_ready || e->player_path_count <= 0) {
+    Level* level = player_move_level(e);
+    if (!level->player_present || e->player_path_count <= 0) {
         e->player_moving = false;
         return;
     }
-    Vec2 pos = e->level.player_pos;
-    float heading = e->level.player_heading;
+    Vec2 pos = level->player_pos;
+    float heading = level->player_heading;
     while (e->player_path_index < e->player_path_count &&
            v2_dist(pos, e->player_path[e->player_path_index]) < 0.6f) {
         e->player_path_index++;
@@ -1367,9 +1379,9 @@ static void update_player(Editor* e, float dt) {
             }
         }
     }
-    e->level.player_pos = pos;
-    e->level.player_heading = heading;
-    update_waypoint_progress(e);
+    level->player_pos = pos;
+    level->player_heading = heading;
+    update_waypoint_progress(e, level);
 }
 
 static void update_camera(Editor* e, float dt) {
@@ -5094,11 +5106,6 @@ static bool enter_floor(Editor* e, int index) {
     snprintf(e->path_buf, sizeof e->path_buf, "%s", e->floor_paths[index]);
 
     e->nav_ready = false;
-    e->player_moving = false;
-    e->player_pivot = false;
-    e->player_path_count = 0;
-    e->player_path_index = 0;
-    e->player_waypoint_count = 0;
     e->preview_count = 0;
     e->camera_pan_active = false;
 

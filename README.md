@@ -83,7 +83,10 @@ matching the in-game map screen. Click a tab to swap the active floor in edit or
 play mode. The camera position and zoom level are kept, so the south-east
 stairwell stays over the same parchment position while you compare floors.
 Returning to the player's floor keeps that pan too; the camera recentres only
-when the player starts moving or `C` is pressed. With several floors loaded,
+when the player starts moving or `C` is pressed. Changing the viewed floor does
+not stop a walk: the player keeps advancing on the floor that owns it while
+another floor is shown, and the new position appears when you return. With
+several floors loaded,
 **F** fits their union, so every floor is drawn at the same scale and the
 selector never covers a wing.
 

@@ -103,9 +103,12 @@ The player marker is owned by one floor (`Editor.player_floor`) and stored only
 in that floor's `Level`. Switching the viewed floor only swaps documents; it
 does not copy or move the player, so the marker is never shown on a floor the
 player has not reached. The only way to move ownership is the explicit Place
-player action. In play mode a click on a floor that does not own the player is
-refused with the owner floor's name; the camera fits the viewed floor instead
-of staying parked on the player elsewhere.
+player action. A walk belongs to the owning floor too: while another floor is
+viewed the player keeps advancing in that floor's stored `Level`, and the
+active document catches up when the player's floor is shown again. In play mode
+a click on a floor that does not own the player is refused with the owner
+floor's name; the camera fits the viewed floor instead of staying parked on the
+player elsewhere.
 
 Reference linework that is not a collision boundary - balcony rails, counters,
 shelving - is stored as a detail wall: an optional trailing `1` on the wall
