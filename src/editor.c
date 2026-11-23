@@ -219,6 +219,9 @@ struct Editor {
     bool floor_loaded[FLOOR_MAX];
     int floor_count;
     int floor_index;
+    /* Which floor owns the single player marker. The marker lives only in
+       that floor's Level, so viewing another floor never shows the player. */
+    int player_floor;
     Camera camera;
     Rect canvas;
     float menu_height;
@@ -1049,6 +1052,9 @@ static void set_play_mode(Editor* e, bool on) {
             }
             recenter_player_camera(e);
             set_status(e, false, "Play mode: click waypoints; double-click to walk");
+        } else if (e->player_floor >= 0 && e->player_floor != e->floor_index) {
+            set_status(e, false, "Player is on %s; use the stairs",
+                       FLOOR_LABELS[e->player_floor]);
         } else {
             set_status(e, false, "Play mode: click to place the player");
         }
@@ -1105,6 +1111,12 @@ static bool start_player_vec_path(Editor* e, const Vec2* pts, int count) {
 }
 
 static void player_command(Editor* e, Vec2 world) {
+    if (!e->level.player_present && e->player_floor >= 0 &&
+        e->player_floor != e->floor_index) {
+        set_status(e, true, "Player is on %s; use the stairs",
+                   FLOOR_LABELS[e->player_floor]);
+        return;
+    }
     if (!e->nav_ready) {
         e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
                                  PLAYER_RADIUS);
@@ -1226,6 +1238,12 @@ static void execute_waypoints(Editor* e) {
 }
 
 static void player_click_play(Editor* e, Vec2 world, bool double_click) {
+    if (!e->level.player_present && e->player_floor >= 0 &&
+        e->player_floor != e->floor_index) {
+        set_status(e, true, "Player is on %s; use the stairs",
+                   FLOOR_LABELS[e->player_floor]);
+        return;
+    }
     if (!e->nav_ready) {
         e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
                                  PLAYER_RADIUS);
@@ -1270,6 +1288,10 @@ static void place_player_click(Editor* e, Vec2 world) {
         set_status(e, true, "Could not place the player");
         return;
     }
+    if (e->player_floor >= 0 && e->player_floor != e->floor_index) {
+        e->floor_levels[e->player_floor].player_present = false;
+    }
+    e->player_floor = e->floor_index;
     e->player_place_pending = false;
     e->follow_player = false;
     commit(e, "Player placed");
@@ -1312,9 +1334,30 @@ static void try_stair_transition(Editor* e, Vec2 from, Vec2 to) {
         char message[96];
         snprintf(message, sizeof message, "Stairs %s to %s",
                  going_down ? "down" : "up", FLOOR_LABELS[target]);
+        Vec2 landing = e->level.player_pos;
+        float heading = e->level.player_heading;
+        e->level.player_present = false;
         if (enter_floor(e, target)) {
+            e->player_floor = target;
+            e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                     PLAYER_RADIUS);
+            if (e->nav_ready) {
+                int cell = nav_cell_at_world(&e->nav, landing);
+                int open = nav_nearest_open_cell(&e->nav, cell, 4);
+                if (open >= 0) landing = nav_cell_center(&e->nav, open);
+            }
+            e->level.player_present = true;
+            e->level.player_pos = landing;
+            e->level.player_heading = heading;
+            e->follow_player = true;
+            e->camera.center = landing;
             e->stair_cooldown = 0.25f;
             set_status(e, false, "%s", message);
+        } else {
+            /* The target floor could not be entered; keep the player here. */
+            e->level.player_present = true;
+            e->level.player_pos = landing;
+            e->level.player_heading = heading;
         }
         return;
     }
@@ -1731,6 +1774,7 @@ static void new_level(Editor* e) {
     e->floor_count = 1;
     e->floor_index = 0;
     e->floor_loaded[0] = true;
+    e->player_floor = -1;
     level_init(&e->level);
     history_reset(&e->floor_history[e->floor_index], &e->level);
     sel_clear(e);
@@ -1775,6 +1819,7 @@ static bool open_level(Editor* e, const char* path) {
     e->floor_count = 1;
     e->floor_index = 0;
     e->floor_loaded[0] = true;
+    e->player_floor = e->level.player_present ? 0 : -1;
     snprintf(e->floor_paths[0], sizeof e->floor_paths[0], "%s", path);
     history_reset(&e->floor_history[e->floor_index], &e->level);
     reset_player_runtime(e);
@@ -2241,6 +2286,7 @@ static void draw_player_path(const Editor* e) {
 
 static void draw_player(const Editor* e) {
     if (!e->level.player_present || !e->player_texture) return;
+    if (e->player_floor >= 0 && e->player_floor != e->floor_index) return;
     ImDrawList* dl = igGetWindowDrawList();
     Vec2 pos = e->level.player_pos;
     float heading = e->level.player_heading;
@@ -5095,9 +5141,6 @@ static bool enter_floor(Editor* e, int index) {
     span_clear(e);
 
     bool was_play = e->play_mode;
-    bool had_player = e->level.player_present;
-    Vec2 player_pos = e->level.player_pos;
-    float player_heading = e->level.player_heading;
 
     sync_active_floor(e);
     e->floor_index = index;
@@ -5114,26 +5157,18 @@ static bool enter_floor(Editor* e, int index) {
     e->preview_count = 0;
     e->camera_pan_active = false;
 
-    if (was_play && had_player) {
-        /* Keep the player at the same world position on the new floor. The
-           floors share one coordinate system, so a stair landing is directly
-           above or below the matching landing. */
-        int cell = -1;
+    /* Viewing a floor never moves the player. Only a stair transition or an
+       explicit Place player action changes player_floor. */
+    if (was_play && e->player_floor == index && e->level.player_present) {
         e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
                                  PLAYER_RADIUS);
-        if (e->nav_ready) {
-            cell = nav_cell_at_world(&e->nav, player_pos);
-            int open = nav_nearest_open_cell(&e->nav, cell, 4);
-            if (open >= 0) {
-                e->level.player_present = true;
-                e->level.player_pos = nav_cell_center(&e->nav, open);
-                e->level.player_heading = player_heading;
-                e->follow_player = true;
-                e->camera.center = e->level.player_pos;
-            }
-        }
+        e->follow_player = true;
+        e->camera.center = e->level.player_pos;
     } else {
         e->follow_player = false;
+        /* Viewing a floor the player is not on should show that whole floor,
+           not keep the camera parked at the player's position elsewhere. */
+        if (was_play) e->fit_pending = true;
     }
     set_status(e, false, "Floor %s", FLOOR_LABELS[index]);
     return true;
@@ -5176,6 +5211,7 @@ Editor* editor_create(const char* startup_path) {
     e->floor_count = 1;
     e->floor_index = 0;
     e->floor_loaded[0] = true;
+    e->player_floor = -1;
     history_reset(&e->floor_history[e->floor_index], &e->level);
 
     e->camera.center = v2(0.0f, 0.0f);
@@ -5251,6 +5287,17 @@ Editor* editor_create(const char* startup_path) {
                 set_status(e, true, "Floor load failed: %s", err.message);
             }
         }
+        e->player_floor = -1;
+        for (int i = 0; i < FLOOR_MAX; i++) {
+            if (e->floor_loaded[i] && e->floor_levels[i].player_present) {
+                e->player_floor = i;
+                break;
+            }
+        }
+        /* A player record belongs to exactly one floor. */
+        for (int i = 0; i < FLOOR_MAX; i++) {
+            if (i != e->player_floor) e->floor_levels[i].player_present = false;
+        }
         e->floor_index = FLOOR_DEFAULT;
         e->level = e->floor_levels[FLOOR_DEFAULT];
         snprintf(e->current_path, sizeof e->current_path, "%s",
@@ -5261,6 +5308,7 @@ Editor* editor_create(const char* startup_path) {
         LevelError err;
         if (level_load(&e->level, path, &err)) {
             loaded = true;
+            e->player_floor = e->level.player_present ? 0 : -1;
             snprintf(e->current_path, sizeof e->current_path, "%s", path);
             snprintf(e->path_buf, sizeof e->path_buf, "%s", path);
             snprintf(e->floor_paths[0], sizeof e->floor_paths[0], "%s", path);

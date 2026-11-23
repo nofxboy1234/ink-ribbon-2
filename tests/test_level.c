@@ -1831,6 +1831,8 @@ static void test_floors(void) {
     check(load_floor("levels/re2-library-1f.lvl", &f1), "loads the 1F floor");
     check(load_floor("levels/re2-library-2f.lvl", &f2), "loads the 2F floor");
     check(load_floor("levels/re2-library.lvl", &f3), "loads the 3F floor");
+    check(!f1.player_present && !f2.player_present && f3.player_present,
+          "only the 3F document owns the player marker");
 
     Level* floors[3] = { &f1, &f2, &f3 };
     for (int fi = 0; fi < 3; fi++) {
@@ -1838,8 +1840,11 @@ static void test_floors(void) {
         NavGrid* nav = malloc(sizeof(NavGrid));
         check(nav && nav_build(nav, level, NAV_CELL_SIZE, 3.2f),
               "floor nav grid builds");
-        int start = nav_cell_at_world(nav, level->player_pos);
-        check(nav_cell_is_open(nav, start), "floor player starts on a walkable cell");
+        Vec2 start_pos = level->player_present ? level->player_pos
+                                               : v2(fi == 1 ? -300.0f : -280.0f,
+                                                    0.0f);
+        int start = nav_cell_at_world(nav, start_pos);
+        check(nav_cell_is_open(nav, start), "floor start cell is walkable");
         int reachable = 0;
         int wanted = level->stairs_count;
         for (int i = 0; i < wanted; i++) {

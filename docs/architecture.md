@@ -101,6 +101,15 @@ ascends one floor. The player stops on the new floor at the same world
 position, snapped to the nearest open nav cell, so the matching landing is
 directly above or below.
 
+The player marker is owned by one floor (`Editor.player_floor`) and stored only
+in that floor's `Level`. Switching the viewed floor only swaps documents; it
+does not copy or move the player, so the marker is never shown on a floor the
+player has not reached. A stair transition clears the old floor's player record
+before entering the target, then writes the landing into the target and updates
+`player_floor`. In play mode a click on a floor that does not own the player is
+refused with the owner floor's name; the camera fits the viewed floor instead
+of staying parked on the player elsewhere.
+
 The reference has open passages that are not white door bars. A door record may
 carry a sixth `hidden` field; the nav grid cuts the wall there, but the editor
 neither draws nor hit-tests it. Visible doors omit the field or write 0, so old

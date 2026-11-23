@@ -91,13 +91,16 @@ writes the active floor. A floor set is detected at startup when the two
 companion files exist beside `levels/re2-library.lvl`; any other `--level` path
 keeps the original single-level behavior.
 
-In play mode the player keeps its world position when you click a floor tab.
-Walking through a stair run also changes floors: the tread fade marks the bottom
-of the run, so moving toward the bottom goes down one floor and moving toward
-the top goes up one. The three floors use the same rectangles for the west
+The player belongs to exactly one floor. Clicking a floor tab only changes the
+view: the marker is drawn on the floor that owns it and is absent everywhere
+else, and the camera fits the viewed floor when the player is elsewhere.
+Walking through a stair run changes floors: the tread fade marks the bottom of
+the run, so moving toward the bottom goes down one floor and moving toward the
+top goes up one. The three floors use the same rectangles for the west
 stairwell, the main-hall flights, the library stair, and the east stair, so a
-landing is directly above or below its neighbour. The player lands at the same
-world position on the new floor.
+landing is directly above or below its neighbour. The player is placed at the
+same world position on the new floor, and only that floor then holds the
+marker. **Place player** in edit mode moves ownership to the current floor.
 
 Level files may carry navigation-only openings as a sixth door field:
 `door 0 <wall> <t> <width> 1`. The reference has archways and open room passages
