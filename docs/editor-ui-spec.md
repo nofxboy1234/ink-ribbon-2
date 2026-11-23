@@ -83,7 +83,7 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 
 ## Rectangle
 
-Drag an axis-aligned rectangle. Both corners snap to the current grid on press and release whether or not Snap is on, because a rectangle is a grid cell and its outline is what later rectangles join. A drag under one grid cell on either axis is rejected and does not complete an action.
+Drag an axis-aligned rectangle. Both corners follow the Snap setting on press, during the drag, and on release: with Snap on they land on the grid, and with Snap off they stay free. With Snap on a drag under one grid cell on either axis is rejected; with Snap off the minimum is `RECT_MIN_SIZE`.
 
 On release the rectangle tries to join a closed shape. Candidate shapes are examined from newest to oldest, and only shapes whose bounds overlap the rectangle are tried. `level_union_rect` returns:
 

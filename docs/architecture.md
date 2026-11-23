@@ -143,7 +143,8 @@ the tool to Select unless Q is held. The Q lock row in the left panel shows the
 held state. One action is a closed chain, a completed rectangle or stair drag, a
 placed door, or a placed label. An open chain is not an action.
 
-The Rectangle tool always snaps to the grid. The Door tool replaced the
+The Rectangle tool follows the Snap setting on press, preview, and release.
+The Door tool replaced the
 marquee and context menu: the wall under the pointer projects a snapped centre
 and draws a ghost bar at the panel width, and a click places the door. The
 Stairs tool replaced the marquee box: a drag becomes a run with the panel's
@@ -166,7 +167,8 @@ labels and stairs. `GESTURE_VERTEX` starts within 7 screen pixels of a wall
 endpoint and calls `level_move_vertex` on each drag step. A door stores a wall id and a normalized position, so it
 follows its host wall and cannot be translated independently.
 
-Snap applies to placement, reshaping, and label, stair, door, and group drags.
+Snap applies to placement, rectangle draws, reshaping, and label, stair, door,
+and group drags.
 Group drags snap from the primary object's anchor so relative spacing is
 preserved. The Snap checkbox and grid size remain user controls.
 

@@ -63,6 +63,9 @@ static const char* FLOOR_LABELS[FLOOR_MAX] = { "1F", "2F", "3F" };
 #define PLAYER_RADIUS 3.2f
 #define PLAYER_SPRITE_WORLD 12.0f
 #define PLAYER_MAX_WAYPOINTS 32
+/* With Snap off a rectangle only has to be big enough to make four real
+   walls; the one-cell rule applies only when the grid is active. */
+#define RECT_MIN_SIZE 1.0f
 /* One look means a near-black canvas and white lines. A wall and a stair
    tread draw at the same faint alpha, and nothing is ever filled. */
 #define CANVAS_BG 0x040404
@@ -3800,13 +3803,12 @@ static void cancel_transient(Editor* e) {
 
 /* ---- Rectangle and Stairs tools --------------------------------------- */
 
-/* The Rectangle tool snaps its corners to the grid whether or not Snap is on.
-   A rectangle is a grid cell, and its outline is what later rectangles join. */
+/* The Rectangle tool follows the same Snap setting as every other tool. */
 static void begin_rect_drag(Editor* e, Vec2 world, ImVec2 mouse) {
     Gesture* g = &e->gesture;
     cancel_gesture(e);
     g->kind = GESTURE_RECT_DRAW;
-    g->press_world = snap_grid(world, e->grid_size);
+    g->press_world = snapped(e, world);
     g->cur_world = g->press_world;
     g->press_screen = v2(mouse.x, mouse.y);
     set_status(e, false, "Drag a rectangle");
@@ -3836,13 +3838,15 @@ static void finish_rect_drag(Editor* e, bool have_pointer) {
     Gesture* g = &e->gesture;
     if (g->kind != GESTURE_RECT_DRAW) return;
     if (have_pointer) {
-        g->cur_world =
-            snap_grid(screen_to_world(e, igGetIO()->MousePos), e->grid_size);
+        g->cur_world = snapped(e, screen_to_world(e, igGetIO()->MousePos));
     }
     Vec2 a = g->press_world;
     Vec2 b = g->cur_world;
-    if (fabsf(b.x - a.x) < e->grid_size || fabsf(b.y - a.y) < e->grid_size) {
-        set_status(e, true, "Rectangle needs one grid cell on each axis");
+    float min_size = e->snap ? e->grid_size : RECT_MIN_SIZE;
+    if (fabsf(b.x - a.x) < min_size || fabsf(b.y - a.y) < min_size) {
+        set_status(e, true,
+                   e->snap ? "Rectangle needs one grid cell on each axis"
+                           : "Rectangle is too small");
         cancel_gesture(e);
         return;
     }
@@ -3916,10 +3920,7 @@ static void update_shape_drag(Editor* e, bool have_pointer) {
         return;
     }
     if (have_pointer && igGetIO()->MouseDown[0]) {
-        g->cur_world =
-            (g->kind == GESTURE_STAIRS_DRAW ? snapped(e, screen_to_world(e, igGetIO()->MousePos))
-                                            : snap_grid(screen_to_world(e, igGetIO()->MousePos),
-                                                        e->grid_size));
+        g->cur_world = snapped(e, screen_to_world(e, igGetIO()->MousePos));
         return;
     }
     if (g->kind == GESTURE_STAIRS_DRAW) finish_stairs_drag(e, have_pointer);
