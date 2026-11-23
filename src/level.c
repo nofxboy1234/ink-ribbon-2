@@ -83,7 +83,7 @@ static int append_wall(Level* level, ShapeId shape, Vec2 a, Vec2 b) {
     if (!wall_ok(a, b)) return -1;
 
     int index = level->wall_count++;
-    level->walls[index] = (Wall){ level->next_wall_id++, shape, a, b, false };
+    level->walls[index] = (Wall){ level->next_wall_id++, shape, a, b, false, false };
     return index;
 }
 
@@ -1305,8 +1305,14 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
     }
     for (int i = 0; ok && i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
-        ok = fprintf(f, "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f\n",
-                     w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
+        if (w->detail) {
+            ok = fprintf(f,
+                         "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f 1\n",
+                         w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
+        } else {
+            ok = fprintf(f, "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f\n",
+                         w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
+        }
     }
     for (int i = 0; ok && i < level->door_count; i++) {
         const Door* d = &level->doors[i];
@@ -1462,8 +1468,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                 break;
             }
             if (!read_float(&save, &x1) || !read_float(&save, &y1) ||
-                !read_float(&save, &x2) || !read_float(&save, &y2) ||
-                next_token(&save)) {
+                !read_float(&save, &x2) || !read_float(&save, &y2)) {
                 ok = fail_line(err, line_no, "malformed wall record");
                 break;
             }
@@ -1488,8 +1493,13 @@ bool level_load(Level* level, const char* path, LevelError* err) {
                                zero ? "zero-length wall" : "non-orthogonal wall");
                 break;
             }
+            int detail = 0;
+            char* extra = next_token(&save);
+            int detail_flag = 0;
+            if (extra && parse_int(extra, &detail_flag)) detail = detail_flag;
             wall_lines[tmp.wall_count] = line_no;
-            tmp.walls[tmp.wall_count++] = (Wall){ id, shape, a, b, false };
+            tmp.walls[tmp.wall_count++] = (Wall){ id, shape, a, b, false,
+                                                  detail != 0 };
         } else if (strcmp(tag, "room") == 0) {
             /* Standalone room polygons were painted areas with a colour.
                They have no place in the empty look, so the record is read

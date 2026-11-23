@@ -41,6 +41,9 @@ typedef struct {
     ShapeId shape;
     Vec2 a, b;
     bool locked;
+    /* A drawn reference line that is not a collision wall: balcony rails,
+       counters, shelving outlines. It renders like a wall but nav ignores it. */
+    bool detail;
 } Wall;
 
 /* Doors are white and live on a wall: t is the centre parameter along the

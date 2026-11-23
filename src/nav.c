@@ -113,6 +113,7 @@ static bool edge_clear_of_walls(const Level* level, Vec2 a, Vec2 b,
     float t1[LEVEL_MAX_DOORS];
     for (int i = 0; i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
+        if (w->detail) continue;
         int n = wall_solid_spans(level, w, radius, t0, t1, LEVEL_MAX_DOORS);
         for (int k = 0; k < n; k++) {
             Vec2 c = segment_point(w->a, w->b, t0[k]);
@@ -212,6 +213,10 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
        made a dense multi-floor plan with dozens of doors take seconds. */
     static NavWallSpans spans[LEVEL_MAX_WALLS];
     for (int i = 0; i < level->wall_count; i++) {
+        if (level->walls[i].detail) {
+            spans[i].count = 0;
+            continue;
+        }
         spans[i].count = wall_solid_spans(level, &level->walls[i], radius,
                                           spans[i].t0, spans[i].t1,
                                           NAV_SPANS_PER_WALL);

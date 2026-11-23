@@ -102,6 +102,12 @@ landing is directly above or below its neighbour. The player is placed at the
 same world position on the new floor, and only that floor then holds the
 marker. **Place player** in edit mode moves ownership to the current floor.
 
+Reference linework that should draw without blocking movement is stored as a
+detail wall: an optional seventh field `1` on a `wall` record. The 1F balcony
+rails, counters and shelving outlines use it, so the plan keeps the reference's
+detail while the nav grid only sees real walls. Detail walls render like walls
+and are editable; they are simply skipped by collision and A*.
+
 Level files may carry navigation-only openings as a sixth door field:
 `door 0 <wall> <t> <width> 1`. The reference has archways and open room passages
 that are not white bars; they are stored so the 8-unit nav grid can pass through

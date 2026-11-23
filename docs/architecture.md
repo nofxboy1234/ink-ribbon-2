@@ -110,6 +110,11 @@ before entering the target, then writes the landing into the target and updates
 refused with the owner floor's name; the camera fits the viewed floor instead
 of staying parked on the player elsewhere.
 
+Reference linework that is not a collision boundary - balcony rails, counters,
+shelving - is stored as a detail wall: an optional trailing `1` on the wall
+record. The editor draws and edits it normally; `nav_build` skips it, so a
+railing adds visual detail without sealing a route.
+
 The reference has open passages that are not white door bars. A door record may
 carry a sixth `hidden` field; the nav grid cuts the wall there, but the editor
 neither draws nor hit-tests it. Visible doors omit the field or write 0, so old

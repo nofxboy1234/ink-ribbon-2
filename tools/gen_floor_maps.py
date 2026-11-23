@@ -54,7 +54,6 @@ FLOORS: dict[str, dict] = {
             [(352, 442), (426, 442), (426, 528), (352, 528)],
             # Main hall and its balcony railing.
             [(434, 235), (577, 235), (577, 552), (434, 552)],
-            [(455, 410), (526, 410), (526, 530), (455, 530)],
             # Entrance corridor and hall, one closed loop with the doorway in
             # the main-hall wall supplied by a door record.
             [(461, 552), (461, 627), (370, 627), (370, 696),
@@ -77,6 +76,22 @@ FLOORS: dict[str, dict] = {
             [(773, 169), (925, 169), (925, 254), (773, 254)],
             [(756, 194), (773, 194), (773, 254), (756, 254)],
             [(756, 254), (787, 254), (787, 382), (756, 382)],
+        ],
+        # Open reference lines that draw but do not collide: the main-hall
+        # balcony curve above the stair flights and the railing around the
+        # lower save-point platform.  Curves are stepped with the Line tool.
+        "detail_shapes": [
+            (False, [(465, 300), (478, 300), (478, 312), (492, 312),
+                     (492, 322), (505, 322), (505, 330), (520, 330),
+                     (520, 322), (533, 322), (533, 312), (547, 312),
+                     (547, 300)]),
+            (True, [(475, 410), (514, 410), (514, 420), (526, 420),
+                    (526, 520), (514, 520), (514, 530), (475, 530),
+                    (475, 520), (455, 520), (455, 420), (475, 420)]),
+            (True, [(157, 203), (250, 203), (250, 288), (157, 288)]),
+            (True, [(185, 420), (245, 420), (245, 500), (185, 500)]),
+            (True, [(350, 250), (405, 250), (405, 290), (350, 290)]),
+            (True, [(340, 380), (352, 380), (352, 442), (340, 442)]),
         ],
         # (x, y, horizontal, width) at the centre of the white door bar.
         "doors": [
@@ -151,7 +166,10 @@ FLOORS: dict[str, dict] = {
             [(320, 440), (462, 440), (462, 529), (320, 529)],
             # Main hall balcony.  The second loop is the open atrium outline.
             [(462, 232), (659, 232), (659, 552), (462, 552)],
-            [(522, 292), (602, 292), (602, 360), (634, 360),
+            [(522, 292), (535, 292), (535, 302), (548, 302), (548, 312),
+             (561, 312), (561, 320), (574, 320), (574, 312), (587, 312),
+             (587, 302), (600, 302), (600, 292), (602, 292), (602, 360),
+             (634, 360),
              (640, 360), (640, 470), (634, 470), (634, 520), (640, 520),
              (640, 552), (489, 552), (489, 520), (495, 520),
              (495, 470), (489, 470), (489, 360), (522, 360)],
@@ -169,6 +187,18 @@ FLOORS: dict[str, dict] = {
             [(802, 350), (882, 350), (882, 382), (802, 382)],
             [(820, 350), (882, 350), (882, 440), (820, 440)],
             [(659, 490), (750, 490), (750, 528), (659, 528)],
+        ],
+        # Shelving and locker outlines visible on the 2F map. These are
+        # non-colliding detail lines, like the 1F counters and rails.
+        "detail_shapes": [
+            (True, [(330, 300), (390, 300), (390, 330), (330, 330)]),
+            (True, [(410, 320), (455, 320), (455, 345), (410, 345)]),
+            (True, [(330, 390), (390, 390), (390, 420), (330, 420)]),
+            (True, [(415, 400), (455, 400), (455, 425), (415, 425)]),
+            (True, [(275, 295), (318, 295), (318, 330), (275, 330)]),
+            (True, [(250, 235), (315, 235), (315, 260), (250, 260)]),
+            (True, [(200, 460), (260, 460), (260, 500), (200, 500)]),
+            (True, [(700, 270), (780, 270), (780, 310), (700, 310)]),
         ],
         "doors": [
             (321, 240, False, 10),
@@ -380,6 +410,28 @@ def auto_connect_doors(walls, explicit_doors, floor):
     return doors
 
 
+
+def append_detail(lines: list[str], data, start_shape: int, start_wall: int,
+                  floor: str, source: bool) -> int:
+    """Append non-colliding reference lines as detail walls."""
+    sid = start_shape
+    wid = start_wall
+    ox, oy = (CENTRE if source else (0.0, 0.0))
+    for closed, loop in data.get("detail_shapes", []):
+        lines.append(f"shape {sid} {1 if closed else 0} 0")
+        count = len(loop) if closed else len(loop) - 1
+        for i in range(count):
+            a = world(floor, loop[i])
+            b = world(floor, loop[(i + 1) % len(loop)])
+            lines.append(
+                f"wall {wid} {sid} {a[0] + ox:.3f} {a[1] + oy:.3f} "
+                f"{b[0] + ox:.3f} {b[1] + oy:.3f} 1"
+            )
+            wid += 1
+        sid += 1
+    return wid
+
+
 def build_floor(floor: str) -> list[str]:
     data = FLOORS[floor]
     shapes, walls = floor_walls(floor, data["shapes"])
@@ -388,6 +440,7 @@ def build_floor(floor: str) -> list[str]:
         lines.append(f"shape {sid} {1 if closed else 0} 0")
     for wi, (sid, a, b) in enumerate(walls, start=1):
         lines.append(f"wall {wi} {sid} {a[0]:.3f} {a[1]:.3f} {b[0]:.3f} {b[1]:.3f}")
+    append_detail(lines, data, len(shapes) + 1, len(walls) + 1, floor, False)
     for wi, t, width, hidden in auto_connect_doors(walls, data["doors"], floor):
         lines.append(f"door 0 {wi} {t:.4f} {width:.3f} {hidden}")
     for x0, y0, x1, y1, direction, steps, bottom in data["stairs"]:
@@ -416,6 +469,7 @@ def build_source(floor: str) -> list[str]:
             f"wall {wi} {sid} {a[0] + CENTRE[0]:.3f} {a[1] + CENTRE[1]:.3f} "
             f"{b[0] + CENTRE[0]:.3f} {b[1] + CENTRE[1]:.3f}"
         )
+    append_detail(lines, data, len(shapes) + 1, len(walls) + 1, floor, True)
     for x, y, horizontal, width in data["doors"]:
         wi, t = host_door(walls, floor, x, y, horizontal)
         lines.append(f"door 0 {wi} {t:.4f} {max(width, 16.0):.3f} 0")
