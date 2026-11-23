@@ -83,7 +83,7 @@ static int append_wall(Level* level, ShapeId shape, Vec2 a, Vec2 b) {
     if (!wall_ok(a, b)) return -1;
 
     int index = level->wall_count++;
-    level->walls[index] = (Wall){ level->next_wall_id++, shape, a, b, false, false };
+    level->walls[index] = (Wall){ level->next_wall_id++, shape, a, b, false, false, false };
     return index;
 }
 
@@ -1309,6 +1309,10 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
             ok = fprintf(f,
                          "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f 1\n",
                          w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
+        } else if (w->nav_only) {
+            ok = fprintf(f,
+                         "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f 2\n",
+                         w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
         } else {
             ok = fprintf(f, "wall %" PRIu32 " %" PRIu32 " %.3f %.3f %.3f %.3f\n",
                          w->id, w->shape, w->a.x, w->a.y, w->b.x, w->b.y) >= 0;
@@ -1499,7 +1503,7 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             if (extra && parse_int(extra, &detail_flag)) detail = detail_flag;
             wall_lines[tmp.wall_count] = line_no;
             tmp.walls[tmp.wall_count++] = (Wall){ id, shape, a, b, false,
-                                                  detail != 0 };
+                                                  detail == 1, detail == 2 };
         } else if (strcmp(tag, "room") == 0) {
             /* Standalone room polygons were painted areas with a colour.
                They have no place in the empty look, so the record is read

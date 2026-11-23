@@ -20,6 +20,8 @@ usage:
 from __future__ import annotations
 
 import argparse
+import json
+import os
 
 CENTRE = (393.0, 246.5)
 
@@ -28,6 +30,17 @@ OFFSETS = {
     "1f": (83.0, 121.0),
     "2f": (140.0, 121.0),
 }
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REFERENCE_LINES = os.path.join(ROOT, "tools", "floor-reference-lines.json")
+
+
+def load_reference_lines(floor: str) -> list[list]:
+    try:
+        with open(REFERENCE_LINES, "r", encoding="utf-8") as f:
+            return json.load(f).get(floor, [])
+    except FileNotFoundError:
+        return []
 
 # Each floor is a list of closed wall loops in its own reference pixels.  Room
 # outlines repeat shared walls; the editor draws them as faint lines and the
@@ -433,15 +446,84 @@ def append_detail(lines: list[str], data, start_shape: int, start_wall: int,
     return wid
 
 
+def snap_wall_to_reference(floor: str, a, b, refs):
+    """Snap a hand-authored wall to nearby extracted reference linework.
+
+    Returns (a, b, visible). A wall only becomes visible when it lies close to
+    a reference line; otherwise it stays a hidden collision wall.
+    """
+    cx, cy = CENTRE
+    ox, oy = OFFSETS[floor]
+    ax, ay = a[0] + cx + ox, a[1] + cy + oy
+    bx, by = b[0] + cx + ox, b[1] + cy + oy
+    horizontal = abs(ay - by) <= 1.0
+    best = None
+    for s in refs:
+        orient, c, lo, hi = s
+        if horizontal and orient == 'h' and abs(c - ay) <= 9.0:
+            if max(lo, min(ax, bx)) <= min(hi, max(ax, bx)) + 6.0:
+                d = abs(c - ay)
+                if best is None or d < best[0]:
+                    best = (d, c, lo, hi, True)
+        elif not horizontal and orient == 'v' and abs(c - ax) <= 9.0:
+            if max(lo, min(ay, by)) <= min(hi, max(ay, by)) + 6.0:
+                d = abs(c - ax)
+                if best is None or d < best[0]:
+                    best = (d, c, lo, hi, False)
+    if best is None:
+        return a, b, False
+    _d, c, lo, hi, is_h = best
+    if is_h:
+        ay = by = c
+        ax = min(ax, bx)
+        bx = max(ax, bx)
+        if lo - 10 <= ax <= lo + 10:
+            ax = lo
+        if hi - 10 <= bx <= hi + 10:
+            bx = hi
+    else:
+        ax = bx = c
+        ay = min(ay, by)
+        by = max(ay, by)
+        if lo - 10 <= ay <= lo + 10:
+            ay = lo
+        if hi - 10 <= by <= hi + 10:
+            by = hi
+    if (is_h and abs(bx - ax) < 8.0) or (not is_h and abs(by - ay) < 8.0):
+        return a, b, False
+    wa = (ax - cx - ox, ay - cy - oy)
+    wb = (bx - cx - ox, by - cy - oy)
+    return wa, wb, True
+
+
 def build_floor(floor: str) -> list[str]:
     data = FLOORS[floor]
     shapes, walls = floor_walls(floor, data["shapes"])
     lines = ["ink-level 3"]
     for sid, closed in shapes:
         lines.append(f"shape {sid} {1 if closed else 0} 0")
-    for wi, (sid, a, b) in enumerate(walls, start=1):
-        lines.append(f"wall {wi} {sid} {a[0]:.3f} {a[1]:.3f} {b[0]:.3f} {b[1]:.3f}")
-    append_detail(lines, data, len(shapes) + 1, len(walls) + 1, floor, False)
+    refs = load_reference_lines(floor)
+    # The hand-authored room loops are the collision plan. Walls that sit on
+    # extracted reference lines are also drawn to close extraction gaps.
+    for wi, (sid, a0, b0) in enumerate(walls, start=1):
+        _a, _b, visible = snap_wall_to_reference(floor, a0, b0, refs)
+        flag = "" if visible else " 2"
+        lines.append(f"wall {wi} {sid} {a0[0]:.3f} {a0[1]:.3f} {b0[0]:.3f} {b0[1]:.3f}{flag}")
+    wid = len(walls) + 1
+    sid = len(shapes) + 1
+    for orient, c, lo, hi in refs:
+        if orient == "h":
+            a = (lo, c)
+            b = (hi, c)
+        else:
+            a = (c, lo)
+            b = (c, hi)
+        wa = world(floor, a)
+        wb = world(floor, b)
+        lines.append(f"shape {sid} 0 0")
+        lines.append(f"wall {wid} {sid} {wa[0]:.3f} {wa[1]:.3f} {wb[0]:.3f} {wb[1]:.3f} 1")
+        wid += 1
+        sid += 1
     for wi, t, width, hidden in auto_connect_doors(walls, data["doors"], floor):
         lines.append(f"door 0 {wi} {t:.4f} {width:.3f} {hidden}")
     for x0, y0, x1, y1, direction, steps, bottom in data["stairs"]:
