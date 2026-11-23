@@ -219,6 +219,10 @@ struct Editor {
     bool floor_loaded[FLOOR_MAX];
     int floor_count;
     int floor_index;
+    /* The floor drawn as an onion skin under the active level. One at most;
+       -1 hides it. onion_alpha scales every onion line's opacity. */
+    int onion_floor;
+    float onion_alpha;
     /* Which floor owns the single player marker. The marker lives only in
        that floor's Level, so viewing another floor never shows the player. */
     int player_floor;
@@ -1729,6 +1733,7 @@ static void new_level(Editor* e) {
     e->floor_index = 0;
     e->floor_loaded[0] = true;
     e->player_floor = -1;
+    e->onion_floor = -1;
     level_init(&e->level);
     history_reset(&e->floor_history[e->floor_index], &e->level);
     sel_clear(e);
@@ -1774,6 +1779,7 @@ static bool open_level(Editor* e, const char* path) {
     e->floor_index = 0;
     e->floor_loaded[0] = true;
     e->player_floor = e->level.player_present ? 0 : -1;
+    e->onion_floor = -1;
     snprintf(e->floor_paths[0], sizeof e->floor_paths[0], "%s", path);
     history_reset(&e->floor_history[e->floor_index], &e->level);
     reset_player_runtime(e);
@@ -1977,13 +1983,19 @@ static void stair_treads(const Editor* e, ImDrawList* dl, Rect r, StairsDir dir,
     }
 }
 
-static void draw_stairs(const Editor* e) {
+static void draw_stairs_level(const Editor* e, const Level* level,
+                              float alpha_scale) {
     ImDrawList* dl = igGetWindowDrawList();
-    for (int i = 0; i < e->level.stairs_count; i++) {
-        const Stairs* s = &e->level.stairs[i];
+    for (int i = 0; i < level->stairs_count; i++) {
+        const Stairs* s = &level->stairs[i];
         stair_treads(e, dl, level_stairs_rect(s), s->dir, s->steps, s->bottom,
-                     s->fade, s->min_alpha, s->max_alpha, STAIR_COL);
+                     s->fade, s->min_alpha * alpha_scale,
+                     s->max_alpha * alpha_scale, STAIR_COL);
     }
+}
+
+static void draw_stairs(const Editor* e) {
+    draw_stairs_level(e, &e->level, 1.0f);
 }
 
 static void draw_door_bar(ImDrawList* dl, const Editor* e, const Wall* wall,
@@ -2012,12 +2024,13 @@ typedef struct {
     float a, b;
 } DoorSpan;
 
-static int wall_door_spans(const Editor* e, const Wall* wall, DoorSpan* spans) {
+static int wall_door_spans(const Level* level, const Wall* wall,
+                           DoorSpan* spans) {
     float len = wall_length(wall);
     if (len <= 0.0001f) return 0;
     int n = 0;
-    for (int i = 0; i < e->level.door_count; i++) {
-        const Door* d = &e->level.doors[i];
+    for (int i = 0; i < level->door_count; i++) {
+        const Door* d = &level->doors[i];
         if (d->wall != wall->id) continue;
         float half = d->width / (2.0f * len);
         float a = d->t - half;
@@ -2054,14 +2067,16 @@ static void draw_wall_segment(const Editor* e, ImDrawList* dl, const Wall* wall,
 
 /* Every wall draws at the same faint alpha. A closed shape has no brighter
    or filled state, so history and selection cannot change a line's weight. */
-static void draw_walls(const Editor* e) {
+static void draw_walls_level(const Editor* e, const Level* level,
+                             float alpha_scale) {
     ImDrawList* dl = igGetWindowDrawList();
     float wall_px = 2.0f;
-    for (int i = 0; i < e->level.wall_count; i++) {
-        const Wall* w = &e->level.walls[i];
-        ImU32 wall_col = col32a(WALL_COL, WALL_ALPHA);
+    unsigned alpha = (unsigned)(WALL_ALPHA * alpha_scale + 0.5f);
+    ImU32 wall_col = col32a(WALL_COL, alpha);
+    for (int i = 0; i < level->wall_count; i++) {
+        const Wall* w = &level->walls[i];
         DoorSpan spans[LEVEL_MAX_DOORS];
-        int n = wall_door_spans(e, w, spans);
+        int n = wall_door_spans(level, w, spans);
         float cursor = 0.0f;
         for (int k = 0; k < n; k++) {
             if (spans[k].a > cursor) {
@@ -2075,17 +2090,27 @@ static void draw_walls(const Editor* e) {
     }
 }
 
-static void draw_doors(const Editor* e) {
+static void draw_walls(const Editor* e) {
+    draw_walls_level(e, &e->level, 1.0f);
+}
+
+static void draw_doors_level(const Editor* e, const Level* level,
+                             float alpha_scale) {
     ImDrawList* dl = igGetWindowDrawList();
-    for (int i = 0; i < e->level.door_count; i++) {
-        const Door* d = &e->level.doors[i];
+    unsigned alpha = (unsigned)(255.0f * alpha_scale + 0.5f);
+    for (int i = 0; i < level->door_count; i++) {
+        const Door* d = &level->doors[i];
         if (d->hidden) continue;
-        const Wall* w = level_wall_by_id_const(&e->level, d->wall);
+        const Wall* w = level_wall_by_id_const(level, d->wall);
         if (!w) continue;
         Vec2 a, b;
-        level_door_span(&e->level, d, &a, &b);
-        draw_door_bar(dl, e, w, a, b, col32(DOOR_WHITE_COL), 0.0f);
+        level_door_span(level, d, &a, &b);
+        draw_door_bar(dl, e, w, a, b, col32a(DOOR_WHITE_COL, alpha), 0.0f);
     }
+}
+
+static void draw_doors(const Editor* e) {
+    draw_doors_level(e, &e->level, 1.0f);
 }
 
 /* Every marked section draws over its wall in the accent colour at double the
@@ -2149,15 +2174,41 @@ static void draw_door_ghost(const Editor* e) {
                   col32a(DOOR_WHITE_COL, 120), 0.0f);
 }
 
-static void draw_labels(const Editor* e) {
+static void draw_labels_level(const Editor* e, const Level* level,
+                              float alpha_scale) {
     ImDrawList* dl = igGetWindowDrawList();
-    for (int i = 0; i < e->level.label_count; i++) {
-        const Label* l = &e->level.labels[i];
+    unsigned alpha = (unsigned)(255.0f * alpha_scale + 0.5f);
+    for (int i = 0; i < level->label_count; i++) {
+        const Label* l = &level->labels[i];
         if (!l->text[0]) continue;
         ImVec2 p = world_to_screen(e, l->pos);
         ImDrawList_AddTextImFontPtrEx(dl, igGetFont(), l->size * e->camera.zoom, p,
-                                      col32(LABEL_COL), l->text, NULL, 0.0f, NULL);
+                                      col32a(LABEL_COL, alpha), l->text, NULL,
+                                      0.0f, NULL);
     }
+}
+
+static void draw_labels(const Editor* e) {
+    draw_labels_level(e, &e->level, 1.0f);
+}
+
+/* A faint copy of the checked floor's linework, drawn under the active floor.
+   The opacity slider scales every wall, tread, door, and label in the skin. */
+static void draw_onion_skin(const Editor* e) {
+    if (e->play_mode || e->floor_count <= 1 || e->onion_floor < 0 ||
+        e->onion_floor >= e->floor_count ||
+        !e->floor_loaded[e->onion_floor]) {
+        return;
+    }
+    float alpha = clampf(e->onion_alpha, 0.0f, 1.0f);
+    if (alpha <= 0.0f) return;
+    const Level* level = e->onion_floor == e->floor_index
+                             ? &e->level
+                             : &e->floor_levels[e->onion_floor];
+    draw_stairs_level(e, level, alpha);
+    draw_walls_level(e, level, alpha);
+    draw_doors_level(e, level, alpha);
+    draw_labels_level(e, level, alpha);
 }
 
 static void draw_nav_hover(const Editor* e) {
@@ -4046,6 +4097,9 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
 #define FLOOR_TAB_H 46.0f
 #define FLOOR_TAB_GAP 2.0f
 #define FLOOR_TAB_RIGHT 18.0f
+/* Each floor tab gets an onion-skin checkbox on its left edge. */
+#define FLOOR_CHECK_W 18.0f
+#define FLOOR_CHECK_GAP 8.0f
 
 static bool floor_tab_rect(const Editor* e, int index, ImVec2* out_min,
                            ImVec2* out_max) {
@@ -4063,6 +4117,27 @@ static bool floor_tab_rect(const Editor* e, int index, ImVec2* out_min,
     return true;
 }
 
+static bool floor_check_rect(const Editor* e, int index, ImVec2* out_min,
+                            ImVec2* out_max) {
+    ImVec2 a, b;
+    if (!floor_tab_rect(e, index, &a, &b)) return false;
+    float cy = (a.y + b.y) * 0.5f;
+    *out_min = (ImVec2){ a.x - FLOOR_CHECK_GAP - FLOOR_CHECK_W,
+                         cy - FLOOR_CHECK_W * 0.5f };
+    *out_max = (ImVec2){ a.x - FLOOR_CHECK_GAP,
+                         cy + FLOOR_CHECK_W * 0.5f };
+    return true;
+}
+
+static int floor_check_at(const Editor* e, ImVec2 p) {
+    for (int i = 0; i < e->floor_count; i++) {
+        ImVec2 a, b;
+        if (!floor_check_rect(e, i, &a, &b)) continue;
+        if (p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y) return i;
+    }
+    return -1;
+}
+
 static int floor_tab_at(const Editor* e, ImVec2 p) {
     for (int i = 0; i < e->floor_count; i++) {
         ImVec2 a, b;
@@ -4076,6 +4151,9 @@ static void draw_floor_selector(Editor* e, ImVec2 mouse, bool have_pointer) {
     if (e->floor_count <= 1) return;
     ImDrawList* dl = igGetWindowDrawList();
     int hover = have_pointer ? floor_tab_at(e, mouse) : -1;
+    int check_hover = have_pointer && !e->play_mode
+                          ? floor_check_at(e, mouse)
+                          : -1;
     ImFont* font = igGetFont();
     for (int i = 0; i < e->floor_count; i++) {
         ImVec2 a, b;
@@ -4094,6 +4172,26 @@ static void draw_floor_selector(Editor* e, ImVec2 mouse, bool have_pointer) {
         ImDrawList_AddTextImFontPtrEx(dl, font, 18.0f, p,
                                       lit ? col32(0xf3f3f3) : col32(0x9aa0a7),
                                       label, NULL, 0.0f, NULL);
+
+        ImVec2 ca, cb;
+        if (e->play_mode) continue;
+        if (!floor_check_rect(e, i, &ca, &cb)) continue;
+        bool checked = e->onion_floor == i;
+        bool check_lit = checked || i == check_hover;
+        ImU32 box_fill = checked ? col32a(ACCENT_UI, 230)
+                                 : col32a(0x0d0f12, 210);
+        ImU32 box_border = checked ? col32(ACCENT_COL)
+                                   : (check_lit ? col32(0x8b9097)
+                                                : col32(0x3a4048));
+        ImDrawList_AddRectFilled(dl, ca, cb, box_fill);
+        ImDrawList_AddRectEx(dl, ca, cb, box_border, 3.0f, 1.0f, 0);
+        if (checked) {
+            ImVec2 c0 = { ca.x + 4.0f, ca.y + 9.0f };
+            ImVec2 c1 = { ca.x + 7.0f, ca.y + 13.0f };
+            ImVec2 c2 = { ca.x + 14.0f, ca.y + 5.0f };
+            ImDrawList_AddLineEx(dl, c0, c1, col32(0xf3f3f3), 2.2f, 0);
+            ImDrawList_AddLineEx(dl, c1, c2, col32(0xf3f3f3), 2.2f, 0);
+        }
     }
 }
 
@@ -4127,8 +4225,14 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
 
     bool over_floors = false;
     if (have_pointer && e->floor_count > 1) {
+        int check = e->play_mode ? -1 : floor_check_at(e, mouse);
         int tab = floor_tab_at(e, mouse);
-        if (tab >= 0) {
+        if (check >= 0) {
+            over_floors = true;
+            if (igIsMouseClicked(0)) {
+                e->onion_floor = e->onion_floor == check ? -1 : check;
+            }
+        } else if (tab >= 0) {
             over_floors = true;
             if (igIsMouseClicked(0)) enter_floor(e, tab);
         }
@@ -4139,6 +4243,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     ImDrawList_AddRectFilledEx(dl, v2_to_im(e->canvas.min), v2_to_im(e->canvas.max),
                                col32(CANVAS_BG), 0.0f, 0);
     draw_grid(e);
+    draw_onion_skin(e);
     draw_nav_hover(e);
     draw_shape_preview(e);
     draw_stairs(e);
@@ -4345,6 +4450,19 @@ static void draw_left_panel(Editor* e) {
         case TOOL_COUNT:
         default:
             break;
+    }
+    if (e->floor_count > 1 && !e->play_mode) {
+        igDummy((ImVec2){ 0.0f, 8.0f });
+        heading("Onion skin");
+        if (e->onion_floor >= 0 && e->onion_floor < e->floor_count) {
+            igText("Showing %s under %s", FLOOR_LABELS[e->onion_floor],
+                   FLOOR_LABELS[e->floor_index]);
+        } else {
+            igTextDisabled("No floor checked");
+        }
+        igSetNextItemWidth(84.0f);
+        igSliderFloatEx("Opacity", &e->onion_alpha, 0.05f, 1.0f, "%.2f", 0);
+        small_note("Check a box left of a floor tab to overlay that floor.");
     }
     igDummy((ImVec2){ 0.0f, 8.0f });
     heading("Player");
@@ -5161,6 +5279,8 @@ Editor* editor_create(const char* startup_path) {
     e->floor_index = 0;
     e->floor_loaded[0] = true;
     e->player_floor = -1;
+    e->onion_floor = -1;
+    e->onion_alpha = 0.25f;
     history_reset(&e->floor_history[e->floor_index], &e->level);
 
     e->camera.center = v2(0.0f, 0.0f);

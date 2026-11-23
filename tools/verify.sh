@@ -2,6 +2,10 @@
 # End-to-end check for the six-tool empty-line editor.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The app opens maximized, so give the test display the layout the fixed
+# coordinates below were measured against.
+export XVFB_WIDTH=1280
+export XVFB_HEIGHT=800
 . tools/xvfb.sh
 
 out=/tmp/ink-ribbon-six

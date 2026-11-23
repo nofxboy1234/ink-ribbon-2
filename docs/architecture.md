@@ -86,7 +86,11 @@ other floors live in `Editor.floor_levels[]` and are swapped in when the 3F /
 2F / 1F selector is clicked. Each floor has its own `History`, so an undo can
 never restore a snapshot from another floor. The selector is a canvas overlay,
 so it is clickable in edit and play mode, and canvas input is skipped while the
-pointer is over it.
+pointer is over it. In edit mode each tab also carries an onion-skin checkbox.
+`Editor.onion_floor` holds at most one floor; `draw_onion_skin` reads
+that floor's `Level` before the active level and scales every wall,
+tread, door, and label by `Editor.onion_alpha`. The checkboxes and skin are
+edit-mode only.
 
 The three files use one world coordinate system. `tools/gen_floor_maps.py`
 traces 1F and 2F in their own screenshot pixels and applies the measured

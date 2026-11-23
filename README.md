@@ -79,8 +79,9 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 
 The reference building is three floors. The 3F document is shown by default,
 and a vertical **3F / 2F / 1F** selector sits at the right edge of the canvas,
-matching the in-game map screen. Click a tab to swap the active floor in edit or
-play mode. The camera position and zoom level are kept, so the south-east
+matching the in-game map screen. The window opens maximized to the display.
+Click a tab to swap the active floor in edit or play mode. The camera position
+and zoom level are kept, so the south-east
 stairwell stays over the same parchment position while you compare floors.
 Returning to the player's floor keeps that pan too; the camera recentres only
 when the player starts moving or `C` is pressed. Changing the viewed floor does
@@ -89,6 +90,13 @@ another floor is shown, and the new position appears when you return. With
 several floors loaded,
 **F** fits their union, so every floor is drawn at the same scale and the
 selector never covers a wing.
+
+In edit mode each floor tab has a checkbox on its left. Checking one draws that
+floor's walls, doors, stairs, and labels as an onion skin under the active
+floor. Only one floor can be checked; checking another moves the skin, and
+clicking the checked box clears it. The **Onion skin** opacity slider in the
+left panel scales the skin. Both the checkboxes and the skin are hidden in play
+mode.
 
 Each floor is a complete `Level` with its own undo history, so undo never
 crosses a floor. Ctrl+S writes every loaded floor back to its file; Save As

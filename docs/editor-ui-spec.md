@@ -4,12 +4,14 @@ This is the contract for `src/editor.c`, `src/editor.h`, and the editor hook in 
 
 ## Window layout
 
-One sokol window titled `Ink Ribbon Level Editor`, 1280 by 800 initial size, near-black clear color.
+One sokol window titled `Ink Ribbon Level Editor`, near-black clear color. It
+opens maximized to the display; 1280 by 800 remains the fallback initial size
+before the X11 maximize request.
 
 The frame builds a full-viewport ImGui layout:
 
 - A main menu bar at the top: File, Edit, View, Help.
-- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the six tool buttons, the Q lock row, then Grid, Snap, Show grid, and Snap objects, then only the active tool's settings, and a Player section at the bottom with Play mode, Remove player, and a recenter hint.
+- A left tool panel, 190 px wide, from below the menu bar to the bottom. It shows the six tool buttons, the Q lock row, then Grid, Snap, Show grid, and Snap objects, then only the active tool's settings, an Onion skin section when a floor set is loaded in edit mode, and a Player section at the bottom with Play mode, Remove player, and a recenter hint.
 - A right inspector panel, 300 px wide, same vertical span.
 - A canvas filling the middle. The canvas rect is stored in the editor so the mouse can be converted between screen and world.
 - A one-line status strip overlaid at the bottom of the canvas. It shows the active tool hint, cursor world coordinates, zoom, the current snap size or `snap off`, and the latest action or error.
@@ -25,6 +27,10 @@ Walls `#8b9097`, 2 screen pixels wide, at alpha 70 everywhere. There is no brigh
 Dark ImGui theme: window background `#101114`, panel `#16181c`, frame `#1d2025`, borders `#2a2e34`, text `#d9dadd`, accent `#4e7f9e`. Rounded corners 3 px. Sentence-case headings.
 
 The embedded scalable ImGui default font at 15 px is fine. Do not depend on system font files.
+
+## Floors and onion skin
+
+The canvas draws a vertical 3F / 2F / 1F selector at the right edge when more than one floor is loaded. In edit mode, each tab has an 18 px checkbox on its left, vertically centred on the tab. At most one box is checked. Checking a box stores that floor index and draws the floor's stairs, walls, doors, and labels under the active level; clicking the checked box unchecks it. The Onion skin section in the left panel shows which floor is under the current one and an opacity slider from 0.05 to 1.00, default 0.25. Checkboxes and the skin are hidden in play mode. The camera pan and zoom persist when tabs switch the active floor.
 
 ## Frame rate
 

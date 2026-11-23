@@ -13,8 +13,13 @@
 #include "sokol_imgui.h"
 
 #include <float.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <X11/Xlib.h>
+#endif
 
 #include "editor.h"
 
@@ -22,7 +27,41 @@ static sg_pass_action pass_action;
 static Editor* editor;
 static char startup_level[512];
 
+/* sokol has no windowed "maximized" flag. On X11, fill the screen and ask the
+   window manager to mark the window maximized, so a decorated desktop also
+   keeps it snapped to the work area. */
+static void start_window_maximized(void) {
+#if defined(__linux__) && !defined(__ANDROID__)
+    Display* display = (Display*)sapp_x11_get_display();
+    Window window = (Window)(uintptr_t)sapp_x11_get_window();
+    if (!display || !window) return;
+    int screen = DefaultScreen(display);
+    int width = DisplayWidth(display, screen);
+    int height = DisplayHeight(display, screen);
+    XMoveResizeWindow(display, window, 0, 0, (unsigned)width, (unsigned)height);
+    Atom state = XInternAtom(display, "_NET_WM_STATE", False);
+    Atom max_vert = XInternAtom(display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+    Atom max_horz = XInternAtom(display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+    if (state && max_vert && max_horz) {
+        XEvent event;
+        memset(&event, 0, sizeof event);
+        event.type = ClientMessage;
+        event.xclient.window = window;
+        event.xclient.message_type = state;
+        event.xclient.format = 32;
+        event.xclient.data.l[0] = 1; /* _NET_WM_STATE_ADD */
+        event.xclient.data.l[1] = (long)max_vert;
+        event.xclient.data.l[2] = (long)max_horz;
+        event.xclient.data.l[3] = 1; /* normal application source */
+        XSendEvent(display, DefaultRootWindow(display), False,
+                   SubstructureNotifyMask | SubstructureRedirectMask, &event);
+    }
+    XFlush(display);
+#endif
+}
+
 static void init(void) {
+    start_window_maximized();
     sg_setup(&(sg_desc){
         .environment = sglue_environment(),
         .logger.func = slog_func,
