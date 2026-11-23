@@ -170,6 +170,10 @@ int level_shape_wall_indices(const Level* level, ShapeId id, int* out, int cap);
 /* Polygon of a closed shape's vertices in wall order. Returns the point count,
    or -1 when the shape is missing, open, or its walls do not connect. */
 int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap);
+/* Polygon of a shape's wall loop whether or not its closed flag is set.
+   Returns -1 when the walls do not form one connected loop. */
+int level_shape_loop_polygon(const Level* level, ShapeId id, Vec2* out,
+                             int cap);
 /* A new closed shape whose four walls are rect, in loop order. Returns 0 when
    the rectangle is degenerate or the level is full. */
 ShapeId level_add_rect_shape(Level* level, Rect rect);

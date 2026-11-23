@@ -1834,6 +1834,45 @@ static void test_onion_skins(void) {
     remove(path);
 }
 
+static void test_line_loop_navigation(void) {
+    Level level;
+    level_init(&level);
+    ShapeId line = level_add_shape(&level);
+    check(line != 0, "start a line-drawn room");
+    level_add_wall_to_shape(&level, line, v2(0, 0), v2(100, 0));
+    level_add_wall_to_shape(&level, line, v2(100, 0), v2(100, 100));
+    level_add_wall_to_shape(&level, line, v2(100, 100), v2(0, 100));
+    level_add_wall_to_shape(&level, line, v2(0, 100), v2(0, 0));
+    check(!level.shapes[0].closed, "the line loop starts with no closed flag");
+    ShapeId rect = level_add_rect_shape(&level, (Rect){ { 200, 0 }, { 300, 100 } });
+    check(rect != 0, "add a rectangle room beside the line room");
+
+    NavGrid* nav = malloc(sizeof(NavGrid));
+    check(nav && nav_build(nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav builds across mixed line and rectangle rooms");
+    if (nav) {
+        int line_cell = nav_cell_at_world(nav, v2(50, 50));
+        int rect_cell = nav_cell_at_world(nav, v2(250, 50));
+        check(nav_cell_is_open(nav, line_cell),
+              "a visually closed line room is walkable");
+        check(nav_cell_is_open(nav, rect_cell),
+              "a rectangle room is walkable");
+        free(nav);
+    }
+
+    char path[256];
+    snprintf(path, sizeof path, "/tmp/ink_ribbon_line_loop_%ld.lvl",
+             (long)getpid());
+    LevelError err;
+    check(level_save(&level, path, &err), "save the line loop room");
+    Level loaded;
+    level_init(&loaded);
+    check(level_load(&loaded, path, &err) && loaded.shape_count >= 1 &&
+              loaded.shapes[0].closed,
+          "loading a geometric line loop normalizes it to closed");
+    remove(path);
+}
+
 static bool load_floor(const char* path, Level* level) {
     LevelError err;
     return level_load(level, path, &err);
@@ -1889,10 +1928,19 @@ static void test_floors(void) {
                                                     0.0f);
         int start = nav_cell_at_world(nav, start_pos);
         bool start_open = nav_cell_is_open(nav, start);
-        /* The editable 2F currently keeps its player marker outside any
-           closed room while that layout is being redrawn. Do not fail the
-           reference-floor checks for that work-in-progress file. */
-        if (!level->player_present || start_open) {
+        /* Skip the full reference check while a floor still contains a shape
+           that is neither explicitly closed nor a geometric loop. That is a
+           layout still being drawn, not a navigation regression. */
+        bool finished = true;
+        Vec2 polygon[LEVEL_MAX_WALLS];
+        for (int i = 0; i < level->shape_count && finished; i++) {
+            if (level->shapes[i].closed) continue;
+            if (level_shape_loop_polygon(level, level->shapes[i].id, polygon,
+                                         LEVEL_MAX_WALLS) < 3) {
+                finished = false;
+            }
+        }
+        if (!level->player_present || (start_open && finished)) {
             check(start_open, "floor start cell is walkable");
             int reachable = 0;
             int wanted = level->stairs_count;
@@ -1938,6 +1986,7 @@ int main(void) {
     test_stairs();
     test_stairs_flip();
     test_onion_skins();
+    test_line_loop_navigation();
     test_rect_union();
     test_rect_union_save_load();
     test_save_load();

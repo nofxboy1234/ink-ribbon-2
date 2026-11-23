@@ -4405,6 +4405,14 @@ static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse) {
     }
     g->wall_count++;
     g->pts[g->point_count++] = next;
+    /* A line chain that has returned to its start is a closed room without
+       requiring the explicit first-point click or Enter. */
+    if (level_close_shape(&e->level, g->shape)) {
+        cancel_gesture(e);
+        commit(e, "Shape closed");
+        auto_select_after_action(e);
+        return;
+    }
     commit(e, "Wall added");
 }
 

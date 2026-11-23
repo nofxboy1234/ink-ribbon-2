@@ -129,6 +129,19 @@ static bool edge_clear_of_walls(const Level* level, Vec2 a, Vec2 b,
     return true;
 }
 
+/* A room counts when its wall chain forms one loop, even if the editor kept
+   the shape's closed flag off because the Line tool never saw an explicit
+   close. Rectangles and closed chains share the same path. */
+static bool inside_any_shape_loop(const Level* level, Vec2 p) {
+    Vec2 polygon[LEVEL_MAX_WALLS];
+    for (int i = 0; i < level->shape_count; i++) {
+        int count = level_shape_loop_polygon(level, level->shapes[i].id,
+                                             polygon, LEVEL_MAX_WALLS);
+        if (count >= 3 && point_in_polygon(polygon, count, p)) return true;
+    }
+    return false;
+}
+
 static bool point_clear_of_cached(const Level* level, const NavWallSpans* spans,
                                   Vec2 p, float radius) {
     for (int i = 0; i < level->wall_count; i++) {
@@ -228,7 +241,7 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             int i = y * nav->cols + x;
             center[i] = v2(nav->origin.x + (x + 0.5f) * cell,
                            nav->origin.y + (y + 0.5f) * cell);
-            nav->open[i] = level_shape_at(level, center[i]) >= 0 &&
+            nav->open[i] = inside_any_shape_loop(level, center[i]) &&
                            point_clear_of_cached(level, spans, center[i], radius);
         }
     }

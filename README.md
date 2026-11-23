@@ -62,7 +62,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Drag a rectangle with the Rectangle tool. A rectangle that overlaps or shares an edge with a shape joins it. The outline is rebuilt as one closed loop, so a plus or L shaped room built from several rectangles has no interior lines and no doubled walls. A rectangle that only touches a corner starts a new shape, and a rectangle drawn fully inside another stays as a separate nested outline.
 - Hover a wall with the Door tool. A white ghost shows the door at the panel width, centred on the point projected onto the wall and snapped along it. Click to place the door. Drag either end with Select to change its length.
 - Drag a rectangle with the Stairs tool. The run takes the panel's direction, step count, falloff, and faint/bright opacities. Flip reverses which end the tread fade starts from, and all of it is saved with the level. Drag any stair edge with Select to resize the footprint.
-- Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop. Esc keeps the chain open.
+- Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop; a chain whose last segment returns to the first point also closes automatically. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
 - Press M (or tick "Marquee next drag" in the Select panel), then drag anywhere to start a marquee, including from inside a closed shape. A drag on empty canvas still starts one without arming. The marquee marks the crossed wall sections for cutting.
 - Select, edit, duplicate, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them. Ctrl+D duplicates the selection one grid cell diagonally and keeps every setting, including door width/position and each stair's direction, steps, flip, falloff, and opacities; doors on duplicated walls come along.
@@ -180,7 +180,7 @@ or write `0`. Older files with five fields still load.
 
 Walls are independent axis-aligned segments. Corners meet because the Line tool starts each new segment at the previous click, and the Rectangle tool creates its four walls in loop order. A wall has a stable id. Doors store that id, a normalized centre position, and a world-space length, so a door follows its wall and never points at a deleted one.
 
-A shape stores only its wall loop and a closed flag. The Rectangle tool adds a rectangle by splitting the shape and the rectangle on their own x and y coordinates, marking the occupied cells, and rebuilding the boundary from the cell edges. Consecutive edges merge into one wall, so the union is one closed loop. The operation replaces the shape's walls and keeps the shape id. A door whose wall survives moves to the matching new wall at the same world centre. A door whose wall becomes interior has no line left and is dropped. The union is stored as walls, so it survives save and load without new records.
+A shape stores only its wall loop and a closed flag. A line chain that returns to its start is closed automatically, and a loaded shape whose walls form one loop is normalized to closed, so Lines and Rectangles are both first-class rooms for navigation and rectangle union. The Rectangle tool adds a rectangle by splitting the shape and the rectangle on their own x and y coordinates, marking the occupied cells, and rebuilding the boundary from the cell edges. The operation replaces the shape's walls and keeps the shape id. A door whose wall survives moves to the matching new wall at the same world centre. A door whose wall becomes interior has no line left and is dropped. The union is stored as walls, so it survives save and load without new records.
 
 Labels store a position, a size, and a string. Stairs store a min-corner box, a direction, a step count, which end of the run the fade starts from, a falloff curve (linear, ease in, ease out, or smooth), and the opacity at the faint and bright ends. `STAIR_STEP_DEPTH` and `STAIR_WIDTH` fix the tread spacing. The stair bottom flag, falloff, and opacities are optional trailing fields, so older stair records still load with the linear 0.18/0.68 default.
 
@@ -206,7 +206,9 @@ mode, use **Place player** in the Player section and click a walkable cell; the
 same click also works in play mode when no player exists. The nav
 grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
 is inside a closed room/corridor outline and its player radius clears every
-solid wall. Door spans are cut out of every collinear wall they sit on, so doors
+solid wall. A line chain whose walls form one loop counts as closed for
+navigation even if its saved flag was off; loading normalizes such shapes to
+closed. Door spans are cut out of every collinear wall they sit on, so doors
 are passable; stair treads are not walls, while stair-side rails and walls still
 block. Stair ends stay open so a run can be climbed, and a rectangle/line
 segment that would cut through a rail or solid wall is rejected. Stairs are

@@ -361,6 +361,14 @@ int level_shape_polygon(const Level* level, ShapeId id, Vec2* out, int cap) {
     return shape_loop(level, id, out, cap);
 }
 
+int level_shape_loop_polygon(const Level* level, ShapeId id, Vec2* out,
+                             int cap) {
+    if (!level || !out || cap <= 0) return -1;
+    int count = shape_loop(level, id, NULL, 0);
+    if (count < 3 || cap < count) return -1;
+    return shape_loop(level, id, out, cap);
+}
+
 /* ---- Orthogonal rectangle union --------------------------------------- */
 
 #define UNION_MAX_LINES (LEVEL_MAX_WALLS + 4)
@@ -1743,6 +1751,15 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             if (walls < 3) {
                 return fail_line(err, shape_lines[i],
                                  "closed shape needs at least three walls");
+            }
+        }
+        /* A saved line chain whose walls form one loop is a room even if the
+           chain was never explicitly closed. Normalize it on load so hover,
+           rectangle union, and navigation all agree. */
+        for (int i = 0; i < tmp.shape_count; i++) {
+            if (tmp.shapes[i].closed) continue;
+            if (shape_loop(&tmp, tmp.shapes[i].id, NULL, 0) >= 3) {
+                tmp.shapes[i].closed = true;
             }
         }
     }
