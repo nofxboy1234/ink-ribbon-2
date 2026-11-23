@@ -237,6 +237,7 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
 
     Vec2 center[NAV_MAX_CELLS];
     static bool clear_cell[NAV_MAX_CELLS];
+    static bool outside[NAV_MAX_CELLS];
     static int queue[NAV_MAX_CELLS];
     for (int y = 0; y < nav->rows; y++) {
         for (int x = 0; x < nav->cols; x++) {
@@ -291,9 +292,55 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             }
         }
     } else {
+        /* With no player to seed from, open the closed/geometric-loop rooms
+           plus anything the exterior cannot reach. That second part lets a
+           visually closed hybrid room built from several open line and
+           rectangle shapes accept the first player placement. */
         for (int i = 0; i < total; i++) {
+            outside[i] = false;
             nav->open[i] = clear_cell[i] &&
                            inside_any_shape_loop(level, center[i]);
+        }
+        int head = 0;
+        int tail = 0;
+        for (int y = 0; y < nav->rows; y++) {
+            for (int x = 0; x < nav->cols; x++) {
+                if (x != 0 && y != 0 && x != nav->cols - 1 &&
+                    y != nav->rows - 1) {
+                    continue;
+                }
+                int i = y * nav->cols + x;
+                if (clear_cell[i] && !outside[i]) {
+                    outside[i] = true;
+                    queue[tail++] = i;
+                }
+            }
+        }
+        static const int dx4[4] = { 1, -1, 0, 0 };
+        static const int dy4[4] = { 0, 0, 1, -1 };
+        while (head < tail) {
+            int i = queue[head++];
+            int x = i % nav->cols;
+            int y = i / nav->cols;
+            for (int d = 0; d < 4; d++) {
+                int nx = x + dx4[d];
+                int ny = y + dy4[d];
+                if (nx < 0 || ny < 0 || nx >= nav->cols ||
+                    ny >= nav->rows) {
+                    continue;
+                }
+                int j = ny * nav->cols + nx;
+                if (outside[j] || !clear_cell[j]) continue;
+                if (!edge_clear_of_cached(level, spans, center[i], center[j],
+                                          radius)) {
+                    continue;
+                }
+                outside[j] = true;
+                queue[tail++] = j;
+            }
+        }
+        for (int i = 0; i < total; i++) {
+            if (clear_cell[i] && !outside[i]) nav->open[i] = true;
         }
     }
     for (int y = 0; y < nav->rows; y++) {

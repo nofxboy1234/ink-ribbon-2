@@ -133,8 +133,10 @@ player radius, then floods from the player's cell across connected clear cells,
 so a room assembled from several open Line and Rectangle shapes is one navigable
 region even when no individual shape loop encloses it. This also covers rooms
 whose rectangle edges were replaced by line segments. With no player marker,
-the closed-shape or geometric-loop test is used instead so the placement click
-still has valid cells.
+the grid also floods clear cells from its border and opens anything the exterior
+cannot reach, in addition to closed shapes and geometric loops. That enclosed
+region is what lets the first placement click go inside a hybrid room built
+from several open line and rectangle shapes.
 
 `OnionSkin` in `Level` stores the image path, show flag, opacity, move offset,
 scale, frozen fit rectangle, checked floor index, and floor opacity. The editor

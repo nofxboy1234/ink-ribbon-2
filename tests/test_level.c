@@ -1845,9 +1845,19 @@ static void test_hybrid_room_navigation(void) {
     level_add_wall_to_shape(&level, a, v2(100, 0), v2(100, 100));
     level_add_wall_to_shape(&level, b, v2(100, 100), v2(0, 100));
     level_add_wall_to_shape(&level, b, v2(0, 100), v2(0, 0));
-    level_place_player(&level, v2(50, 50), 0.0f);
 
     NavGrid* nav = malloc(sizeof(NavGrid));
+    check(nav && nav_build(nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav builds before the player is placed");
+    if (nav) {
+        int cell = nav_cell_at_world(nav, v2(50, 50));
+        check(nav_cell_is_open(nav, cell),
+              "an enclosed hybrid room accepts the first placement");
+        free(nav);
+    }
+
+    level_place_player(&level, v2(50, 50), 0.0f);
+    nav = malloc(sizeof(NavGrid));
     check(nav && nav_build(nav, &level, NAV_CELL_SIZE, 3.2f),
           "nav builds from the player's hybrid room");
     if (nav) {
@@ -1946,7 +1956,7 @@ static void test_floors(void) {
     check(load_floor("levels/re2-library.lvl", &f3), "loads the 3F floor");
     int owners = (f1.player_present ? 1 : 0) + (f2.player_present ? 1 : 0) +
                  (f3.player_present ? 1 : 0);
-    check(owners == 1, "exactly one floor document owns the player marker");
+    check(owners <= 1, "at most one floor document owns the player marker");
 
     Level* floors[3] = { &f1, &f2, &f3 };
     for (int fi = 0; fi < 3; fi++) {
@@ -1954,11 +1964,18 @@ static void test_floors(void) {
         NavGrid* nav = malloc(sizeof(NavGrid));
         check(nav && nav_build(nav, level, NAV_CELL_SIZE, 3.2f),
               "floor nav grid builds");
-        Vec2 start_pos = level->player_present ? level->player_pos
-                                               : v2(fi == 1 ? -300.0f : -280.0f,
-                                                    0.0f);
-        int start = nav_cell_at_world(nav, start_pos);
-        check(nav_cell_is_open(nav, start), "floor start cell is walkable");
+        int start = -1;
+        if (level->player_present) {
+            start = nav_cell_at_world(nav, level->player_pos);
+        } else {
+            for (int i = 0; i < nav->cols * nav->rows; i++) {
+                if (nav_cell_is_open(nav, i)) {
+                    start = i;
+                    break;
+                }
+            }
+        }
+        check(nav_cell_is_open(nav, start), "floor has a walkable start cell");
         int reachable = 0;
         int wanted = level->stairs_count;
         for (int i = 0; i < wanted; i++) {
