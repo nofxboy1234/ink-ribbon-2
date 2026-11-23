@@ -34,6 +34,7 @@ OFFSETS = {
 # nav grid treats a cell as walkable when any closed loop contains it.
 FLOORS: dict[str, dict] = {
     "1f": {
+        "player": (504, 579.5),
         "shapes": [
             # West wing.  Two narrow corridors separate Operations from the
             # vault and Records from West Office, as in the reference.
@@ -453,6 +454,9 @@ def build_floor(floor: str) -> list[str]:
     for x, y, size, text in data["labels"]:
         p = world(floor, (x, y))
         lines.append(f"label {p[0]:.3f} {p[1]:.3f} {size:.3f} {text}")
+    if "player" in data:
+        px, py = world(floor, data["player"])
+        lines.append(f"player {px:.3f} {py:.3f} 0.0000")
     return lines
 
 

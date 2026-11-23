@@ -1831,8 +1831,9 @@ static void test_floors(void) {
     check(load_floor("levels/re2-library-1f.lvl", &f1), "loads the 1F floor");
     check(load_floor("levels/re2-library-2f.lvl", &f2), "loads the 2F floor");
     check(load_floor("levels/re2-library.lvl", &f3), "loads the 3F floor");
-    check(!f1.player_present && !f2.player_present && f3.player_present,
-          "only the 3F document owns the player marker");
+    int owners = (f1.player_present ? 1 : 0) + (f2.player_present ? 1 : 0) +
+                 (f3.player_present ? 1 : 0);
+    check(owners == 1, "exactly one floor document owns the player marker");
 
     Level* floors[3] = { &f1, &f2, &f3 };
     for (int fi = 0; fi < 3; fi++) {

@@ -91,8 +91,9 @@ writes the active floor. A floor set is detected at startup when the two
 companion files exist beside `levels/re2-library.lvl`; any other `--level` path
 keeps the original single-level behavior.
 
-The player belongs to exactly one floor. Clicking a floor tab only changes the
-view: the marker is drawn on the floor that owns it and is absent everywhere
+The player belongs to exactly one floor. In the shipped files the marker starts
+in the 1F Entrance; 2F and 3F carry none until a stair transition reaches them.
+Clicking a floor tab only changes the view: the marker is drawn on the floor that owns it and is absent everywhere
 else, and the camera fits the viewed floor when the player is elsewhere.
 Walking through a stair run changes floors: the tread fade marks the bottom of
 the run, so moving toward the bottom goes down one floor and moving toward the
