@@ -542,21 +542,48 @@ static void retire_image_onion(Editor* e) {
     e->image_onion_view = (sg_view){ 0 };
     e->image_onion_image = (sg_image){ 0 };
     e->image_onion_texture = 0;
-    e->image_onion_w = 0;
-    e->image_onion_h = 0;
-    e->image_onion_path[0] = '\0';
-    e->image_onion_on = false;
 }
 
 static void release_image_onion(Editor* e) {
     retire_image_onion(e);
     flush_retired_image_onion(e);
+    e->image_onion_w = 0;
+    e->image_onion_h = 0;
+    e->image_onion_path[0] = '\0';
+    e->image_onion_on = false;
     e->image_onion_edit = false;
     e->image_onion_dragging = false;
+    e->image_onion_offset = v2(0.0f, 0.0f);
+    e->image_onion_scale = 1.0f;
+    e->image_onion_fit = (Rect){ v2(0.0f, 0.0f), v2(0.0f, 0.0f) };
 }
 
-bool editor_load_onion_image(Editor* e, const char* path) {
-    if (!e || !path || !path[0]) return false;
+static void reset_onion_editor(Editor* e) {
+    /* New and Open run after the frame has recorded its draw list, so defer
+       the old texture by one frame instead of deleting it immediately. */
+    retire_image_onion(e);
+    e->image_onion_texture = 0;
+    e->image_onion_w = 0;
+    e->image_onion_h = 0;
+    e->image_onion_path[0] = '\0';
+    e->image_onion_on = false;
+    e->image_onion_edit = false;
+    e->image_onion_dragging = false;
+    e->image_onion_offset = v2(0.0f, 0.0f);
+    e->image_onion_scale = 1.0f;
+    e->image_onion_fit = (Rect){ v2(0.0f, 0.0f), v2(0.0f, 0.0f) };
+    e->image_onion_alpha = 0.35f;
+    e->onion_floor = -1;
+    e->onion_alpha = 0.25f;
+    e->image_path_buf[0] = '\0';
+    e->modal_error[0] = '\0';
+}
+
+/* Decode a file and add its texture. The caller decides when to retire the
+   previous image, so loading a saved floor does not keep stale resources. */
+static bool upload_image_texture(Editor* e, const char* path, sg_image* out_image,
+                                 sg_view* out_view, int* out_width,
+                                 int* out_height) {
     int width = 0;
     int height = 0;
     int channels = 0;
@@ -602,14 +629,85 @@ bool editor_load_onion_image(Editor* e, const char* path) {
         set_status(e, true, "%s", e->modal_error);
         return false;
     }
+    *out_image = image;
+    *out_view = view;
+    *out_width = width;
+    *out_height = height;
+    return true;
+}
 
-    retire_image_onion(e);
+static void apply_texture(Editor* e, sg_image image, sg_view view, int width,
+                          int height) {
     e->image_onion_image = image;
     e->image_onion_view = view;
     e->image_onion_texture = (ImTextureID)simgui_imtextureid_with_sampler(
         e->image_onion_view, e->image_onion_sampler);
     e->image_onion_w = width;
     e->image_onion_h = height;
+}
+
+/* Copy the live editor fields into the active floor document. Called before a
+   save and before another floor's document replaces it. */
+static void store_onion_state(Editor* e) {
+    OnionSkin* o = &e->level.onion;
+    o->image_present = e->image_onion_path[0] != '\0';
+    snprintf(o->image_path, sizeof o->image_path, "%s", e->image_onion_path);
+    o->image_show = e->image_onion_on;
+    o->image_alpha = e->image_onion_alpha;
+    o->image_offset = e->image_onion_offset;
+    o->image_scale = e->image_onion_scale;
+    o->image_fit = e->image_onion_fit;
+    o->floor_index = e->onion_floor;
+    o->floor_alpha = e->onion_alpha;
+}
+
+/* Load the active floor's overlay fields, replacing any image texture. */
+static void restore_onion_state(Editor* e) {
+    OnionSkin* o = &e->level.onion;
+    retire_image_onion(e);
+    e->image_onion_texture = 0;
+    e->image_onion_w = 0;
+    e->image_onion_h = 0;
+    e->image_onion_path[0] = '\0';
+    e->image_onion_on = o->image_show;
+    e->image_onion_alpha = clampf(o->image_alpha, 0.05f, 1.0f);
+    e->image_onion_offset = o->image_offset;
+    e->image_onion_scale = clampf(o->image_scale, 0.05f, 20.0f);
+    e->image_onion_fit = o->image_fit;
+    e->onion_floor = o->floor_index;
+    if (e->onion_floor < 0 || e->onion_floor >= e->floor_count) {
+        e->onion_floor = -1;
+    }
+    e->onion_alpha = clampf(o->floor_alpha, 0.05f, 1.0f);
+    e->image_onion_dragging = false;
+    e->image_onion_edit = false;
+    if (!o->image_present || !o->image_path[0]) return;
+    snprintf(e->image_onion_path, sizeof e->image_onion_path, "%s",
+             o->image_path);
+    sg_image image;
+    sg_view view;
+    int width = 0;
+    int height = 0;
+    if (upload_image_texture(e, o->image_path, &image, &view, &width, &height)) {
+        apply_texture(e, image, view, width, height);
+    } else {
+        /* Keep the saved path so the state can be saved again, but there is
+           no texture to draw. */
+        e->modal_error[0] = '\0';
+    }
+}
+
+bool editor_load_onion_image(Editor* e, const char* path) {
+    if (!e || !path || !path[0]) return false;
+    sg_image image;
+    sg_view view;
+    int width = 0;
+    int height = 0;
+    if (!upload_image_texture(e, path, &image, &view, &width, &height)) {
+        return false;
+    }
+    retire_image_onion(e);
+    apply_texture(e, image, view, width, height);
     e->image_onion_fit = compute_image_onion_fit(e, width, height);
     e->image_onion_offset = v2(0.0f, 0.0f);
     e->image_onion_scale = 1.0f;
@@ -1957,8 +2055,8 @@ static void new_level(Editor* e) {
     e->floor_index = 0;
     e->floor_loaded[0] = true;
     e->player_floor = -1;
-    e->onion_floor = -1;
     level_init(&e->level);
+    reset_onion_editor(e);
     history_reset(&e->floor_history[e->floor_index], &e->level);
     sel_clear(e);
     span_clear(e);
@@ -1972,6 +2070,7 @@ static bool save_level_as(Editor* e, const char* path) {
     LevelError err;
     char target[512];
     snprintf(target, sizeof target, "%s", path);
+    store_onion_state(e);
     if (!level_save(&e->level, target, &err)) {
         snprintf(e->modal_error, sizeof e->modal_error, "%s", err.message);
         set_status(e, true, "Save failed: %s", err.message);
@@ -2003,9 +2102,9 @@ static bool open_level(Editor* e, const char* path) {
     e->floor_index = 0;
     e->floor_loaded[0] = true;
     e->player_floor = e->level.player_present ? 0 : -1;
-    e->onion_floor = -1;
     snprintf(e->floor_paths[0], sizeof e->floor_paths[0], "%s", path);
     history_reset(&e->floor_history[e->floor_index], &e->level);
+    restore_onion_state(e);
     reset_player_runtime(e);
     sel_clear(e);
     span_clear(e);
@@ -5592,6 +5691,7 @@ static void handle_shortcuts(Editor* e) {
 static void sync_active_floor(Editor* e) {
     if (e->floor_count <= 0) return;
     if (e->floor_index < 0 || e->floor_index >= FLOOR_MAX) return;
+    store_onion_state(e);
     e->floor_levels[e->floor_index] = e->level;
 }
 
@@ -5614,6 +5714,7 @@ static bool enter_floor(Editor* e, int index) {
     sync_active_floor(e);
     e->floor_index = index;
     e->level = e->floor_levels[index];
+    restore_onion_state(e);
     snprintf(e->current_path, sizeof e->current_path, "%s", e->floor_paths[index]);
     snprintf(e->path_buf, sizeof e->path_buf, "%s", e->floor_paths[index]);
 
@@ -5806,6 +5907,7 @@ Editor* editor_create(const char* startup_path) {
     } else if (!e->status[0]) {
         set_status(e, true, "No level loaded");
     }
+    restore_onion_state(e);
     return e;
 }
 

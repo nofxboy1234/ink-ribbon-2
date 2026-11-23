@@ -125,6 +125,13 @@ a click on a floor that does not own the player is refused with the owner
 floor's name; the camera fits the viewed floor instead of staying parked on the
 player elsewhere.
 
+`OnionSkin` in `Level` stores the image path, show flag, opacity, move offset,
+scale, frozen fit rectangle, checked floor index, and floor opacity. The editor
+copies its live fields into the active floor before saving and before switching
+away, then restores them when that floor becomes active again. `level_save`
+writes optional `onion_image` and `onion_floor` records and `level_load` reads
+them back, so reopening a level restores both overlays.
+
 Reference linework that is not a collision boundary - balcony rails, counters,
 shelving - is stored as a detail wall: an optional trailing `1` on the wall
 record. The editor draws and edits it normally; `nav_build` skips it, so a

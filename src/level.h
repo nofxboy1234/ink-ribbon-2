@@ -13,6 +13,7 @@
 #define LEVEL_MAX_LABELS 128
 #define LEVEL_MAX_STAIRS 64
 #define LEVEL_LABEL_LEN 64
+#define LEVEL_ONION_PATH_LEN 512
 
 #define DOOR_THICKNESS 3.0f
 #define DOOR_MIN_WIDTH 8.0f
@@ -100,6 +101,21 @@ typedef struct {
     bool locked;
 } Stairs;
 
+/* Reference overlays belong to the floor document so saving and reopening a
+   level restores the same skins. The image fit and transform are stored in
+   world units; the path is the last field so it may contain spaces. */
+typedef struct {
+    bool image_present;
+    char image_path[LEVEL_ONION_PATH_LEN];
+    bool image_show;
+    float image_alpha;
+    Vec2 image_offset;
+    float image_scale;
+    Rect image_fit;
+    int floor_index;
+    float floor_alpha;
+} OnionSkin;
+
 typedef struct {
     Wall walls[LEVEL_MAX_WALLS];
     int wall_count;
@@ -121,6 +137,7 @@ typedef struct {
     bool player_present;
     Vec2 player_pos;
     float player_heading;
+    OnionSkin onion;
 } Level;
 
 typedef struct {

@@ -107,7 +107,10 @@ window. The **Move** and **Scale** controls shift and resize the image, and
 image loads, so drawing or editing the level never shifts it. With **Transform**
 checked, dragging the canvas moves the image and the mouse wheel scales it
 around the cursor. The image skin and the floor skin are independent, so both
-can be visible at once. Both onion layers are hidden in play mode.
+can be visible at once. Both onion layers are hidden in play mode. The image path,
+transform, opacity, visibility, checked floor, and both opacities are saved in
+the active floor's `.lvl` file, so opening that floor or switching back to it
+restores the skins.
 
 Each floor is a complete `Level` with its own undo history, so undo never
 crosses a floor. Ctrl+S writes every loaded floor back to its file; Save As
@@ -202,9 +205,10 @@ level record (`player x y heading`), so a map holds at most one marker. In edit
 mode, use **Place player** in the Player section and click a walkable cell; the
 same click also works in play mode when no player exists. The nav
 grid uses 8-unit cells over the level bounds. A cell is walkable when its centre
-is inside a closed room/corridor outline and its player radius clears every solid
-wall. Door spans are cut out of every collinear wall they sit on, so doors are
-passable; stair treads are not walls, while stair-side rails and walls still
+clears every solid wall by the player radius. The walls themselves define the
+space, so an open wall chain, a corridor with a door gap, or a room drawn
+without formally closing the shape is still navigable. Door spans are cut out of
+every collinear wall they sit on, so doors are passable; stair treads are not walls, while stair-side rails and walls still
 block. Stair ends stay open so a run can be climbed, and a rectangle/line
 segment that would cut through a rail or solid wall is rejected. Stairs are
 drawn and walked over like any other open floor; they do not switch levels. A*

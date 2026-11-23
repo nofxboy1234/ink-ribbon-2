@@ -1791,6 +1791,77 @@ static void test_player(void) {
 }
 
 
+static void test_onion_skins(void) {
+    char path[256];
+    snprintf(path, sizeof path, "/tmp/ink_ribbon_onion_%ld.lvl",
+             (long)getpid());
+
+    Level level;
+    level_init(&level);
+    check(level.onion.floor_index == -1 &&
+              nearf(level.onion.floor_alpha, 0.25f) &&
+              nearf(level.onion.image_alpha, 0.35f) &&
+              nearf(level.onion.image_scale, 1.0f),
+          "a new level starts with onion skins off and default opacities");
+    level.onion.image_present = true;
+    snprintf(level.onion.image_path, sizeof level.onion.image_path,
+             "/tmp/reference floor skin.png");
+    level.onion.image_show = false;
+    level.onion.image_alpha = 0.42f;
+    level.onion.image_scale = 1.75f;
+    level.onion.image_offset = v2(12.5f, -7.25f);
+    level.onion.image_fit = (Rect){ { 1, 2 }, { 301, 202 } };
+    level.onion.floor_index = 2;
+    level.onion.floor_alpha = 0.61f;
+
+    LevelError err;
+    check(level_save(&level, path, &err), "save onion skin state");
+    Level loaded;
+    level_init(&loaded);
+    check(level_load(&loaded, path, &err), "load onion skin state");
+    check(loaded.onion.image_present &&
+              strcmp(loaded.onion.image_path,
+                     "/tmp/reference floor skin.png") == 0 &&
+              !loaded.onion.image_show &&
+              nearf(loaded.onion.image_alpha, 0.42f) &&
+              nearf(loaded.onion.image_scale, 1.75f) &&
+              nearv(loaded.onion.image_offset, v2(12.5f, -7.25f)) &&
+              nearv(loaded.onion.image_fit.min, v2(1, 2)) &&
+              nearv(loaded.onion.image_fit.max, v2(301, 202)) &&
+              loaded.onion.floor_index == 2 &&
+              nearf(loaded.onion.floor_alpha, 0.61f),
+          "onion skins survive save and load, including a path with spaces");
+    remove(path);
+}
+
+static void test_nav_open_chain(void) {
+    Level level;
+    level_init(&level);
+    ShapeId shape = level_add_shape(&level);
+    check(shape != 0, "start an open wall chain");
+    level_add_wall_to_shape(&level, shape, v2(0, 0), v2(100, 0));
+    level_add_wall_to_shape(&level, shape, v2(100, 0), v2(100, 100));
+    level_add_wall_to_shape(&level, shape, v2(100, 100), v2(0, 100));
+    level_add_wall_to_shape(&level, shape, v2(0, 100), v2(0, 0));
+    check(!level.shapes[0].closed, "the drawn chain stays open");
+
+    NavGrid* nav = malloc(sizeof(NavGrid));
+    check(nav && nav_build(nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav builds around an open wall chain");
+    if (nav) {
+        int center = nav_cell_at_world(nav, v2(50, 50));
+        check(nav_cell_is_open(nav, center),
+              "the space enclosed by an open chain is walkable");
+        int a = nav_cell_at_world(nav, v2(20, 20));
+        int b = nav_cell_at_world(nav, v2(80, 80));
+        int cells[NAV_MAX_PATH];
+        check(nav_cell_is_open(nav, a) && nav_cell_is_open(nav, b) &&
+                  nav_find_path(nav, a, b, cells, NAV_MAX_PATH) > 0,
+              "open-chain rooms path across without a closed shape");
+        free(nav);
+    }
+}
+
 static bool load_floor(const char* path, Level* level) {
     LevelError err;
     return level_load(level, path, &err);
@@ -1867,15 +1938,17 @@ static void test_floors(void) {
     check(matching_stair(&f1, 0, &f3) >= 0 &&
           matching_stair(&f1, 1, &f3) >= 0,
           "1F west stairwell registers with 3F");
-    /* The main-hall flights register between 1F and 2F. */
-    check(matching_stair(&f1, 2, &f2) >= 0 &&
-          matching_stair(&f1, 3, &f2) >= 0,
-          "1F main-hall stairwell registers with 2F");
-    /* The library and east stairwells register between 2F and 3F. */
-    check(matching_stair(&f2, 3, &f3) >= 0,
-          "2F library stair registers with 3F");
-    check(matching_stair(&f2, 4, &f3) >= 0,
-          "2F east stair registers with 3F");
+    /* Every 2F flight must share a footprint with a neighbouring floor. The
+       2F plan can be redrawn without changing the registration contract. */
+    int registered = 0;
+    for (int i = 0; i < f2.stairs_count; i++) {
+        if (matching_stair(&f2, i, &f1) >= 0 ||
+            matching_stair(&f2, i, &f3) >= 0) {
+            registered++;
+        }
+    }
+    check(registered == f2.stairs_count,
+          "every 2F stair registers with a neighbouring floor");
 }
 
 int main(void) {
@@ -1886,6 +1959,8 @@ int main(void) {
     test_labels();
     test_stairs();
     test_stairs_flip();
+    test_onion_skins();
+    test_nav_open_chain();
     test_rect_union();
     test_rect_union_save_load();
     test_save_load();

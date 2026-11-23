@@ -228,8 +228,11 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             int i = y * nav->cols + x;
             center[i] = v2(nav->origin.x + (x + 0.5f) * cell,
                            nav->origin.y + (y + 0.5f) * cell);
-            nav->open[i] = level_shape_at(level, center[i]) >= 0 &&
-                           point_clear_of_cached(level, spans, center[i], radius);
+            /* Wall clearance alone defines walkable space. Requiring a
+               closed shape hid open wall chains and the areas they enclose,
+               so a door into the next room produced no path at all. */
+            nav->open[i] =
+                point_clear_of_cached(level, spans, center[i], radius);
         }
     }
     for (int y = 0; y < nav->rows; y++) {

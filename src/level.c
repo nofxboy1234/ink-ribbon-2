@@ -227,6 +227,11 @@ void level_init(Level* level) {
     memset(level, 0, sizeof *level);
     level->next_wall_id = 1;
     level->next_shape_id = 1;
+    level->onion.floor_index = -1;
+    level->onion.floor_alpha = 0.25f;
+    level->onion.image_alpha = 0.35f;
+    level->onion.image_scale = 1.0f;
+    level->onion.image_show = true;
 }
 
 bool level_is_empty(const Level* level) {
@@ -1337,6 +1342,19 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
         ok = fprintf(f, "player %.3f %.3f %.4f\n", level->player_pos.x,
                      level->player_pos.y, level->player_heading) >= 0;
     }
+    if (ok && level->onion.image_present && level->onion.image_path[0]) {
+        const OnionSkin* o = &level->onion;
+        ok = fprintf(f,
+                     "onion_image %d %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %s\n",
+                     o->image_show ? 1 : 0, o->image_alpha, o->image_scale,
+                     o->image_offset.x, o->image_offset.y, o->image_fit.min.x,
+                     o->image_fit.min.y, o->image_fit.max.x, o->image_fit.max.y,
+                     o->image_path) >= 0;
+    }
+    if (ok && level->onion.floor_index >= 0) {
+        ok = fprintf(f, "onion_floor %d %.4f\n", level->onion.floor_index,
+                     level->onion.floor_alpha) >= 0;
+    }
 
     int write_errno = 0;
     if (ok && fflush(f) != 0) {
@@ -1638,6 +1656,55 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             tmp.player_present = true;
             tmp.player_pos = v2(x, y);
             tmp.player_heading = heading;
+        } else if (strcmp(tag, "onion_image") == 0) {
+            int show = 0;
+            float alpha = 0, scale = 1;
+            float ox = 0, oy = 0;
+            float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+            if (!read_int(&save, &show) || !read_float(&save, &alpha) ||
+                !read_float(&save, &scale) || !read_float(&save, &ox) ||
+                !read_float(&save, &oy) || !read_float(&save, &x0) ||
+                !read_float(&save, &y0) || !read_float(&save, &x1) ||
+                !read_float(&save, &y1) ||
+                !isfinite(alpha) || !isfinite(scale) || !isfinite(ox) ||
+                !isfinite(oy) || !isfinite(x0) || !isfinite(y0) ||
+                !isfinite(x1) || !isfinite(y1) || scale <= 0.0f) {
+                ok = fail_line(err, line_no, "malformed onion_image record");
+                break;
+            }
+            char* raw = save;
+            if (!raw) {
+                ok = fail_line(err, line_no, "malformed onion_image record");
+                break;
+            }
+            while (*raw == ' ' || *raw == '\t' || *raw == '\r') raw++;
+            size_t path_len = strlen(raw);
+            while (path_len > 0 &&
+                   (raw[path_len - 1] == '\n' || raw[path_len - 1] == '\r')) {
+                raw[--path_len] = '\0';
+            }
+            if (path_len == 0 || path_len >= LEVEL_ONION_PATH_LEN) {
+                ok = fail_line(err, line_no, "bad onion_image path");
+                break;
+            }
+            tmp.onion.image_present = true;
+            tmp.onion.image_show = show != 0;
+            tmp.onion.image_alpha = clampf(alpha, 0.0f, 1.0f);
+            tmp.onion.image_scale = scale;
+            tmp.onion.image_offset = v2(ox, oy);
+            tmp.onion.image_fit = (Rect){ { x0, y0 }, { x1, y1 } };
+            snprintf(tmp.onion.image_path, sizeof tmp.onion.image_path, "%s",
+                     raw);
+        } else if (strcmp(tag, "onion_floor") == 0) {
+            int index = -1;
+            float alpha = 0.25f;
+            if (!read_int(&save, &index) || !read_float(&save, &alpha) ||
+                next_token(&save) || !isfinite(alpha)) {
+                ok = fail_line(err, line_no, "malformed onion_floor record");
+                break;
+            }
+            tmp.onion.floor_index = index;
+            tmp.onion.floor_alpha = clampf(alpha, 0.0f, 1.0f);
         } else {
             ok = fail_line(err, line_no, "unknown record '%s'", tag);
         }
