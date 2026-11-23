@@ -50,6 +50,10 @@ typedef struct {
     float t;
     float width;
     bool locked;
+    /* Navigation-only opening. The reference has archways and open passages
+       that are not white door bars; the editor still needs a gap in the wall
+       for the nav grid, so those openings are stored but not drawn. */
+    bool hidden;
 } Door;
 
 typedef struct {

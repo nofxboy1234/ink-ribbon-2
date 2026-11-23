@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 static int failures;
@@ -625,7 +626,7 @@ static void test_save_load(void) {
           "save writes one open shape per wall");
     check(strstr(file, "wall 2 2 100.000 0.000 100.000 100.000\n") != NULL,
           "save writes wall records with the shape id and preserved ids");
-    check(strstr(file, "door 0 2 0.500 20.000\n") != NULL,
+    check(strstr(file, "door 0 2 0.500 20.000 0\n") != NULL,
           "save writes the white door host and span");
     check(strstr(file, "label 10.000 20.000 12.000 attic stairs\n") != NULL,
           "save writes label text as the rest of the line");
@@ -1789,6 +1790,88 @@ static void test_player(void) {
     remove(path);
 }
 
+
+static bool load_floor(const char* path, Level* level) {
+    LevelError err;
+    return level_load(level, path, &err);
+}
+
+static float rect_overlap_area(Rect a, Rect b) {
+    float x0 = a.min.x > b.min.x ? a.min.x : b.min.x;
+    float y0 = a.min.y > b.min.y ? a.min.y : b.min.y;
+    float x1 = a.max.x < b.max.x ? a.max.x : b.max.x;
+    float y1 = a.max.y < b.max.y ? a.max.y : b.max.y;
+    if (x1 <= x0 || y1 <= y0) return 0.0f;
+    return (x1 - x0) * (y1 - y0);
+}
+
+static float rect_area(Rect r) {
+    return (r.max.x - r.min.x) * (r.max.y - r.min.y);
+}
+
+int matching_stair(const Level* a, int ai, const Level* b) {
+    Rect ra = level_stairs_rect(&a->stairs[ai]);
+    int best = -1;
+    float best_frac = 0.0f;
+    for (int i = 0; i < b->stairs_count; i++) {
+        Rect rb = level_stairs_rect(&b->stairs[i]);
+        float overlap = rect_overlap_area(ra, rb);
+        float frac = overlap / rect_area(ra);
+        if (overlap > 0.0f && overlap / (rect_area(ra) + rect_area(rb) - overlap) >
+                                  best_frac) {
+            best_frac = frac;
+            best = i;
+        }
+    }
+    return best;
+}
+
+static void test_floors(void) {
+    Level f1, f2, f3;
+    check(load_floor("levels/re2-library-1f.lvl", &f1), "loads the 1F floor");
+    check(load_floor("levels/re2-library-2f.lvl", &f2), "loads the 2F floor");
+    check(load_floor("levels/re2-library.lvl", &f3), "loads the 3F floor");
+
+    Level* floors[3] = { &f1, &f2, &f3 };
+    for (int fi = 0; fi < 3; fi++) {
+        Level* level = floors[fi];
+        NavGrid* nav = malloc(sizeof(NavGrid));
+        check(nav && nav_build(nav, level, NAV_CELL_SIZE, 3.2f),
+              "floor nav grid builds");
+        int start = nav_cell_at_world(nav, level->player_pos);
+        check(nav_cell_is_open(nav, start), "floor player starts on a walkable cell");
+        int reachable = 0;
+        int wanted = level->stairs_count;
+        for (int i = 0; i < wanted; i++) {
+            Rect r = level_stairs_rect(&level->stairs[i]);
+            Vec2 c = v2((r.min.x + r.max.x) * 0.5f,
+                        (r.min.y + r.max.y) * 0.5f);
+            int cell = nav_cell_at_world(nav, c);
+            int path[NAV_MAX_PATH];
+            if (nav_cell_is_open(nav, cell) &&
+                nav_find_path(nav, start, cell, path, NAV_MAX_PATH) > 0) {
+                reachable++;
+            }
+        }
+        check(reachable == wanted, "every stairwell is reachable on foot");
+        free(nav);
+    }
+
+    /* The west stairwell runs from 1F through 3F. */
+    check(matching_stair(&f1, 0, &f3) >= 0 &&
+          matching_stair(&f1, 1, &f3) >= 0,
+          "1F west stairwell registers with 3F");
+    /* The main-hall flights register between 1F and 2F. */
+    check(matching_stair(&f1, 2, &f2) >= 0 &&
+          matching_stair(&f1, 3, &f2) >= 0,
+          "1F main-hall stairwell registers with 2F");
+    /* The library and east stairwells register between 2F and 3F. */
+    check(matching_stair(&f2, 3, &f3) >= 0,
+          "2F library stair registers with 3F");
+    check(matching_stair(&f2, 4, &f3) >= 0,
+          "2F east stair registers with 3F");
+}
+
 int main(void) {
     test_geometry();
     test_polygon();
@@ -1817,6 +1900,7 @@ int main(void) {
     test_nav_grid();
     test_nav_solid_wall();
     test_player();
+    test_floors();
 
     if (failures == 0) {
         printf("ALL CORE TESTS PASSED\n");

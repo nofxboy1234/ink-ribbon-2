@@ -5,11 +5,15 @@ Dear ImGui. It has one look: white lines on a near-black canvas. Walls and stair
 treads draw faint, doors draw white, and nothing is filled. The only tools are
 Select, Line, Rectangle, Door, Stairs, and Label.
 
-The editor loads `levels/re2-library.lvl` on startup. That file is rebuilt from
-the reference floor plan and matches it one reference pixel per world unit. The
-plan is kept in `levels/re2-library-source.lvl`; `tools/gen_ref_map.py`
+The editor loads `levels/re2-library.lvl` (3F) on startup. That file is rebuilt
+from the reference floor plan and matches it one reference pixel per world
+unit. The plan is kept in `levels/re2-library-source.lvl`; `tools/gen_ref_map.py`
 regenerates it from readable coordinates, and `tools/build_map.py` draws it in
-the running editor through the real tools. Play mode adds a single gold player
+the running editor through the real tools. The 1F and 2F plans live beside it in
+`levels/re2-library-1f.lvl` and `levels/re2-library-2f.lvl`, generated from the
+same reference-pixel coordinates by `tools/gen_floor_maps.py`. All three share
+one world coordinate system, so a stairwell occupies the same rectangle on
+every floor. Play mode adds a single gold player
 arrow, an 8-unit A* nav grid, click-to-walk control, and a following camera. `docs/screenshots/rebuilt-overlay.png`
 shows the finished level blended over the reference, and
 `docs/screenshots/rebuilt-side-by-side.png` shows the same pair side by side.
@@ -71,6 +75,36 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Pan, zoom, fit the level, undo and redo, save, and load.
 - Duplicate with Ctrl+D and lock a selection with L.
 
+## Floors
+
+The reference building is three floors. The 3F document is shown by default,
+and a vertical **3F / 2F / 1F** selector sits at the right edge of the canvas,
+matching the in-game map screen. Click a tab to swap the active floor in edit or
+play mode. The camera does not jump, so the south-east stairwell stays over the
+same parchment position while you compare floors. With several floors loaded,
+**F** fits their union, so every floor is drawn at the same scale and the
+selector never covers a wing.
+
+Each floor is a complete `Level` with its own undo history, so undo never
+crosses a floor. Ctrl+S writes every loaded floor back to its file; Save As
+writes the active floor. A floor set is detected at startup when the two
+companion files exist beside `levels/re2-library.lvl`; any other `--level` path
+keeps the original single-level behavior.
+
+In play mode the player keeps its world position when you click a floor tab.
+Walking through a stair run also changes floors: the tread fade marks the bottom
+of the run, so moving toward the bottom goes down one floor and moving toward
+the top goes up one. The three floors use the same rectangles for the west
+stairwell, the main-hall flights, the library stair, and the east stair, so a
+landing is directly above or below its neighbour. The player lands at the same
+world position on the new floor.
+
+Level files may carry navigation-only openings as a sixth door field:
+`door 0 <wall> <t> <width> 1`. The reference has archways and open room passages
+that are not white bars; they are stored so the 8-unit nav grid can pass through
+them, but the editor does not draw or select them. Visible doors omit the field
+or write `0`. Older files with five fields still load.
+
 ## Controls
 
 | Input | Action |
@@ -78,6 +112,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 | 1, 2, 3, 4, 5, 6 | Select, Line, Rectangle, Door, Stairs, Label. Select is the default |
 | Q | Toggle keeping the active drawing tool after an action |
 | Left click | Use the active tool |
+| Click a 3F / 2F / 1F tab | Switch floors in edit or play mode |
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
 | Drag a wall edge | Reshape the shape by sliding that edge and stretching its neighbours |
@@ -209,6 +244,7 @@ The script assumes a 1280x800 window and the default panel widths, and it uses i
 | `tools/xvfb.sh` | private X display, per-run process tags, cleanup |
 | `tools/focus_drop.py` | drop X focus the way switching windows does |
 | `tools/gen_demo_map.py` | regenerate the demo level |
+| `tools/gen_floor_maps.py` | generate the 1F and 2F floor plans from reference pixels |
 | `tools/gen_player_sprite.py` | repack the Krita PNG into the C sprite header |
 | `tools/level_info.c` | print counts and bounds for a level file |
 
@@ -220,7 +256,7 @@ Only `main.c` and `editor.c` include sokol or ImGui headers. The `test_level` ta
 - The union rebuilds a shape from its current outline, not from the rectangles that formed it.
 - A union drops a door whose wall becomes interior. The status strip reports how many doors were dropped.
 - Fixed capacities are 512 shapes, 512 walls, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
-- One level is open at a time. New and Open do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.
+- One floor set is open at a time. New and Open collapse back to a single level and do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.
 - Group drag moves walls, labels, and stairs. Doors follow their host walls, so a selected door whose wall is not selected stays put. A single selected door slides along its wall instead.
 - Locks are session-only. They are not written to the level file and are cleared by opening or creating a level.
 - The editor was tested on Linux and X11 only.

@@ -99,15 +99,42 @@ static int stair_rails(const Level* level, Vec2 seg[][2], int max) {
     return n;
 }
 
-static bool point_clear_of_walls(const Level* level, Vec2 p, float radius) {
+#define NAV_SPANS_PER_WALL 16
+
+typedef struct {
+    int count;
+    float t0[NAV_SPANS_PER_WALL];
+    float t1[NAV_SPANS_PER_WALL];
+} NavWallSpans;
+
+static bool edge_clear_of_walls(const Level* level, Vec2 a, Vec2 b,
+                                float radius) {
     float t0[LEVEL_MAX_DOORS];
     float t1[LEVEL_MAX_DOORS];
     for (int i = 0; i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
         int n = wall_solid_spans(level, w, radius, t0, t1, LEVEL_MAX_DOORS);
         for (int k = 0; k < n; k++) {
-            Vec2 a = segment_point(w->a, w->b, t0[k]);
-            Vec2 b = segment_point(w->a, w->b, t1[k]);
+            Vec2 c = segment_point(w->a, w->b, t0[k]);
+            Vec2 d = segment_point(w->a, w->b, t1[k]);
+            if (segment_crosses(a, b, c, d)) return false;
+        }
+    }
+    Vec2 rails[LEVEL_MAX_STAIRS * 2][2];
+    int rail_count = stair_rails(level, rails, LEVEL_MAX_STAIRS * 2);
+    for (int i = 0; i < rail_count; i++) {
+        if (segment_crosses(a, b, rails[i][0], rails[i][1])) return false;
+    }
+    return true;
+}
+
+static bool point_clear_of_cached(const Level* level, const NavWallSpans* spans,
+                                  Vec2 p, float radius) {
+    for (int i = 0; i < level->wall_count; i++) {
+        const Wall* w = &level->walls[i];
+        for (int k = 0; k < spans[i].count; k++) {
+            Vec2 a = segment_point(w->a, w->b, spans[i].t0[k]);
+            Vec2 b = segment_point(w->a, w->b, spans[i].t1[k]);
             if (point_segment_dist(p, a, b) < radius) return false;
         }
     }
@@ -121,16 +148,13 @@ static bool point_clear_of_walls(const Level* level, Vec2 p, float radius) {
     return true;
 }
 
-static bool edge_clear_of_walls(const Level* level, Vec2 a, Vec2 b,
-                                float radius) {
-    float t0[LEVEL_MAX_DOORS];
-    float t1[LEVEL_MAX_DOORS];
+static bool edge_clear_of_cached(const Level* level, const NavWallSpans* spans,
+                                 Vec2 a, Vec2 b, float radius) {
     for (int i = 0; i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
-        int n = wall_solid_spans(level, w, radius, t0, t1, LEVEL_MAX_DOORS);
-        for (int k = 0; k < n; k++) {
-            Vec2 c = segment_point(w->a, w->b, t0[k]);
-            Vec2 d = segment_point(w->a, w->b, t1[k]);
+        for (int k = 0; k < spans[i].count; k++) {
+            Vec2 c = segment_point(w->a, w->b, spans[i].t0[k]);
+            Vec2 d = segment_point(w->a, w->b, spans[i].t1[k]);
             if (segment_crosses(a, b, c, d)) return false;
         }
     }
@@ -184,6 +208,15 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
         }
     }
 
+    /* Precompute each wall's solid spans once.  Recomputing them per cell
+       made a dense multi-floor plan with dozens of doors take seconds. */
+    static NavWallSpans spans[LEVEL_MAX_WALLS];
+    for (int i = 0; i < level->wall_count; i++) {
+        spans[i].count = wall_solid_spans(level, &level->walls[i], radius,
+                                          spans[i].t0, spans[i].t1,
+                                          NAV_SPANS_PER_WALL);
+    }
+
     Vec2 center[NAV_MAX_CELLS];
     for (int y = 0; y < nav->rows; y++) {
         for (int x = 0; x < nav->cols; x++) {
@@ -191,7 +224,7 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             center[i] = v2(nav->origin.x + (x + 0.5f) * cell,
                            nav->origin.y + (y + 0.5f) * cell);
             nav->open[i] = level_shape_at(level, center[i]) >= 0 &&
-                           point_clear_of_walls(level, center[i], radius);
+                           point_clear_of_cached(level, spans, center[i], radius);
         }
     }
     for (int y = 0; y < nav->rows; y++) {
@@ -200,19 +233,19 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             if (!nav->open[i]) continue;
             unsigned char links = 0;
             if (x + 1 < nav->cols && nav->open[i + 1] &&
-                edge_clear_of_walls(level, center[i], center[i + 1], radius)) {
+                edge_clear_of_cached(level, spans, center[i], center[i + 1], radius)) {
                 links |= 1u << 0;
             }
             if (x > 0 && nav->open[i - 1] &&
-                edge_clear_of_walls(level, center[i], center[i - 1], radius)) {
+                edge_clear_of_cached(level, spans, center[i], center[i - 1], radius)) {
                 links |= 1u << 1;
             }
             if (y + 1 < nav->rows && nav->open[i + nav->cols] &&
-                edge_clear_of_walls(level, center[i], center[i + nav->cols], radius)) {
+                edge_clear_of_cached(level, spans, center[i], center[i + nav->cols], radius)) {
                 links |= 1u << 2;
             }
             if (y > 0 && nav->open[i - nav->cols] &&
-                edge_clear_of_walls(level, center[i], center[i - nav->cols], radius)) {
+                edge_clear_of_cached(level, spans, center[i], center[i - nav->cols], radius)) {
                 links |= 1u << 3;
             }
             bool east = (links & (1u << 0)) != 0;
@@ -222,25 +255,25 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             /* 4=NE, 5=NW, 6=SE, 7=SW, matching the A* direction table. */
             if (x + 1 < nav->cols && y > 0 && east && north &&
                 nav->open[i - nav->cols + 1] &&
-                edge_clear_of_walls(level, center[i],
+                edge_clear_of_cached(level, spans, center[i],
                                     center[i - nav->cols + 1], radius)) {
                 links |= 1u << 4;
             }
             if (x > 0 && y > 0 && west && north &&
                 nav->open[i - nav->cols - 1] &&
-                edge_clear_of_walls(level, center[i],
+                edge_clear_of_cached(level, spans, center[i],
                                     center[i - nav->cols - 1], radius)) {
                 links |= 1u << 5;
             }
             if (x + 1 < nav->cols && y + 1 < nav->rows && east && south &&
                 nav->open[i + nav->cols + 1] &&
-                edge_clear_of_walls(level, center[i],
+                edge_clear_of_cached(level, spans, center[i],
                                     center[i + nav->cols + 1], radius)) {
                 links |= 1u << 6;
             }
             if (x > 0 && y + 1 < nav->rows && west && south &&
                 nav->open[i + nav->cols - 1] &&
-                edge_clear_of_walls(level, center[i],
+                edge_clear_of_cached(level, spans, center[i],
                                     center[i + nav->cols - 1], radius)) {
                 links |= 1u << 7;
             }

@@ -20,6 +20,9 @@
 
 #define PANEL_LEFT_W 190.0f
 #define PANEL_RIGHT_W 300.0f
+#define FLOOR_MAX 3
+#define FLOOR_DEFAULT 2
+static const char* FLOOR_LABELS[FLOOR_MAX] = { "1F", "2F", "3F" };
 #define STATUS_H 24.0f
 #define FIT_MARGIN 40.0f
 #define HIT_TOL_PX 7.0f
@@ -206,7 +209,16 @@ typedef struct {
 
 struct Editor {
     Level level;
-    History history;
+    /* The three reference floors live side by side. The active floor is
+       e->level so every editing path keeps using one document; switching
+       copies it into its slot and loads the target slot. History is kept per
+       floor, so undo never crosses a floor. */
+    Level floor_levels[FLOOR_MAX];
+    History floor_history[FLOOR_MAX];
+    char floor_paths[FLOOR_MAX][512];
+    bool floor_loaded[FLOOR_MAX];
+    int floor_count;
+    int floor_index;
     Camera camera;
     Rect canvas;
     float menu_height;
@@ -273,6 +285,9 @@ struct Editor {
     bool player_pivot;
     bool follow_player;
     bool camera_pan_active;
+    /* Brief lock so a stair does not bounce the player straight back to the
+       floor they just left while they are still standing on the treads. */
+    float stair_cooldown;
     Vec2 camera_pan_target;
     Vec2 preview_path[NAV_MAX_PATH];
     int preview_count;
@@ -297,6 +312,8 @@ static const char* TOOL_HINTS[TOOL_COUNT] = {
     "drag a rectangle for a stair run; Flip reverses the fade",
     "click to place a label, then type its text",
 };
+static bool save_all_floors(Editor* e);
+static bool enter_floor(Editor* e, int index);
 
 static ImU32 col32(unsigned rgb) {
     return IM_COL32((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, 255);
@@ -324,7 +341,7 @@ static void set_status(Editor* e, bool error, const char* fmt, ...) {
 }
 
 static void commit(Editor* e, const char* message) {
-    history_commit(&e->history, &e->level);
+    history_commit(&e->floor_history[e->floor_index], &e->level);
     if (message && message[0]) set_status(e, false, "%s", message);
 }
 
@@ -886,7 +903,7 @@ static bool selection_walls_whole_shape(const Editor* e) {
 static void switch_tool(Editor* e, Tool tool) {
     if (e->tool == tool) return;
     if (gesture_is_drag(e) && e->gesture.kind != GESTURE_MARQUEE) {
-        history_restore_current(&e->history, &e->level);
+        history_restore_current(&e->floor_history[e->floor_index], &e->level);
         sel_prune(e);
     }
     if (e->gesture.kind == GESTURE_CHAIN) discard_empty_chain_shape(e);
@@ -931,15 +948,32 @@ static void fit_camera(Editor* e) {
     }
 
     Rect b = level_bounds(&e->level);
+    /* With several floors loaded, fit their union so every floor keeps the
+       same on-screen scale and the floor selector never has to hide a wing. */
+    if (e->floor_count > 1) {
+        for (int i = 0; i < e->floor_count; i++) {
+            if (i == e->floor_index || !e->floor_loaded[i]) continue;
+            Rect r = level_bounds(&e->floor_levels[i]);
+            if (r.min.x < b.min.x) b.min.x = r.min.x;
+            if (r.min.y < b.min.y) b.min.y = r.min.y;
+            if (r.max.x > b.max.x) b.max.x = r.max.x;
+            if (r.max.y > b.max.y) b.max.y = r.max.y;
+        }
+    }
     float w = b.max.x - b.min.x;
     float h = b.max.y - b.min.y;
     if (w < 1.0f) w = 1.0f;
     if (h < 1.0f) h = 1.0f;
-    float zx = (cw - FIT_MARGIN * 2.0f) / w;
+    float margin_l = FIT_MARGIN;
+    float margin_r = FIT_MARGIN;
+    if (e->floor_count > 1) margin_r = 96.0f;
+    float zx = (cw - margin_l - margin_r) / w;
     float zy = (ch - FIT_MARGIN * 2.0f) / h;
     float z = zx < zy ? zx : zy;
     e->camera.zoom = clampf(z, 0.15f, 6.0f);
-    e->camera.center = v2((b.min.x + b.max.x) * 0.5f, (b.min.y + b.max.y) * 0.5f);
+    e->camera.center = v2(
+        (b.min.x + b.max.x) * 0.5f + (margin_r - margin_l) * 0.5f / e->camera.zoom,
+        (b.min.y + b.max.y) * 0.5f);
 }
 
 static float angle_delta(float from, float to) {
@@ -1253,6 +1287,39 @@ static void update_waypoint_progress(Editor* e) {
     }
 }
 
+
+static bool point_in_stair(const Stairs* s, Vec2 p) {
+    Rect r = level_stairs_rect(s);
+    return p.x >= r.min.x && p.x <= r.max.x &&
+           p.y >= r.min.y && p.y <= r.max.y;
+}
+
+/* A stair's bottom end is the min end when bottom is set and the max end
+   otherwise. Walking toward the bottom goes down one floor; walking toward
+   the top goes up one floor. */
+static void try_stair_transition(Editor* e, Vec2 from, Vec2 to) {
+    if (e->floor_count <= 1 || e->stair_cooldown > 0.0f) return;
+    for (int i = 0; i < e->level.stairs_count; i++) {
+        const Stairs* s = &e->level.stairs[i];
+        if (!point_in_stair(s, to)) continue;
+        float axis = s->dir == STAIRS_V ? to.y - from.y : to.x - from.x;
+        if (fabsf(axis) < 0.05f) continue;
+        bool going_down = s->bottom ? axis < 0.0f : axis > 0.0f;
+        int target = e->floor_index + (going_down ? -1 : 1);
+        if (target < 0 || target >= e->floor_count || !e->floor_loaded[target]) {
+            continue;
+        }
+        char message[96];
+        snprintf(message, sizeof message, "Stairs %s to %s",
+                 going_down ? "down" : "up", FLOOR_LABELS[target]);
+        if (enter_floor(e, target)) {
+            e->stair_cooldown = 0.25f;
+            set_status(e, false, "%s", message);
+        }
+        return;
+    }
+}
+
 static void update_player(Editor* e, float dt) {
     if (!e->play_mode || !e->level.player_present || !e->player_moving) return;
     if (dt <= 0.0f) return;
@@ -1262,7 +1329,9 @@ static void update_player(Editor* e, float dt) {
         return;
     }
     Vec2 pos = e->level.player_pos;
+    Vec2 start_pos = pos;
     float heading = e->level.player_heading;
+    if (e->stair_cooldown > 0.0f) e->stair_cooldown -= dt;
     while (e->player_path_index < e->player_path_count &&
            v2_dist(pos, e->player_path[e->player_path_index]) < 0.6f) {
         e->player_path_index++;
@@ -1315,6 +1384,7 @@ static void update_player(Editor* e, float dt) {
     e->level.player_pos = pos;
     e->level.player_heading = heading;
     update_waypoint_progress(e);
+    if (v2_dist(start_pos, pos) > 0.01f) try_stair_transition(e, start_pos, pos);
 }
 
 static void update_camera(Editor* e, float dt) {
@@ -1384,6 +1454,7 @@ static Hit hit_test(const Editor* e, Vec2 world) {
     float tol = HIT_TOL_PX / e->camera.zoom;
 
     for (int i = e->level.door_count - 1; i >= 0; i--) {
+        if (e->level.doors[i].hidden) continue;
         Vec2 a, b;
         level_door_span(&e->level, &e->level.doors[i], &a, &b);
         float d = point_segment_dist(world, a, b);
@@ -1617,10 +1688,10 @@ static void sel_after_history(Editor* e, LevelCounts before) {
 
 static void do_undo(Editor* e) {
     if (gesture_is_drag(e)) { set_status(e, false, "Finish the drag before undoing"); return; }
-    if (!history_can_undo(&e->history)) { set_status(e, false, "Nothing to undo"); return; }
+    if (!history_can_undo(&e->floor_history[e->floor_index])) { set_status(e, false, "Nothing to undo"); return; }
     LevelCounts before = level_counts(&e->level);
     cancel_gesture(e);
-    history_undo(&e->history, &e->level);
+    history_undo(&e->floor_history[e->floor_index], &e->level);
     sel_after_history(e, before);
     span_clear(e);
     e->label_buf_ready = false;
@@ -1629,10 +1700,10 @@ static void do_undo(Editor* e) {
 
 static void do_redo(Editor* e) {
     if (gesture_is_drag(e)) { set_status(e, false, "Finish the drag before redoing"); return; }
-    if (!history_can_redo(&e->history)) { set_status(e, false, "Nothing to redo"); return; }
+    if (!history_can_redo(&e->floor_history[e->floor_index])) { set_status(e, false, "Nothing to redo"); return; }
     LevelCounts before = level_counts(&e->level);
     cancel_gesture(e);
-    history_redo(&e->history, &e->level);
+    history_redo(&e->floor_history[e->floor_index], &e->level);
     sel_after_history(e, before);
     span_clear(e);
     e->label_buf_ready = false;
@@ -1657,8 +1728,11 @@ static void reset_player_runtime(Editor* e) {
 
 static void new_level(Editor* e) {
     reset_player_runtime(e);
+    e->floor_count = 1;
+    e->floor_index = 0;
+    e->floor_loaded[0] = true;
     level_init(&e->level);
-    history_reset(&e->history, &e->level);
+    history_reset(&e->floor_history[e->floor_index], &e->level);
     sel_clear(e);
     span_clear(e);
     cancel_gesture(e);
@@ -1677,6 +1751,12 @@ static bool save_level_as(Editor* e, const char* path) {
         return false;
     }
     snprintf(e->current_path, sizeof e->current_path, "%s", target);
+    if (e->floor_index >= 0 && e->floor_index < FLOOR_MAX) {
+        snprintf(e->floor_paths[e->floor_index],
+                 sizeof e->floor_paths[e->floor_index], "%s", target);
+        e->floor_loaded[e->floor_index] = true;
+        e->floor_levels[e->floor_index] = e->level;
+    }
     set_status(e, false, "Saved %s", path);
     e->modal_error[0] = '\0';
     return true;
@@ -1684,12 +1764,19 @@ static bool save_level_as(Editor* e, const char* path) {
 
 static bool open_level(Editor* e, const char* path) {
     LevelError err;
-    if (!level_load(&e->level, path, &err)) {
+    Level loaded;
+    level_init(&loaded);
+    if (!level_load(&loaded, path, &err)) {
         snprintf(e->modal_error, sizeof e->modal_error, "%s", err.message);
         set_status(e, true, "Open failed: %s", err.message);
         return false;
     }
-    history_reset(&e->history, &e->level);
+    e->level = loaded;
+    e->floor_count = 1;
+    e->floor_index = 0;
+    e->floor_loaded[0] = true;
+    snprintf(e->floor_paths[0], sizeof e->floor_paths[0], "%s", path);
+    history_reset(&e->floor_history[e->floor_index], &e->level);
     reset_player_runtime(e);
     sel_clear(e);
     span_clear(e);
@@ -1993,6 +2080,7 @@ static void draw_doors(const Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     for (int i = 0; i < e->level.door_count; i++) {
         const Door* d = &e->level.doors[i];
+        if (d->hidden) continue;
         const Wall* w = level_wall_by_id_const(&e->level, d->wall);
         if (!w) continue;
         Vec2 a, b;
@@ -2582,7 +2670,7 @@ static int merge_overlapping_shapes(Editor* e, const Level* before) {
 static void finish_move(Editor* e) {
     if (e->gesture.moved) {
         Level before;
-        bool have_before = history_current_copy(&e->history, &before);
+        bool have_before = history_current_copy(&e->floor_history[e->floor_index], &before);
         int left = 0;
         int moved = moved_objects(e, &left);
         char message[256];
@@ -3186,7 +3274,7 @@ static void update_drag(Editor* e, bool have_pointer) {
             if (!down) {
                 if (g->moved) {
                     Level before;
-                    bool have_before = history_current_copy(&e->history, &before);
+                    bool have_before = history_current_copy(&e->floor_history[e->floor_index], &before);
                     commit(e, "Reshaped");
                     if (merge_overlapping_shapes(e, have_before ? &before : NULL) > 0) {
                         set_status(e, false, "Overlapping rectangles joined");
@@ -3388,7 +3476,7 @@ static void cancel_transient(Editor* e) {
         cancel_gesture(e);
         set_status(e, false, "Draft cancelled");
     } else if (gesture_is_drag(e)) {
-        bool restored = history_restore_current(&e->history, &e->level);
+        bool restored = history_restore_current(&e->floor_history[e->floor_index], &e->level);
         sel_prune(e);
         cancel_gesture(e);
         set_status(e, false, restored ? "Drag cancelled" : "Drag cancelled, no history");
@@ -3950,6 +4038,65 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     }
 }
 
+
+/* The in-game map screen puts a vertical 3F / 2F / 1F stack to the right of
+   the plan. The editor draws the same stack as a canvas overlay, so it is
+   present and clickable in edit and play mode. */
+#define FLOOR_TAB_W 52.0f
+#define FLOOR_TAB_H 46.0f
+#define FLOOR_TAB_GAP 2.0f
+#define FLOOR_TAB_RIGHT 18.0f
+
+static bool floor_tab_rect(const Editor* e, int index, ImVec2* out_min,
+                           ImVec2* out_max) {
+    if (e->floor_count <= 1 || index < 0 || index >= e->floor_count) return false;
+    float total = e->floor_count * FLOOR_TAB_H +
+                  (e->floor_count - 1) * FLOOR_TAB_GAP;
+    float x1 = e->canvas.max.x - FLOOR_TAB_RIGHT;
+    float x0 = x1 - FLOOR_TAB_W;
+    float y0 = (e->canvas.min.y + e->canvas.max.y) * 0.5f - total * 0.5f;
+    /* Slot 0 is 1F at the bottom, matching the reference stack. */
+    int row = e->floor_count - 1 - index;
+    float top = y0 + row * (FLOOR_TAB_H + FLOOR_TAB_GAP);
+    *out_min = (ImVec2){ x0, top };
+    *out_max = (ImVec2){ x1, top + FLOOR_TAB_H };
+    return true;
+}
+
+static int floor_tab_at(const Editor* e, ImVec2 p) {
+    for (int i = 0; i < e->floor_count; i++) {
+        ImVec2 a, b;
+        if (!floor_tab_rect(e, i, &a, &b)) continue;
+        if (p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y) return i;
+    }
+    return -1;
+}
+
+static void draw_floor_selector(Editor* e, ImVec2 mouse, bool have_pointer) {
+    if (e->floor_count <= 1) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    int hover = have_pointer ? floor_tab_at(e, mouse) : -1;
+    ImFont* font = igGetFont();
+    for (int i = 0; i < e->floor_count; i++) {
+        ImVec2 a, b;
+        if (!floor_tab_rect(e, i, &a, &b)) continue;
+        bool active = i == e->floor_index;
+        bool lit = active || i == hover;
+        ImU32 fill = active ? col32a(0x20252b, 245) : col32a(0x0d0f12, 210);
+        ImU32 border = active ? col32(0xe9e9e9)
+                              : (i == hover ? col32(0x8b9097)
+                                            : col32(0x3a4048));
+        ImDrawList_AddRectFilled(dl, a, b, fill);
+        ImDrawList_AddRectEx(dl, a, b, border, 2.0f, active ? 2.0f : 1.0f, 0);
+        const char* label = FLOOR_LABELS[i];
+        ImVec2 sz = ImFont_CalcTextSizeA(font, 18.0f, FLT_MAX, 0.0f, label);
+        ImVec2 p = { (a.x + b.x - sz.x) * 0.5f, (a.y + b.y - sz.y) * 0.5f };
+        ImDrawList_AddTextImFontPtrEx(dl, font, 18.0f, p,
+                                      lit ? col32(0xf3f3f3) : col32(0x9aa0a7),
+                                      label, NULL, 0.0f, NULL);
+    }
+}
+
 static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -3978,7 +4125,15 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
         e->fit_pending = false;
     }
 
-    handle_canvas_input(e, hovered && inside, have_pointer);
+    bool over_floors = false;
+    if (have_pointer && e->floor_count > 1) {
+        int tab = floor_tab_at(e, mouse);
+        if (tab >= 0) {
+            over_floors = true;
+            if (igIsMouseClicked(0)) enter_floor(e, tab);
+        }
+    }
+    handle_canvas_input(e, hovered && inside && !over_floors, have_pointer);
 
     ImDrawList* dl = igGetWindowDrawList();
     ImDrawList_AddRectFilledEx(dl, v2_to_im(e->canvas.min), v2_to_im(e->canvas.max),
@@ -4002,6 +4157,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
     draw_selection(e);
     draw_marquee(e);
+    draw_floor_selector(e, mouse, have_pointer);
     draw_status_strip(e);
     /* Frame rate sits in the top right corner of the canvas, away from the
        status strip, so it never moves while the status text changes. */
@@ -4028,7 +4184,7 @@ static void draw_menu(Editor* e) {
             igSeparator();
             bool can_save = e->current_path[0] != '\0';
             if (igMenuItemEx("Save", "Ctrl+S", false, can_save)) {
-                save_level_as(e, e->current_path);
+                save_all_floors(e);
             }
             if (igMenuItemEx("Save As...", "Ctrl+Shift+S", false, true)) {
                 e->request_modal = MODAL_SAVE_AS;
@@ -4040,8 +4196,8 @@ static void draw_menu(Editor* e) {
         }
         if (igBeginMenu("Edit")) {
             bool busy = gesture_is_drag(e);
-            bool undo_ok = history_can_undo(&e->history) && !busy;
-            bool redo_ok = history_can_redo(&e->history) && !busy;
+            bool undo_ok = history_can_undo(&e->floor_history[e->floor_index]) && !busy;
+            bool redo_ok = history_can_redo(&e->floor_history[e->floor_index]) && !busy;
             if (igMenuItemEx("Undo", "Ctrl+Z", false, undo_ok)) do_undo(e);
             if (igMenuItemEx("Redo", "Ctrl+Shift+Z", false, redo_ok)) do_redo(e);
             igSeparator();
@@ -4430,9 +4586,13 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Nothing selected");
         igDummy((ImVec2){ 0.0f, 4.0f });
         heading("Level");
+        int visible_doors = 0;
+        for (int i = 0; i < e->level.door_count; i++) {
+            if (!e->level.doors[i].hidden) visible_doors++;
+        }
         igText("Walls   %d", e->level.wall_count);
         igText("Shapes  %d", e->level.shape_count);
-        igText("Doors   %d", e->level.door_count);
+        igText("Doors   %d", visible_doors);
         igText("Labels  %d", e->level.label_count);
         igText("Stairs  %d", e->level.stairs_count);
         igDummy((ImVec2){ 0.0f, 4.0f });
@@ -4772,8 +4932,7 @@ static void handle_shortcuts(Editor* e) {
     if (e->play_mode) {
         if (io->KeyCtrl && igIsKeyPressedEx(ImGuiKey_S, false)) {
             if (io->KeyShift) open_path_modal(e, MODAL_SAVE_AS);
-            else if (e->current_path[0]) save_level_as(e, e->current_path);
-            else open_path_modal(e, MODAL_SAVE_AS);
+            else save_all_floors(e);
             return;
         }
         if (io->KeyCtrl) return;
@@ -4825,8 +4984,7 @@ static void handle_shortcuts(Editor* e) {
         }
         if (igIsKeyPressedEx(ImGuiKey_S, false)) {
             if (shift) open_path_modal(e, MODAL_SAVE_AS);
-            else if (e->current_path[0]) save_level_as(e, e->current_path);
-            else open_path_modal(e, MODAL_SAVE_AS);
+            else save_all_floors(e);
             return;
         }
         if (igIsKeyPressedEx(ImGuiKey_D, false)) {
@@ -4912,16 +5070,113 @@ static void handle_shortcuts(Editor* e) {
     }
 }
 
+
+/* ---- floors -------------------------------------------------------------
+   The reference building has three floors. Each floor is a complete Level in
+   its own file, drawn at the same world scale, so a stairwell occupies the
+   same rectangle on every floor. The selector switches the active document
+   without fitting the camera, exactly like the in-game map screen. */
+
+static void sync_active_floor(Editor* e) {
+    if (e->floor_count <= 0) return;
+    if (e->floor_index < 0 || e->floor_index >= FLOOR_MAX) return;
+    e->floor_levels[e->floor_index] = e->level;
+}
+
+static bool enter_floor(Editor* e, int index) {
+    if (index < 0 || index >= e->floor_count || index >= FLOOR_MAX) return false;
+    if (index == e->floor_index) return false;
+    if (!e->floor_loaded[index]) {
+        set_status(e, true, "Floor %s has no level file", FLOOR_LABELS[index]);
+        return false;
+    }
+    cancel_gesture(e);
+    sel_clear(e);
+    span_clear(e);
+
+    bool was_play = e->play_mode;
+    bool had_player = e->level.player_present;
+    Vec2 player_pos = e->level.player_pos;
+    float player_heading = e->level.player_heading;
+
+    sync_active_floor(e);
+    e->floor_index = index;
+    e->level = e->floor_levels[index];
+    snprintf(e->current_path, sizeof e->current_path, "%s", e->floor_paths[index]);
+    snprintf(e->path_buf, sizeof e->path_buf, "%s", e->floor_paths[index]);
+
+    e->nav_ready = false;
+    e->player_moving = false;
+    e->player_pivot = false;
+    e->player_path_count = 0;
+    e->player_path_index = 0;
+    e->player_waypoint_count = 0;
+    e->preview_count = 0;
+    e->camera_pan_active = false;
+
+    if (was_play && had_player) {
+        /* Keep the player at the same world position on the new floor. The
+           floors share one coordinate system, so a stair landing is directly
+           above or below the matching landing. */
+        int cell = -1;
+        e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                 PLAYER_RADIUS);
+        if (e->nav_ready) {
+            cell = nav_cell_at_world(&e->nav, player_pos);
+            int open = nav_nearest_open_cell(&e->nav, cell, 4);
+            if (open >= 0) {
+                e->level.player_present = true;
+                e->level.player_pos = nav_cell_center(&e->nav, open);
+                e->level.player_heading = player_heading;
+                e->follow_player = true;
+                e->camera.center = e->level.player_pos;
+            }
+        }
+    } else {
+        e->follow_player = false;
+    }
+    set_status(e, false, "Floor %s", FLOOR_LABELS[index]);
+    return true;
+}
+
+static bool save_all_floors(Editor* e) {
+    if (e->floor_count <= 1) {
+        if (!e->current_path[0]) {
+            open_path_modal(e, MODAL_SAVE_AS);
+            return false;
+        }
+        return save_level_as(e, e->current_path);
+    }
+    sync_active_floor(e);
+    LevelError err;
+    for (int i = 0; i < e->floor_count; i++) {
+        if (!e->floor_loaded[i]) continue;
+        if (!level_save(&e->floor_levels[i], e->floor_paths[i], &err)) {
+            snprintf(e->modal_error, sizeof e->modal_error, "%s", err.message);
+            set_status(e, true, "Save failed: %s", err.message);
+            return false;
+        }
+    }
+    set_status(e, false, "Saved %d floors", e->floor_count);
+    return true;
+}
+
 Editor* editor_create(const char* startup_path) {
     Editor* e = calloc(1, sizeof *e);
     if (!e) return NULL;
 
     apply_theme();
-    level_init(&e->level);
-    if (!history_init(&e->history)) {
-        set_status(e, true, "Undo history unavailable");
+    for (int i = 0; i < FLOOR_MAX; i++) {
+        level_init(&e->floor_levels[i]);
+        if (!history_init(&e->floor_history[i])) {
+            set_status(e, true, "Undo history unavailable");
+        }
     }
-    history_reset(&e->history, &e->level);
+    level_init(&e->level);
+    e->floor_count = 1;
+    e->floor_index = 0;
+    e->floor_loaded[0] = true;
+    history_reset(&e->floor_history[e->floor_index], &e->level);
 
     e->camera.center = v2(0.0f, 0.0f);
     e->camera.zoom = 1.0f;
@@ -4969,12 +5224,46 @@ Editor* editor_create(const char* startup_path) {
     const char* path = (startup_path && startup_path[0]) ? startup_path
                                                           : "levels/re2-library.lvl";
     bool loaded = false;
-    if (file_exists(path)) {
+    /* A floor set is present when both companion files sit beside the 3F
+       document. Any other startup path keeps the original single-level
+       behavior. */
+    const char* companions[FLOOR_MAX] = {
+        "levels/re2-library-1f.lvl",
+        "levels/re2-library-2f.lvl",
+        path,
+    };
+    bool have_floors = !startup_path || startup_path[0] == '\0' ||
+                       strcmp(path, "levels/re2-library.lvl") == 0;
+    for (int i = 0; i < FLOOR_MAX && have_floors; i++) {
+        have_floors = file_exists(companions[i]);
+    }
+    if (have_floors) {
+        e->floor_count = FLOOR_MAX;
+        for (int i = 0; i < FLOOR_MAX; i++) {
+            LevelError err;
+            snprintf(e->floor_paths[i], sizeof e->floor_paths[i], "%s",
+                     companions[i]);
+            if (level_load(&e->floor_levels[i], companions[i], &err)) {
+                e->floor_loaded[i] = true;
+                history_reset(&e->floor_history[i], &e->floor_levels[i]);
+            } else {
+                e->floor_loaded[i] = false;
+                set_status(e, true, "Floor load failed: %s", err.message);
+            }
+        }
+        e->floor_index = FLOOR_DEFAULT;
+        e->level = e->floor_levels[FLOOR_DEFAULT];
+        snprintf(e->current_path, sizeof e->current_path, "%s",
+                 e->floor_paths[FLOOR_DEFAULT]);
+        snprintf(e->path_buf, sizeof e->path_buf, "%s", e->current_path);
+        loaded = e->floor_loaded[FLOOR_DEFAULT];
+    } else if (file_exists(path)) {
         LevelError err;
         if (level_load(&e->level, path, &err)) {
             loaded = true;
             snprintf(e->current_path, sizeof e->current_path, "%s", path);
             snprintf(e->path_buf, sizeof e->path_buf, "%s", path);
+            snprintf(e->floor_paths[0], sizeof e->floor_paths[0], "%s", path);
         } else {
             set_status(e, true, "Startup level failed: %s", err.message);
         }
@@ -4994,7 +5283,7 @@ Editor* editor_create(const char* startup_path) {
         }
     }
 
-    history_reset(&e->history, &e->level);
+    history_reset(&e->floor_history[e->floor_index], &e->level);
     if (loaded) {
         set_status(e, false, "Loaded %s", e->current_path);
     } else if (!e->status[0]) {
@@ -5009,7 +5298,7 @@ void editor_destroy(Editor* e) {
     if (e->player_sampler.id) sg_destroy_sampler(e->player_sampler);
     if (e->player_view.id) sg_destroy_view(e->player_view);
     if (e->player_image.id) sg_destroy_image(e->player_image);
-    history_shutdown(&e->history);
+    for (int i = 0; i < FLOOR_MAX; i++) history_shutdown(&e->floor_history[i]);
     free(e);
 }
 

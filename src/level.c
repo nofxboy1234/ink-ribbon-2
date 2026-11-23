@@ -1078,7 +1078,7 @@ int level_add_door(Level* level, WallId wall, float t, float width) {
     if (!level_wall_by_id_const(level, wall)) return -1;
 
     int index = level->door_count++;
-    level->doors[index] = (Door){ wall, t, width, false };
+    level->doors[index] = (Door){ wall, t, width, false, false };
     level_set_door_span(level, index, t, width);
     return index;
 }
@@ -1310,8 +1310,8 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
     }
     for (int i = 0; ok && i < level->door_count; i++) {
         const Door* d = &level->doors[i];
-        ok = fprintf(f, "door 0 %" PRIu32 " %.3f %.3f\n",
-                     d->wall, d->t, d->width) >= 0;
+        ok = fprintf(f, "door 0 %" PRIu32 " %.3f %.3f %d\n",
+                     d->wall, d->t, d->width, d->hidden ? 1 : 0) >= 0;
     }
     for (int i = 0; ok && i < level->label_count; i++) {
         const Label* label = &level->labels[i];
@@ -1499,19 +1499,23 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             int color;
             uint32_t wall;
             float t, width;
+            int hidden = 0;
             if (!read_int(&save, &color) || !read_uint(&save, &wall) ||
-                !read_float(&save, &t) || !read_float(&save, &width) ||
-                next_token(&save)) {
+                !read_float(&save, &t) || !read_float(&save, &width)) {
                 ok = fail_line(err, line_no, "malformed door record");
                 break;
             }
+            char* extra = next_token(&save);
+            int hidden_flag = 0;
+            if (extra && parse_int(extra, &hidden_flag)) hidden = hidden_flag;
             (void)color;
             if (tmp.door_count >= LEVEL_MAX_DOORS) {
                 ok = fail_line(err, line_no, "too many doors");
                 break;
             }
             door_lines[tmp.door_count] = line_no;
-            tmp.doors[tmp.door_count++] = (Door){ wall, t, width, false };
+            tmp.doors[tmp.door_count++] = (Door){ wall, t, width, false,
+                                                  hidden != 0 };
         } else if (strcmp(tag, "label") == 0) {
             float x, y, size;
             if (!read_float(&save, &x) || !read_float(&save, &y) ||

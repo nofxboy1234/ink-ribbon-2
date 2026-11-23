@@ -78,6 +78,34 @@ matching new wall. A door on a wall that survives keeps its exact centre. A door
 on a wall that becomes interior is dropped and counted. The union is ordinary
 walls when saved, so the level format did not change.
 
+## Floors
+
+The reference building is three complete `Level` documents. The active floor
+stays in `Editor.level` so every existing edit path keeps one document; the
+other floors live in `Editor.floor_levels[]` and are swapped in when the 3F /
+2F / 1F selector is clicked. Each floor has its own `History`, so an undo can
+never restore a snapshot from another floor. The selector is a canvas overlay,
+so it is clickable in edit and play mode, and canvas input is skipped while the
+pointer is over it.
+
+The three files use one world coordinate system. `tools/gen_floor_maps.py`
+traces 1F and 2F in their own screenshot pixels and applies the measured
+registration `3F = 1F - (83, 121)` and `3F = 2F - (140, 121)`. The west
+stairwell, the main-hall flights, the library stair, and the east stair
+therefore share world rectangles across floors; the core tests assert those
+overlaps.
+
+A stair run is also a floor transition. Its bottom fade end marks the bottom of
+the run: moving toward that end descends one floor, moving toward the top
+ascends one floor. The player stops on the new floor at the same world
+position, snapped to the nearest open nav cell, so the matching landing is
+directly above or below.
+
+The reference has open passages that are not white door bars. A door record may
+carry a sixth `hidden` field; the nav grid cuts the wall there, but the editor
+neither draws nor hit-tests it. Visible doors omit the field or write 0, so old
+files still load.
+
 ## Fixed interaction choices
 
 The shipped UI has six tools: Select, Line, Rectangle, Door, Stairs, and Label,
