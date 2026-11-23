@@ -114,7 +114,8 @@ too, which closes gaps the extractor left.
 
 `tools/floor_parity.py` rasterises the visible linework and measures it against
 the reference image. It writes `docs/screenshots/floor-<n>-parity.png` with
-reference lines in red and editor lines in green.
+reference lines in red and editor lines in green. Current reference coverage is
+0.849 for 1F and 0.924 for 2F, with model precision 0.908 and 0.876.
 
 Level files may carry navigation-only openings as a sixth door field:
 `door 0 <wall> <t> <width> 1`. The reference has archways and open room passages
