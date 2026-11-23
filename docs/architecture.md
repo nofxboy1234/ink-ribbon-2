@@ -94,7 +94,9 @@ tread, door, and label by `Editor.onion_alpha`.
 A second, independent skin comes from an external file. `editor_load_onion_image`
 decodes it with stb_image and uploads an RGBA8 texture; `draw_image_onion` fits
 that texture inside `level_bounds` of the active floor and draws it below the
-floor skin. `image_onion_offset` and `image_onion_scale` apply a world-space
+floor skin. The fitted rectangle is captured at load time in
+`Editor.image_onion_fit`, so later drawing that grows the level bounds does not
+move the skin. `image_onion_offset` and `image_onion_scale` apply a world-space
 translation and a uniform scale about the fitted centre; the Reset control
 zeroes them. Transform mode maps a canvas left-drag to the offset and the wheel
 to cursor-anchored scaling. The image has its own opacity, show toggle, and

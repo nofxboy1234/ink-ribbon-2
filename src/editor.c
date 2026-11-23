@@ -247,6 +247,7 @@ struct Editor {
     float image_onion_alpha;
     /* Transform relative to the aspect-fit rectangle: world offset and a
        uniform scale about the image centre. */
+    Rect image_onion_fit;
     Vec2 image_onion_offset;
     float image_onion_scale;
     bool image_onion_edit;
@@ -468,21 +469,22 @@ static bool mouse_available(ImVec2 p) {
            p.x > -0.5f * FLT_MAX && p.y > -0.5f * FLT_MAX;
 }
 
-/* The image skin is fitted inside the active floor's bounds, preserving its
-   aspect ratio, so selecting a reference image always puts it on screen. */
-static Rect image_onion_rect(const Editor* e) {
-    float iw = (float)e->image_onion_w;
-    float ih = (float)e->image_onion_h;
+/* Capture the aspect-fit rectangle once, when the image is loaded. Recomputing
+   it from live level bounds would move the skin whenever drawing expands the
+   map. */
+static Rect compute_image_onion_fit(const Editor* e, int iw, int ih) {
+    float fw = (float)iw;
+    float fh = (float)ih;
     Rect b = level_bounds(&e->level);
     float bw = b.max.x - b.min.x;
     float bh = b.max.y - b.min.y;
     if (bw < 1.0f || bh < 1.0f) {
         /* An empty level has no bounds to fit into; show native pixels. */
         Vec2 c = e->camera.center;
-        return (Rect){ v2(c.x - iw * 0.5f, c.y - ih * 0.5f),
-                       v2(c.x + iw * 0.5f, c.y + ih * 0.5f) };
+        return (Rect){ v2(c.x - fw * 0.5f, c.y - fh * 0.5f),
+                       v2(c.x + fw * 0.5f, c.y + fh * 0.5f) };
     }
-    float aspect = iw / ih;
+    float aspect = fw / fh;
     float dw = bw;
     float dh = bh;
     if (bw / bh > aspect) {
@@ -493,6 +495,10 @@ static Rect image_onion_rect(const Editor* e) {
     Vec2 c = v2((b.min.x + b.max.x) * 0.5f, (b.min.y + b.max.y) * 0.5f);
     return (Rect){ v2(c.x - dw * 0.5f, c.y - dh * 0.5f),
                    v2(c.x + dw * 0.5f, c.y + dh * 0.5f) };
+}
+
+static Rect image_onion_rect(const Editor* e) {
+    return e->image_onion_fit;
 }
 
 static void scale_image_onion_about(Editor* e, Vec2 pivot, float factor) {
@@ -601,6 +607,7 @@ bool editor_load_onion_image(Editor* e, const char* path) {
         e->image_onion_view, e->image_onion_sampler);
     e->image_onion_w = width;
     e->image_onion_h = height;
+    e->image_onion_fit = compute_image_onion_fit(e, width, height);
     e->image_onion_offset = v2(0.0f, 0.0f);
     e->image_onion_scale = 1.0f;
     e->image_onion_dragging = false;
