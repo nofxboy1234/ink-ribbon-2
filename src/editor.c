@@ -5141,6 +5141,9 @@ static bool enter_floor(Editor* e, int index) {
     span_clear(e);
 
     bool was_play = e->play_mode;
+    /* The selector changes floors, not the camera scale. Keep the current
+       zoom so switching floors does not resize the plan under the user. */
+    float keep_zoom = e->camera.zoom;
 
     sync_active_floor(e);
     e->floor_index = index;
@@ -5166,10 +5169,8 @@ static bool enter_floor(Editor* e, int index) {
         e->camera.center = e->level.player_pos;
     } else {
         e->follow_player = false;
-        /* Viewing a floor the player is not on should show that whole floor,
-           not keep the camera parked at the player's position elsewhere. */
-        if (was_play) e->fit_pending = true;
     }
+    e->camera.zoom = keep_zoom;
     set_status(e, false, "Floor %s", FLOOR_LABELS[index]);
     return true;
 }

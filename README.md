@@ -80,8 +80,8 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 The reference building is three floors. The 3F document is shown by default,
 and a vertical **3F / 2F / 1F** selector sits at the right edge of the canvas,
 matching the in-game map screen. Click a tab to swap the active floor in edit or
-play mode. The camera does not jump, so the south-east stairwell stays over the
-same parchment position while you compare floors. With several floors loaded,
+play mode. The camera position and zoom level are kept, so the south-east
+stairwell stays over the same parchment position while you compare floors. With several floors loaded,
 **F** fits their union, so every floor is drawn at the same scale and the
 selector never covers a wing.
 
