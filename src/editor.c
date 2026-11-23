@@ -2105,7 +2105,6 @@ static void draw_walls(const Editor* e) {
     float wall_px = 2.0f;
     for (int i = 0; i < e->level.wall_count; i++) {
         const Wall* w = &e->level.walls[i];
-        if (w->nav_only) continue;
         ImU32 wall_col = col32a(WALL_COL, WALL_ALPHA);
         DoorSpan spans[LEVEL_MAX_DOORS];
         int n = wall_door_spans(e, w, spans);
@@ -2472,10 +2471,8 @@ static void draw_vertex_handles(const Editor* e) {
     Vec2 points[LEVEL_MAX_WALLS * 2];
     int count = 0;
     for (int i = 0; i < e->level.wall_count; i++) {
-        const Wall* w = &e->level.walls[i];
-        if (w->detail || w->nav_only) continue;
-        add_vertex(points, &count, w->a);
-        add_vertex(points, &count, w->b);
+        add_vertex(points, &count, e->level.walls[i].a);
+        add_vertex(points, &count, e->level.walls[i].b);
     }
     if (count == 0) return;
     ImDrawList* dl = igGetWindowDrawList();

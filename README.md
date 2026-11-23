@@ -103,18 +103,11 @@ landing is directly above or below its neighbour. The player is placed at the
 same world position on the new floor, and only that floor then holds the
 marker. **Place player** in edit mode moves ownership to the current floor.
 
-Each floor keeps two plans in one document. The collision plan is the
-hand-authored closed room loops, stored as nav-only walls: they drive the nav
-grid but are not drawn. The visible plan is the reference linework extracted
-from the map screenshots by `tools/extract_reference_lines.py`, stored as detail
-walls. Detail walls render and edit normally but are skipped by collision and
-A*. A wall record uses an optional trailing `1` for detail and `2` for
-nav-only. Hand walls that sit close to an extracted reference line are drawn
-too, which closes gaps the extractor left.
-
-`tools/floor_parity.py` rasterises the visible linework and measures it against
-the reference image. It writes `docs/screenshots/floor-<n>-parity.png` with
-reference lines in red and editor lines in green.
+Reference linework that should draw without blocking movement is stored as a
+detail wall: an optional seventh field `1` on a `wall` record. The 1F balcony
+rails, counters and shelving outlines use it, so the plan keeps the reference's
+detail while the nav grid only sees real walls. Detail walls render like walls
+and are editable; they are simply skipped by collision and A*.
 
 Level files may carry navigation-only openings as a sixth door field:
 `door 0 <wall> <t> <width> 1`. The reference has archways and open room passages

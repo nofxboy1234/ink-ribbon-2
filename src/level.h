@@ -44,9 +44,6 @@ typedef struct {
     /* A drawn reference line that is not a collision wall: balcony rails,
        counters, shelving outlines. It renders like a wall but nav ignores it. */
     bool detail;
-    /* Collision-only wall. Nav uses it, but it is not part of the visible
-       reference linework, so the editor does not draw it. */
-    bool nav_only;
 } Wall;
 
 /* Doors are white and live on a wall: t is the centre parameter along the

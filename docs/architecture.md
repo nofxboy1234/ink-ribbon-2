@@ -110,18 +110,10 @@ before entering the target, then writes the landing into the target and updates
 refused with the owner floor's name; the camera fits the viewed floor instead
 of staying parked on the player elsewhere.
 
-Every floor carries two plans. The collision plan is the hand-authored room
-loops, written as nav-only walls with an optional trailing `2`. `nav_build`
-uses them and the editor does not draw them. The visible plan is reference
-linework extracted from the screenshots, written as detail walls with an
-optional trailing `1`. Detail walls render and edit normally and `nav_build`
-skips them, so the map matches the reference without the nav grid inheriting
-furniture and text strokes.
-
-`tools/extract_reference_lines.py` produces the reference segment list and
-`tools/floor_parity.py` measures coverage and precision against the reference
-image. Hand walls that land within a few pixels of a reference line are shown
-as well, which closes gaps left by line extraction.
+Reference linework that is not a collision boundary - balcony rails, counters,
+shelving - is stored as a detail wall: an optional trailing `1` on the wall
+record. The editor draws and edits it normally; `nav_build` skips it, so a
+railing adds visual detail without sealing a route.
 
 The reference has open passages that are not white door bars. A door record may
 carry a sixth `hidden` field; the nav grid cuts the wall there, but the editor
