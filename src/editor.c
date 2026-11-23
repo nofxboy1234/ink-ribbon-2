@@ -2725,6 +2725,10 @@ static void draw_snap_indicator(const Editor* e) {
             }
             break;
         }
+        case TOOL_SELECT:
+            p = draw_snap_point(e, e->cursor_world);
+            show = true;
+            break;
         default:
             break;
     }

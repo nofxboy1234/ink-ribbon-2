@@ -30,7 +30,7 @@ The embedded scalable ImGui default font at 15 px is fine. Do not depend on syst
 
 ## Snap indicator
 
-While a drawing tool is active in edit mode and either Snap or Snap objects is on, the tool previews the point it will use and draws a small filled Dracula-purple dot `#bd93f9` (3 px radius with a thin dark outline) there. Line uses the free-axis rule for a continuing chain; Rectangle, Stairs, and Label use the full object-then-grid point; Door marks the projected wall centre. The dot is hidden in play mode, with image-transform mode active, with both snap toggles off, and when no drawing tool is selected.
+While a drawing tool or Select is active in edit mode and either Snap or Snap objects is on, the tool previews the point it will use and draws a small filled Dracula-purple dot `#bd93f9` (3 px radius with a thin dark outline) there. Line uses the free-axis rule for a continuing chain; Rectangle, Stairs, Label, and Select use the full object-then-grid point; Door marks the projected wall centre. The dot is hidden in play mode, with image-transform mode active, and with both snap toggles off.
 
 ## Floors and onion skins
 
