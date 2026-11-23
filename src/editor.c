@@ -1533,8 +1533,12 @@ static int build_waypoint_path(Editor* e, int extra, Vec2* out, int max) {
         int cells[NAV_MAX_PATH];
         int raw = nav_find_path(&e->nav, from, to, cells, NAV_MAX_PATH);
         if (raw <= 0) return 0;
-        for (int k = 0; k < raw; k++) {
-            Vec2 q = nav_cell_center(&e->nav, cells[k]);
+        Vec2 leg[NAV_MAX_PATH];
+        int leg_count = nav_smooth_path(&e->nav, cells, raw, leg,
+                                        NAV_MAX_PATH);
+        if (leg_count <= 0) return 0;
+        for (int k = 0; k < leg_count; k++) {
+            Vec2 q = leg[k];
             if (n == 0 || v2_dist(out[n - 1], q) > 0.01f) {
                 if (n >= max) return 0;
                 out[n++] = q;

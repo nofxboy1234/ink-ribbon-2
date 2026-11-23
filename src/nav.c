@@ -482,9 +482,62 @@ static int pop_heap(int* heap, float* cost, int* count) {
     return top;
 }
 
+/* Exact minimum distance between two non-intersecting segments is the
+   smallest endpoint-to-opposite-segment distance. */
+static float segment_distance(Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
+    float best = point_segment_dist(a, c, d);
+    float v = point_segment_dist(b, c, d);
+    if (v < best) best = v;
+    v = point_segment_dist(c, a, b);
+    if (v < best) best = v;
+    v = point_segment_dist(d, a, b);
+    if (v < best) best = v;
+    return best;
+}
+
+/* Keep a path segment the full player radius away from every solid wall and
+   stair rail. Door openings use their real width (no radius padding), so a
+   path can still pass through a doorway, but it may not graze a jamb or a
+   wall endpoint. */
+static bool line_clear_of_walls(const Level* level, Vec2 a, Vec2 b,
+                                float radius) {
+    float minx = fminf(a.x, b.x) - radius;
+    float maxx = fmaxf(a.x, b.x) + radius;
+    float miny = fminf(a.y, b.y) - radius;
+    float maxy = fmaxf(a.y, b.y) + radius;
+    float t0[LEVEL_MAX_DOORS];
+    float t1[LEVEL_MAX_DOORS];
+    for (int i = 0; i < level->wall_count; i++) {
+        const Wall* w = &level->walls[i];
+        if (w->detail) continue;
+        float wx0 = fminf(w->a.x, w->b.x);
+        float wx1 = fmaxf(w->a.x, w->b.x);
+        float wy0 = fminf(w->a.y, w->b.y);
+        float wy1 = fmaxf(w->a.y, w->b.y);
+        if (wx1 < minx || wx0 > maxx || wy1 < miny || wy0 > maxy) continue;
+        int n = wall_solid_spans(level, w, 0.0f, t0, t1, LEVEL_MAX_DOORS);
+        for (int k = 0; k < n; k++) {
+            Vec2 c = segment_point(w->a, w->b, t0[k]);
+            Vec2 d = segment_point(w->a, w->b, t1[k]);
+            if (segment_crosses(a, b, c, d)) return false;
+            if (segment_distance(a, b, c, d) < radius - 0.001f) return false;
+        }
+    }
+    Vec2 rails[LEVEL_MAX_STAIRS * 2][2];
+    int rail_count = stair_rails(level, rails, LEVEL_MAX_STAIRS * 2);
+    for (int i = 0; i < rail_count; i++) {
+        if (segment_crosses(a, b, rails[i][0], rails[i][1])) return false;
+        if (segment_distance(a, b, rails[i][0], rails[i][1]) <
+            radius - 0.001f) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool nav_line_clear(const NavGrid* nav, Vec2 a, Vec2 b) {
     if (!nav || !nav->level) return false;
-    if (!edge_clear_of_walls(nav->level, a, b, nav->radius)) return false;
+    if (!line_clear_of_walls(nav->level, a, b, nav->radius)) return false;
     float len = v2_dist(a, b);
     int steps = (int)ceilf(len / 0.5f);
     if (steps < 1) steps = 1;

@@ -1834,6 +1834,53 @@ static void test_onion_skins(void) {
     remove(path);
 }
 
+static void test_path_clearance_and_door_center(void) {
+    Level level;
+    level_init(&level);
+    check(level_add_rect_shape(&level, (Rect){ { 0, 0 }, { 100, 100 } }) != 0,
+          "add the left room");
+    check(level_add_rect_shape(&level, (Rect){ { 100, 0 }, { 200, 100 } }) != 0,
+          "add the right room");
+    WallId shared = 0;
+    for (int i = 0; i < level.wall_count; i++) {
+        const Wall* w = &level.walls[i];
+        if (fabsf(w->a.x - 100.0f) < 0.01f &&
+            fabsf(w->b.x - 100.0f) < 0.01f) {
+            shared = w->id;
+            break;
+        }
+    }
+    check(shared != 0, "find the shared wall");
+    check(level_add_door(&level, shared, 0.5f, 10.0f) >= 0,
+          "add a door between the rooms");
+    level_place_player(&level, v2(50, 50), 0.0f);
+
+    NavGrid* nav = malloc(sizeof(NavGrid));
+    check(nav && nav_build(nav, &level, NAV_CELL_SIZE, 3.2f),
+          "nav builds around the doorway");
+    if (nav) {
+        int start = nav_cell_at_world(nav, v2(50, 50));
+        int goal = nav_cell_at_world(nav, v2(150, 20));
+        int cells[NAV_MAX_PATH];
+        int raw = nav_find_path(nav, start, goal, cells, NAV_MAX_PATH);
+        check(raw > 0, "find a path between the rooms");
+        Vec2 path[NAV_MAX_PATH];
+        int count = nav_smooth_path(nav, cells, raw, path, NAV_MAX_PATH);
+        check(count >= 2, "smooth the doorway path");
+        bool through_door = false;
+        bool clear = true;
+        for (int i = 0; i < count; i++) {
+            if (v2_dist(path[i], v2(100, 50)) < 0.05f) through_door = true;
+            if (i > 0 && !nav_line_clear(nav, path[i - 1], path[i])) {
+                clear = false;
+            }
+        }
+        check(through_door, "the path passes through the door centre");
+        check(clear, "every smoothed segment clears the walls");
+        free(nav);
+    }
+}
+
 static void test_hybrid_room_navigation(void) {
     Level level;
     level_init(&level);
@@ -2020,6 +2067,7 @@ int main(void) {
     test_stairs_flip();
     test_onion_skins();
     test_hybrid_room_navigation();
+    test_path_clearance_and_door_center();
     test_line_loop_navigation();
     test_rect_union();
     test_rect_union_save_load();

@@ -71,7 +71,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Snap to the grid and to nearby object points while placing, drawing, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns grid snapping off.
 - Snap to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on. Drawing tools use the same chain on their first point and preview, so Line, Rectangle, Door, Stairs, and Label place where the preview shows.
 - While a drawing tool or Select is active and either Snap or Snap objects is on, a small Dracula-purple (`#bd93f9`) dot marks the snapped point the tool will use. With both toggles off there is no dot and the cursor stays free.
-- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, each play-mode click queues a waypoint at that cell. Green markers and the planned route show the sequence. The route is plain A* through the 8-unit grid cells, with no curve smoothing. **double-click** executes it, walking cell to cell through the waypoints in order and removing each marker as it is reached, then ending on the last cell centre. The player rotates toward the next cell and follows rooms and doors. Esc clears the queue.
+- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, each play-mode click queues a waypoint at that cell. Green markers and the planned route show the sequence. The route comes from A* over the 8-unit grid, then line-of-sight filtering and validated corner smoothing; every segment keeps the player radius clear of walls, and doorway crossings are routed through each door's centre. **double-click** executes it through the waypoints in order, removing each marker as it is reached and ending on the last waypoint. Esc clears the queue.
 - While walking, the camera follows the player at the current zoom. C recentres on the player without changing zoom. Middle-drag pans immediately, with no catch-up animation, and mouse-wheel zoom stays immediate.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 - Duplicate with Ctrl+D and lock a selection with L.
@@ -216,11 +216,7 @@ passable; stair treads are not walls, while stair-side rails and walls still
 block. Stair ends stay open so a run can be climbed, and a rectangle/line
 segment that would cut through a rail or solid wall is rejected. Stairs are
 drawn and walked over like any other open floor; they do not switch levels. A*
-uses 8-way movement, forbids corner cutting, and paths through door gaps. The route is the raw A* cell chain. No spline, no corner rounding and no
-line-of-sight shortcut changes it, so the green line follows the grid with
-right-angle steps. The player rotates on the spot to face the first cell, then
-moves from cell centre to cell centre while turning toward each next cell. There
-is no turning-circle arc and no turning ring.
+uses 8-way movement, forbids corner cutting, and paths through door gaps. The raw cell chain is line-of-sight filtered and smoothed with quadratic corner arcs sampled into dense waypoints. Every final segment is validated against the player radius, so the path cannot graze a wall or cut a corner, and any door crossing is inserted at the door centre with the corner left unrounded. The player turns toward each next waypoint, with no turning-circle arc and no turning ring.
 
 The camera follows the player while walking but only changes its centre: zoom is
 never altered by play mode, recentring, or path starts. When the player starts
