@@ -92,16 +92,13 @@ companion files exist beside `levels/re2-library.lvl`; any other `--level` path
 keeps the original single-level behavior.
 
 The player belongs to exactly one floor. In the shipped files the marker starts
-in the 1F Entrance; 2F and 3F carry none until a stair transition reaches them.
+in the 1F Entrance; 2F and 3F carry none until the player is placed on them.
 Clicking a floor tab only changes the view: the marker is drawn on the floor that owns it and is absent everywhere
 else, and the camera fits the viewed floor when the player is elsewhere.
-Walking through a stair run changes floors: the tread fade marks the bottom of
-the run, so moving toward the bottom goes down one floor and moving toward the
-top goes up one. The three floors use the same rectangles for the west
-stairwell, the main-hall flights, the library stair, and the east stair, so a
-landing is directly above or below its neighbour. The player is placed at the
-same world position on the new floor, and only that floor then holds the
-marker. **Place player** in edit mode moves ownership to the current floor.
+Walking on a stair run is ordinary movement and never changes floors: the
+player stays in the document that owns the marker, whether the route crosses
+the west stairwell, the main-hall flights, the library stair, or the east
+stair. **Place player** in edit mode moves ownership to the current floor.
 
 Reference linework that should draw without blocking movement is stored as a
 detail wall: an optional seventh field `1` on a `wall` record. The 1F balcony
@@ -185,8 +182,9 @@ is inside a closed room/corridor outline and its player radius clears every soli
 wall. Door spans are cut out of every collinear wall they sit on, so doors are
 passable; stair treads are not walls, while stair-side rails and walls still
 block. Stair ends stay open so a run can be climbed, and a rectangle/line
-segment that would cut through a rail or solid wall is rejected. A* uses
-8-way movement, forbids corner cutting, and paths through door gaps. The route is the raw A* cell chain. No spline, no corner rounding and no
+segment that would cut through a rail or solid wall is rejected. Stairs are
+drawn and walked over like any other open floor; they do not switch levels. A*
+uses 8-way movement, forbids corner cutting, and paths through door gaps. The route is the raw A* cell chain. No spline, no corner rounding and no
 line-of-sight shortcut changes it, so the green line follows the grid with
 right-angle steps. The player rotates on the spot to face the first cell, then
 moves from cell centre to cell centre while turning toward each next cell. There

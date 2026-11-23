@@ -288,9 +288,6 @@ struct Editor {
     bool player_pivot;
     bool follow_player;
     bool camera_pan_active;
-    /* Brief lock so a stair does not bounce the player straight back to the
-       floor they just left while they are still standing on the treads. */
-    float stair_cooldown;
     Vec2 camera_pan_target;
     Vec2 preview_path[NAV_MAX_PATH];
     int preview_count;
@@ -1053,7 +1050,7 @@ static void set_play_mode(Editor* e, bool on) {
             recenter_player_camera(e);
             set_status(e, false, "Play mode: click waypoints; double-click to walk");
         } else if (e->player_floor >= 0 && e->player_floor != e->floor_index) {
-            set_status(e, false, "Player is on %s; use the stairs",
+            set_status(e, false, "Player is on %s; switch to that floor",
                        FLOOR_LABELS[e->player_floor]);
         } else {
             set_status(e, false, "Play mode: click to place the player");
@@ -1113,7 +1110,7 @@ static bool start_player_vec_path(Editor* e, const Vec2* pts, int count) {
 static void player_command(Editor* e, Vec2 world) {
     if (!e->level.player_present && e->player_floor >= 0 &&
         e->player_floor != e->floor_index) {
-        set_status(e, true, "Player is on %s; use the stairs",
+        set_status(e, true, "Player is on %s; switch to that floor",
                    FLOOR_LABELS[e->player_floor]);
         return;
     }
@@ -1240,7 +1237,7 @@ static void execute_waypoints(Editor* e) {
 static void player_click_play(Editor* e, Vec2 world, bool double_click) {
     if (!e->level.player_present && e->player_floor >= 0 &&
         e->player_floor != e->floor_index) {
-        set_status(e, true, "Player is on %s; use the stairs",
+        set_status(e, true, "Player is on %s; switch to that floor",
                    FLOOR_LABELS[e->player_floor]);
         return;
     }
@@ -1309,60 +1306,6 @@ static void update_waypoint_progress(Editor* e) {
     }
 }
 
-
-static bool point_in_stair(const Stairs* s, Vec2 p) {
-    Rect r = level_stairs_rect(s);
-    return p.x >= r.min.x && p.x <= r.max.x &&
-           p.y >= r.min.y && p.y <= r.max.y;
-}
-
-/* A stair's bottom end is the min end when bottom is set and the max end
-   otherwise. Walking toward the bottom goes down one floor; walking toward
-   the top goes up one floor. */
-static void try_stair_transition(Editor* e, Vec2 from, Vec2 to) {
-    if (e->floor_count <= 1 || e->stair_cooldown > 0.0f) return;
-    for (int i = 0; i < e->level.stairs_count; i++) {
-        const Stairs* s = &e->level.stairs[i];
-        if (!point_in_stair(s, to)) continue;
-        float axis = s->dir == STAIRS_V ? to.y - from.y : to.x - from.x;
-        if (fabsf(axis) < 0.05f) continue;
-        bool going_down = s->bottom ? axis < 0.0f : axis > 0.0f;
-        int target = e->floor_index + (going_down ? -1 : 1);
-        if (target < 0 || target >= e->floor_count || !e->floor_loaded[target]) {
-            continue;
-        }
-        char message[96];
-        snprintf(message, sizeof message, "Stairs %s to %s",
-                 going_down ? "down" : "up", FLOOR_LABELS[target]);
-        Vec2 landing = e->level.player_pos;
-        float heading = e->level.player_heading;
-        e->level.player_present = false;
-        if (enter_floor(e, target)) {
-            e->player_floor = target;
-            e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
-                                     PLAYER_RADIUS);
-            if (e->nav_ready) {
-                int cell = nav_cell_at_world(&e->nav, landing);
-                int open = nav_nearest_open_cell(&e->nav, cell, 4);
-                if (open >= 0) landing = nav_cell_center(&e->nav, open);
-            }
-            e->level.player_present = true;
-            e->level.player_pos = landing;
-            e->level.player_heading = heading;
-            e->follow_player = true;
-            e->camera.center = landing;
-            e->stair_cooldown = 0.25f;
-            set_status(e, false, "%s", message);
-        } else {
-            /* The target floor could not be entered; keep the player here. */
-            e->level.player_present = true;
-            e->level.player_pos = landing;
-            e->level.player_heading = heading;
-        }
-        return;
-    }
-}
-
 static void update_player(Editor* e, float dt) {
     if (!e->play_mode || !e->level.player_present || !e->player_moving) return;
     if (dt <= 0.0f) return;
@@ -1372,9 +1315,7 @@ static void update_player(Editor* e, float dt) {
         return;
     }
     Vec2 pos = e->level.player_pos;
-    Vec2 start_pos = pos;
     float heading = e->level.player_heading;
-    if (e->stair_cooldown > 0.0f) e->stair_cooldown -= dt;
     while (e->player_path_index < e->player_path_count &&
            v2_dist(pos, e->player_path[e->player_path_index]) < 0.6f) {
         e->player_path_index++;
@@ -1427,7 +1368,6 @@ static void update_player(Editor* e, float dt) {
     e->level.player_pos = pos;
     e->level.player_heading = heading;
     update_waypoint_progress(e);
-    if (v2_dist(start_pos, pos) > 0.01f) try_stair_transition(e, start_pos, pos);
 }
 
 static void update_camera(Editor* e, float dt) {
@@ -5160,8 +5100,8 @@ static bool enter_floor(Editor* e, int index) {
     e->preview_count = 0;
     e->camera_pan_active = false;
 
-    /* Viewing a floor never moves the player. Only a stair transition or an
-       explicit Place player action changes player_floor. */
+    /* Viewing a floor never moves the player. Only the explicit Place player
+       action changes player_floor. */
     if (was_play && e->player_floor == index && e->level.player_present) {
         e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
                                  PLAYER_RADIUS);

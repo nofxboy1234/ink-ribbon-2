@@ -95,18 +95,15 @@ stairwell, the main-hall flights, the library stair, and the east stair
 therefore share world rectangles across floors; the core tests assert those
 overlaps.
 
-A stair run is also a floor transition. Its bottom fade end marks the bottom of
-the run: moving toward that end descends one floor, moving toward the top
-ascends one floor. The player stops on the new floor at the same world
-position, snapped to the nearest open nav cell, so the matching landing is
-directly above or below.
+A stair run is ordinary walkable geometry, not a floor transition. Walking over
+its treads keeps the player in the active floor's `Level`, even when the run
+sits on a shared stairwell rectangle.
 
 The player marker is owned by one floor (`Editor.player_floor`) and stored only
 in that floor's `Level`. Switching the viewed floor only swaps documents; it
 does not copy or move the player, so the marker is never shown on a floor the
-player has not reached. A stair transition clears the old floor's player record
-before entering the target, then writes the landing into the target and updates
-`player_floor`. In play mode a click on a floor that does not own the player is
+player has not reached. The only way to move ownership is the explicit Place
+player action. In play mode a click on a floor that does not own the player is
 refused with the owner floor's name; the camera fits the viewed floor instead
 of staying parked on the player elsewhere.
 
