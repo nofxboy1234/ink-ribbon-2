@@ -1047,7 +1047,9 @@ static void set_play_mode(Editor* e, bool on) {
             if (open >= 0 && open != cell) {
                 e->level.player_pos = nav_cell_center(&e->nav, open);
             }
-            recenter_player_camera(e);
+            /* Entering play mode keeps the current pan. The camera pans to
+               the player only when a path starts or C is pressed. */
+            e->follow_player = false;
             set_status(e, false, "Play mode: click waypoints; double-click to walk");
         } else if (e->player_floor >= 0 && e->player_floor != e->floor_index) {
             set_status(e, false, "Player is on %s; switch to that floor",
@@ -5101,15 +5103,14 @@ static bool enter_floor(Editor* e, int index) {
     e->camera_pan_active = false;
 
     /* Viewing a floor never moves the player. Only the explicit Place player
-       action changes player_floor. */
+       action changes player_floor. The pan position also persists across the
+       switch; the camera recentres only when the player starts moving or C is
+       pressed. */
     if (was_play && e->player_floor == index && e->level.player_present) {
         e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
                                  PLAYER_RADIUS);
-        e->follow_player = true;
-        e->camera.center = e->level.player_pos;
-    } else {
-        e->follow_player = false;
     }
+    e->follow_player = false;
     e->camera.zoom = keep_zoom;
     set_status(e, false, "Floor %s", FLOOR_LABELS[index]);
     return true;
