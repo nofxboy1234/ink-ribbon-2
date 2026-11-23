@@ -174,10 +174,14 @@ labels and stairs. `GESTURE_VERTEX` starts within 7 screen pixels of a wall
 endpoint and calls `level_move_vertex` on each drag step. A door stores a wall id and a normalized position, so it
 follows its host wall and cannot be translated independently.
 
-Snap applies to placement, rectangle draws, reshaping, and label, stair, door,
-and group drags.
+Snap applies to initial tool placement, rectangle draws, reshaping, and label,
+stair, door, and group drags. New geometry uses `draw_snap_point`, which runs
+object targets first and the grid second; a continuing line uses
+`draw_snap_line_point` so only its free axis snaps and the run stays orthogonal.
 Group drags snap from the primary object's anchor so relative spacing is
-preserved. The Snap checkbox and grid size remain user controls.
+preserved. The Snap checkbox and grid size remain user controls. A small
+Dracula-purple dot draws at the live snap point whenever a drawing tool is
+active and either snap toggle is on.
 
 ## Alternatives rejected
 

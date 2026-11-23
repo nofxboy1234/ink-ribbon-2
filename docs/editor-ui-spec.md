@@ -28,6 +28,10 @@ Dark ImGui theme: window background `#101114`, panel `#16181c`, frame `#1d2025`,
 
 The embedded scalable ImGui default font at 15 px is fine. Do not depend on system font files.
 
+## Snap indicator
+
+While a drawing tool is active in edit mode and either Snap or Snap objects is on, the tool previews the point it will use and draws a small filled Dracula-purple dot `#bd93f9` (3 px radius with a thin dark outline) there. Line uses the free-axis rule for a continuing chain; Rectangle, Stairs, and Label use the full object-then-grid point; Door marks the projected wall centre. The dot is hidden in play mode, with image-transform mode active, with both snap toggles off, and when no drawing tool is selected.
+
 ## Floors and onion skins
 
 The canvas draws a vertical 3F / 2F / 1F selector at the right edge when more than one floor is loaded. In edit mode, each tab has an 18 px checkbox on its left, vertically centred on the tab. At most one box is checked. Checking a box stores that floor index and draws the floor's stairs, walls, doors, and labels under the active level; clicking the checked box unchecks it. The Floor onion section in the left panel shows which floor is under the current one and an opacity slider from 0.05 to 1.00, default 0.25. The camera pan and zoom persist when tabs switch the active floor.
@@ -83,7 +87,7 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 
 ## Rectangle
 
-Drag an axis-aligned rectangle. Both corners follow the Snap setting on press, during the drag, and on release: with Snap on they land on the grid, and with Snap off they stay free. With Snap on a drag under one grid cell on either axis is rejected; with Snap off the minimum is `RECT_MIN_SIZE`.
+Drag an axis-aligned rectangle. Both corners use the drawing snap chain on press, during the drag, and on release: Snap objects can land them on nearby wall lines and endpoints, and Snap puts the free axes on the grid. With neither toggle on the corners stay free. With Snap on a drag under one grid cell on either axis is rejected; with Snap off the minimum is `RECT_MIN_SIZE`.
 
 On release the rectangle tries to join a closed shape. Candidate shapes are examined from newest to oldest, and only shapes whose bounds overlap the rectangle are tried. `level_union_rect` returns:
 
@@ -104,7 +108,7 @@ There is no marquee door workflow and no door colour menu. The inspector slides 
 
 ## Stairs
 
-Drag a rectangle. Both corners snap with the same rule as the Rectangle tool. The release needs at least one grid cell on each axis, or `STAIR_MIN_SIZE` when Snap is off. The panel's falloff and faint/bright opacity sliders are copied to the new stair.
+Drag a rectangle. Both corners use the same drawing snap chain as the Rectangle tool, including Snap objects. The release needs at least one grid cell on each axis, or `STAIR_MIN_SIZE` when Snap is off. The panel's falloff and faint/bright opacity sliders are copied to the new stair.
 
 The stair takes the panel's direction and step count and the panel's Flip flag. Flip sets which end of the run the tread fade starts from. The stair is selected, the action commits `Stairs added`, and the tool returns to Select unless Q is held.
 

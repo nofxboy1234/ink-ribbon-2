@@ -77,6 +77,8 @@ static const char* FLOOR_LABELS[FLOOR_MAX] = { "1F", "2F", "3F" };
 #define ACCENT_COL 0x5aa0c8
 #define SELECT_COL 0x5aa0c8
 #define VERTEX_SELECT_COL 0xe0a33c
+/* Dracula purple marks the live snap point while a tool draws. */
+#define SNAP_DOT_COL 0xbd93f9
 #define TEXT_COL 0xd9dadd
 #define MUTED_COL 0x7f868e
 #define ERROR_COL 0xd07373
@@ -363,6 +365,8 @@ static const char* TOOL_HINTS[TOOL_COUNT] = {
 };
 static bool save_all_floors(Editor* e);
 static bool enter_floor(Editor* e, int index);
+static Vec2 draw_snap_point(const Editor* e, Vec2 p);
+static Vec2 draw_snap_line_point(const Editor* e, Vec2 anchor, Vec2 cursor);
 
 static ImU32 col32(unsigned rgb) {
     return IM_COL32((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, 255);
@@ -418,13 +422,6 @@ static ImVec2 world_to_screen(const Editor* e, Vec2 p) {
 
 static Vec2 snapped(const Editor* e, Vec2 p) {
     return e->snap ? snap_grid(p, e->grid_size) : p;
-}
-
-static Vec2 constrained(const Editor* e, Vec2 anchor, Vec2 cursor) {
-    if (e->snap) return snap_ortho(anchor, cursor, e->grid_size);
-    Vec2 d = v2_sub(cursor, anchor);
-    if (fabsf(d.x) > fabsf(d.y)) return v2(cursor.x, anchor.y);
-    return v2(anchor.x, cursor.y);
 }
 
 static float snap_scalar(float value, float grid) {
@@ -2680,6 +2677,64 @@ static void draw_player(const Editor* e) {
                               IM_COL32_WHITE);
 }
 
+/* A small Dracula-purple dot marks where the active drawing tool will land
+   after object and grid snapping. */
+static void draw_snap_indicator(const Editor* e) {
+    if (e->play_mode || e->image_onion_edit || !e->cursor_valid) return;
+    if (!e->snap && !e->snap_objects) return;
+    Vec2 p = e->cursor_world;
+    bool show = false;
+    const Gesture* g = &e->gesture;
+    switch (e->tool) {
+        case TOOL_LINE:
+            if (g->kind == GESTURE_CHAIN && g->point_count > 0) {
+                p = draw_snap_line_point(e, g->pts[g->point_count - 1],
+                                         e->cursor_world);
+            } else {
+                p = draw_snap_point(e, e->cursor_world);
+            }
+            show = true;
+            break;
+        case TOOL_RECT:
+            if (g->kind == GESTURE_RECT_DRAW) {
+                p = g->cur_world;
+            } else {
+                p = draw_snap_point(e, e->cursor_world);
+            }
+            show = true;
+            break;
+        case TOOL_STAIRS:
+            if (g->kind == GESTURE_STAIRS_DRAW) {
+                p = g->cur_world;
+            } else {
+                p = draw_snap_point(e, e->cursor_world);
+            }
+            show = true;
+            break;
+        case TOOL_LABEL:
+            p = draw_snap_point(e, e->cursor_world);
+            show = true;
+            break;
+        case TOOL_DOOR: {
+            int wall = -1;
+            float t = 0.0f;
+            if (door_hover(e, e->cursor_world, &wall, &t) && wall >= 0) {
+                p = segment_point(e->level.walls[wall].a,
+                                  e->level.walls[wall].b, t);
+                show = true;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    if (!show) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    ImVec2 screen = world_to_screen(e, p);
+    ImDrawList_AddCircleFilled(dl, screen, 3.0f, col32(SNAP_DOT_COL), 0);
+    ImDrawList_AddCircleEx(dl, screen, 3.5f, col32a(0x282a36, 210), 0, 1.0f, 0);
+}
+
 static void draw_selection_handles(ImDrawList* dl, ImVec2 pmin, ImVec2 pmax) {
     ImU32 col = col32(SELECT_COL);
     ImDrawList_AddRectEx(dl, pmin, pmax, col, 0.0f, 2.0f, 0);
@@ -2882,7 +2937,7 @@ static void draw_chain_preview(Editor* e, ImVec2 mouse) {
     Vec2 cursor = screen_to_world(e, mouse);
     Vec2 last_world = g->pts[g->point_count - 1];
     Vec2 first_world = g->pts[0];
-    Vec2 next = constrained(e, last_world, cursor);
+    Vec2 next = draw_snap_line_point(e, last_world, cursor);
     ImVec2 last = world_to_screen(e, last_world);
     ImVec2 first = world_to_screen(e, first_world);
     bool near = screen_dist(mouse, first) <= CLOSE_TOL_PX && g->point_count >= 3;
@@ -3425,6 +3480,25 @@ static float snap_edit_axis(const Editor* e, const bool* skip, float value,
     return value;
 }
 
+/* New geometry uses the full snap chain: nearby object vertices and wall
+   lines first, then the grid. Both toggles off leaves the raw cursor. */
+static Vec2 draw_snap_point(const Editor* e, Vec2 p) {
+    return snap_edit_point(e, NULL, p);
+}
+
+/* A line keeps its fixed coordinate and snaps only the free axis, so a
+   horizontal or vertical run stays orthogonal. */
+static Vec2 draw_snap_line_point(const Editor* e, Vec2 anchor, Vec2 cursor) {
+    Vec2 d = v2_sub(cursor, anchor);
+    bool horizontal = fabsf(d.x) > fabsf(d.y);
+    if (!e->snap && !e->snap_objects) {
+        return horizontal ? v2(cursor.x, anchor.y) : v2(anchor.x, cursor.y);
+    }
+    float free = horizontal ? cursor.x : cursor.y;
+    float value = snap_edit_axis(e, NULL, free, horizontal);
+    return horizontal ? v2(value, anchor.y) : v2(anchor.x, value);
+}
+
 /* Consider one moving edge coordinate as an object snap target and keep the
    translation offset of the nearest hit. */
 static void snap_move_candidate(const Editor* e, const bool* skip, float base,
@@ -3907,7 +3981,7 @@ static void begin_rect_drag(Editor* e, Vec2 world, ImVec2 mouse) {
     Gesture* g = &e->gesture;
     cancel_gesture(e);
     g->kind = GESTURE_RECT_DRAW;
-    g->press_world = snapped(e, world);
+    g->press_world = draw_snap_point(e, world);
     g->cur_world = g->press_world;
     g->press_screen = v2(mouse.x, mouse.y);
     set_status(e, false, "Drag a rectangle");
@@ -3937,7 +4011,8 @@ static void finish_rect_drag(Editor* e, bool have_pointer) {
     Gesture* g = &e->gesture;
     if (g->kind != GESTURE_RECT_DRAW) return;
     if (have_pointer) {
-        g->cur_world = snapped(e, screen_to_world(e, igGetIO()->MousePos));
+        g->cur_world =
+            draw_snap_point(e, screen_to_world(e, igGetIO()->MousePos));
     }
     Vec2 a = g->press_world;
     Vec2 b = g->cur_world;
@@ -3977,7 +4052,7 @@ static void begin_stairs_drag(Editor* e, Vec2 world, ImVec2 mouse) {
     Gesture* g = &e->gesture;
     cancel_gesture(e);
     g->kind = GESTURE_STAIRS_DRAW;
-    g->press_world = snapped(e, world);
+    g->press_world = draw_snap_point(e, world);
     g->cur_world = g->press_world;
     g->press_screen = v2(mouse.x, mouse.y);
     set_status(e, false, "Drag a stair footprint");
@@ -3987,7 +4062,8 @@ static void finish_stairs_drag(Editor* e, bool have_pointer) {
     Gesture* g = &e->gesture;
     if (g->kind != GESTURE_STAIRS_DRAW) return;
     if (have_pointer) {
-        g->cur_world = snapped(e, screen_to_world(e, igGetIO()->MousePos));
+        g->cur_world =
+            draw_snap_point(e, screen_to_world(e, igGetIO()->MousePos));
     }
     Rect r = rect_from_points(g->press_world, g->cur_world);
     float min_size = e->snap ? e->grid_size : STAIR_MIN_SIZE;
@@ -4019,7 +4095,8 @@ static void update_shape_drag(Editor* e, bool have_pointer) {
         return;
     }
     if (have_pointer && igGetIO()->MouseDown[0]) {
-        g->cur_world = snapped(e, screen_to_world(e, igGetIO()->MousePos));
+        g->cur_world =
+            draw_snap_point(e, screen_to_world(e, igGetIO()->MousePos));
         return;
     }
     if (g->kind == GESTURE_STAIRS_DRAW) finish_stairs_drag(e, have_pointer);
@@ -4301,7 +4378,7 @@ static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse) {
         g->kind = GESTURE_CHAIN;
         g->shape = shape;
         g->point_count = 1;
-        g->pts[0] = snapped(e, world);
+        g->pts[0] = draw_snap_point(e, world);
         g->wall_count = 0;
         set_status(e, false, "Shape started");
         return;
@@ -4311,7 +4388,7 @@ static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse) {
         close_wall_chain(e, false);
         return;
     }
-    Vec2 next = constrained(e, g->pts[g->point_count - 1], world);
+    Vec2 next = draw_snap_line_point(e, g->pts[g->point_count - 1], world);
     if (v2_equal(next, g->pts[g->point_count - 1], 0.0001f)) {
         set_status(e, false, "Click farther from the last point");
         return;
@@ -4328,7 +4405,7 @@ static void begin_wall_click(Editor* e, Vec2 world, ImVec2 mouse) {
 }
 
 static void begin_label_click(Editor* e, Vec2 world) {
-    Vec2 p = snapped(e, world);
+    Vec2 p = draw_snap_point(e, world);
     int idx = level_add_label(&e->level, p, "Label", e->label_size);
     if (idx < 0) {
         set_status(e, true, "Could not add label: level is full");
@@ -4650,6 +4727,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_player_path(e);
     draw_waypoints(e);
     draw_player(e);
+    draw_snap_indicator(e);
 
     if (have_pointer && e->gesture.kind == GESTURE_CHAIN) draw_chain_preview(e, mouse);
     draw_selection(e);
