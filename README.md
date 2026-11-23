@@ -101,7 +101,10 @@ The **Image onion** section loads an external image and draws it under the
 current floor, fitted to that floor's bounds with its own opacity and **Show
 image** toggle. Choose a PNG, JPEG, BMP, TGA, or GIF through the path dialog,
 the native **Browse...** picker when available, or by dropping a file on the
-window. The image skin and the floor skin are independent, so both can be
+window. The **Move** and **Scale** controls shift and resize the image, and
+**Reset** restores the fitted position and scale. With **Transform** checked,
+dragging the canvas moves the image and the mouse wheel scales it around the
+cursor. The image skin and the floor skin are independent, so both can be
 visible at once. Both onion layers are hidden in play mode.
 
 Each floor is a complete `Level` with its own undo history, so undo never

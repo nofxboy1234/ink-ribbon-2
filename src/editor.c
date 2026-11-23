@@ -245,6 +245,13 @@ struct Editor {
        time as the floor skin. The image is fitted to the floor bounds. */
     bool image_onion_on;
     float image_onion_alpha;
+    /* Transform relative to the aspect-fit rectangle: world offset and a
+       uniform scale about the image centre. */
+    Vec2 image_onion_offset;
+    float image_onion_scale;
+    bool image_onion_edit;
+    bool image_onion_dragging;
+    Vec2 image_onion_drag_last;
     char image_onion_path[512];
     int image_onion_w;
     int image_onion_h;
@@ -488,6 +495,21 @@ static Rect image_onion_rect(const Editor* e) {
                    v2(c.x + dw * 0.5f, c.y + dh * 0.5f) };
 }
 
+static void scale_image_onion_about(Editor* e, Vec2 pivot, float factor) {
+    float old_scale = e->image_onion_scale;
+    float next_scale = clampf(old_scale * factor, 0.05f, 20.0f);
+    if (fabsf(next_scale - old_scale) < 0.00001f) return;
+    Rect base = image_onion_rect(e);
+    Vec2 base_center = v2((base.min.x + base.max.x) * 0.5f,
+                          (base.min.y + base.max.y) * 0.5f);
+    Vec2 center = v2_add(base_center, e->image_onion_offset);
+    float ratio = next_scale / old_scale;
+    e->image_onion_offset = v2_add(
+        e->image_onion_offset,
+        v2_scale(v2_sub(pivot, center), 1.0f - ratio));
+    e->image_onion_scale = next_scale;
+}
+
 static const char* path_leaf(const char* path) {
     const char* slash = strrchr(path, '/');
     return slash ? slash + 1 : path;
@@ -520,6 +542,8 @@ static void retire_image_onion(Editor* e) {
 static void release_image_onion(Editor* e) {
     retire_image_onion(e);
     flush_retired_image_onion(e);
+    e->image_onion_edit = false;
+    e->image_onion_dragging = false;
 }
 
 bool editor_load_onion_image(Editor* e, const char* path) {
@@ -577,6 +601,9 @@ bool editor_load_onion_image(Editor* e, const char* path) {
         e->image_onion_view, e->image_onion_sampler);
     e->image_onion_w = width;
     e->image_onion_h = height;
+    e->image_onion_offset = v2(0.0f, 0.0f);
+    e->image_onion_scale = 1.0f;
+    e->image_onion_dragging = false;
     snprintf(e->image_onion_path, sizeof e->image_onion_path, "%s", path);
     e->image_onion_on = true;
     e->image_path_buf[0] = '\0';
@@ -2388,7 +2415,14 @@ static void draw_image_onion(const Editor* e) {
     }
     float alpha = clampf(e->image_onion_alpha, 0.0f, 1.0f);
     if (alpha <= 0.0f) return;
-    Rect r = image_onion_rect(e);
+    Rect base = image_onion_rect(e);
+    float half_w = (base.max.x - base.min.x) * 0.5f * e->image_onion_scale;
+    float half_h = (base.max.y - base.min.y) * 0.5f * e->image_onion_scale;
+    Vec2 center = v2_add(v2((base.min.x + base.max.x) * 0.5f,
+                            (base.min.y + base.max.y) * 0.5f),
+                         e->image_onion_offset);
+    Rect r = { v2(center.x - half_w, center.y - half_h),
+               v2(center.x + half_w, center.y + half_h) };
     ImDrawList* dl = igGetWindowDrawList();
     ImVec2 p1 = world_to_screen(e, r.min);
     ImVec2 p2 = world_to_screen(e, v2(r.max.x, r.min.y));
@@ -2401,6 +2435,18 @@ static void draw_image_onion(const Editor* e) {
                               (ImVec2){ 1, 1 }, (ImVec2){ 0, 1 },
                               col32a(0xffffff,
                                      (unsigned)(alpha * 255.0f + 0.5f)));
+    if (e->image_onion_edit) {
+        ImU32 outline = col32a(ACCENT_COL, 160);
+        ImDrawList_AddRectEx(dl, p1, p3, outline, 0.0f, 2.0f, 0);
+        const float h = 4.0f;
+        ImVec2 handles[4] = { p1, p2, p3, p4 };
+        for (int i = 0; i < 4; i++) {
+            ImDrawList_AddRectFilledEx(
+                dl, (ImVec2){ handles[i].x - h, handles[i].y - h },
+                (ImVec2){ handles[i].x + h, handles[i].y + h },
+                col32(ACCENT_COL), 0.0f, 0);
+        }
+    }
 }
 
 /* A faint copy of the checked floor's linework, drawn under the active floor.
@@ -4242,6 +4288,33 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
         e->cursor_valid = false;
     }
 
+    /* In image-transform mode the canvas drives the image transform instead
+       of the camera or a tool. */
+    if (hovered && !e->play_mode && e->image_onion_edit &&
+        e->image_onion_on && e->image_onion_texture) {
+        if (io->MouseWheel != 0.0f) {
+            scale_image_onion_about(e, world,
+                                    powf(1.18f, io->MouseWheel));
+            e->camera_pan_active = false;
+            return;
+        }
+        if (!e->pan_active && io->MouseDown[0]) {
+            if (!e->image_onion_dragging) {
+                e->image_onion_dragging = true;
+                e->image_onion_drag_last = world;
+            }
+            e->image_onion_offset = v2_add(
+                e->image_onion_offset,
+                v2_sub(world, e->image_onion_drag_last));
+            e->image_onion_drag_last = world;
+            return;
+        }
+        if (e->image_onion_dragging && !io->MouseDown[0]) {
+            e->image_onion_dragging = false;
+            return;
+        }
+    }
+
     if (hovered && io->MouseWheel != 0.0f) {
         Vec2 before = screen_to_world(e, io->MousePos);
         float old_zoom = e->camera.zoom;
@@ -4564,7 +4637,7 @@ static bool dir_button(const char* label, bool active, float w) {
 static void draw_left_panel(Editor* e) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus;
+                             ImGuiWindowFlags_NoBringToFrontOnFocus;
     igPushStyleColorImVec4(ImGuiCol_WindowBg, v4c(PANEL_BG, 1.0f));
     igSetNextWindowPos((ImVec2){ 0.0f, e->menu_height }, ImGuiCond_Always);
     igSetNextWindowSize((ImVec2){ PANEL_LEFT_W, e->display_h - e->menu_height },
@@ -4671,6 +4744,27 @@ static void draw_left_panel(Editor* e) {
             igSetNextItemWidth(84.0f);
             igSliderFloatEx("Opacity", &e->image_onion_alpha, 0.05f, 1.0f, "%.2f",
                             0);
+            igCheckbox("Transform", &e->image_onion_edit);
+            igSameLineEx(0.0f, 6.0f);
+            if (igButtonEx("Reset", (ImVec2){ 56.0f, 0.0f })) {
+                e->image_onion_offset = v2(0.0f, 0.0f);
+                e->image_onion_scale = 1.0f;
+                e->image_onion_dragging = false;
+                set_status(e, false, "Image transform reset");
+            }
+            float offset[2] = { e->image_onion_offset.x,
+                                e->image_onion_offset.y };
+            igSetNextItemWidth(112.0f);
+            if (igDragFloat2Ex("Move", offset, 1.0f, -20000.0f, 20000.0f,
+                               "%.1f", 0)) {
+                e->image_onion_offset = v2(offset[0], offset[1]);
+            }
+            igSetNextItemWidth(84.0f);
+            igSliderFloatEx("Scale", &e->image_onion_scale, 0.05f, 20.0f,
+                            "%.2f", 0);
+            if (e->image_onion_edit) {
+                small_note("Drag the canvas to move the image; the wheel scales it.");
+            }
             char image_note[640];
             snprintf(image_note, sizeof image_note, "%s (%d x %d)",
                      path_leaf(e->image_onion_path), e->image_onion_w,
@@ -5575,6 +5669,9 @@ Editor* editor_create(const char* startup_path) {
     e->onion_alpha = 0.25f;
     e->image_onion_on = false;
     e->image_onion_alpha = 0.35f;
+    e->image_onion_offset = v2(0.0f, 0.0f);
+    e->image_onion_scale = 1.0f;
+    e->image_onion_edit = false;
     history_reset(&e->floor_history[e->floor_index], &e->level);
 
     e->camera.center = v2(0.0f, 0.0f);
