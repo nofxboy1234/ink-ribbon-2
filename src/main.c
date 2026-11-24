@@ -69,6 +69,9 @@ static void init(void) {
     simgui_setup(&(simgui_desc_t){
         .logger.func = slog_func,
         .no_default_font = true,
+        /* The edit-mode nav-cell overlay can add one filled/bordered rect per
+           open cell; 1F is large enough to exceed the 64k default. */
+        .max_vertices = 524288,
     });
 
     ImFontConfig font_config = { 0 };
