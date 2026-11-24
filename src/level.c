@@ -1359,6 +1359,11 @@ bool level_save(const Level* level, const char* path, LevelError* err) {
                      o->image_fit.min.y, o->image_fit.max.x, o->image_fit.max.y,
                      o->image_path) >= 0;
     }
+    if (ok && level->onion.image_present && level->onion.image_pivot_set) {
+        ok = fprintf(f, "onion_pivot %.3f %.3f\n",
+                     level->onion.image_pivot.x,
+                     level->onion.image_pivot.y) >= 0;
+    }
     if (ok && level->onion.floor_index >= 0) {
         ok = fprintf(f, "onion_floor %d %.4f\n", level->onion.floor_index,
                      level->onion.floor_alpha) >= 0;
@@ -1703,6 +1708,15 @@ bool level_load(Level* level, const char* path, LevelError* err) {
             tmp.onion.image_fit = (Rect){ { x0, y0 }, { x1, y1 } };
             snprintf(tmp.onion.image_path, sizeof tmp.onion.image_path, "%s",
                      raw);
+        } else if (strcmp(tag, "onion_pivot") == 0) {
+            float x = 0, y = 0;
+            if (!read_float(&save, &x) || !read_float(&save, &y) ||
+                next_token(&save) || !isfinite(x) || !isfinite(y)) {
+                ok = fail_line(err, line_no, "malformed onion_pivot record");
+                break;
+            }
+            tmp.onion.image_pivot = v2(x, y);
+            tmp.onion.image_pivot_set = true;
         } else if (strcmp(tag, "onion_floor") == 0) {
             int index = -1;
             float alpha = 0.25f;

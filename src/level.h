@@ -112,6 +112,8 @@ typedef struct {
     Vec2 image_offset;
     float image_scale;
     Rect image_fit;
+    Vec2 image_pivot;
+    bool image_pivot_set;
     int floor_index;
     float floor_alpha;
 } OnionSkin;

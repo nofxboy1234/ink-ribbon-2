@@ -261,6 +261,11 @@ struct Editor {
     bool image_onion_scaling;
     int image_onion_scale_corner;
     Vec2 image_onion_scale_anchor;
+    Vec2 image_onion_scale_center;
+    float image_onion_scale_start;
+    Vec2 image_onion_pivot;
+    bool image_onion_pivot_custom;
+    bool image_onion_pivot_dragging;
     char image_onion_path[512];
     int image_onion_w;
     int image_onion_h;
@@ -546,39 +551,52 @@ static int image_onion_corner_at(const Editor* e, ImVec2 mouse, float tol) {
     return best;
 }
 
+static Vec2 image_onion_center(const Editor* e) {
+    Rect r = image_onion_visible_rect(e);
+    return v2((r.min.x + r.max.x) * 0.5f, (r.min.y + r.max.y) * 0.5f);
+}
+
 static void begin_image_onion_scale(Editor* e, int corner) {
     Rect r = image_onion_visible_rect(e);
     Vec2 center = v2((r.min.x + r.max.x) * 0.5f,
                      (r.min.y + r.max.y) * 0.5f);
     float hw = (r.max.x - r.min.x) * 0.5f;
     float hh = (r.max.y - r.min.y) * 0.5f;
+    Vec2 corner_pos =
+        v2(center.x + IMAGE_CORNER_SX[corner] * hw,
+           center.y + IMAGE_CORNER_SY[corner] * hh);
+    Vec2 from_pivot = v2_sub(corner_pos, e->image_onion_pivot);
+    if (v2_len(from_pivot) < 0.001f) {
+        set_status(e, true, "Move the pivot away from the corner to scale");
+        return;
+    }
     e->image_onion_scale_corner = corner;
-    e->image_onion_scale_anchor =
-        v2(center.x - IMAGE_CORNER_SX[corner] * hw,
-           center.y - IMAGE_CORNER_SY[corner] * hh);
+    e->image_onion_scale_center = center;
+    e->image_onion_scale_anchor = from_pivot;
+    e->image_onion_scale_start = e->image_onion_scale;
     e->image_onion_scaling = true;
     e->image_onion_dragging = false;
-    set_status(e, false, "Drag the corner to scale the image");
+    set_status(e, false, "Drag the corner to scale around the pivot");
 }
 
 static void update_image_onion_scale(Editor* e, Vec2 pointer) {
-    int corner = e->image_onion_scale_corner;
-    if (corner < 0 || corner >= 4) return;
+    if (!e->image_onion_scaling) return;
+    Vec2 arm = e->image_onion_scale_anchor;
+    float len2 = v2_dot(arm, arm);
+    if (len2 < 0.000001f) return;
+    Vec2 from_pivot = v2_sub(pointer, e->image_onion_pivot);
+    float ratio = v2_dot(from_pivot, arm) / len2;
+    if (!isfinite(ratio) || ratio <= 0.001f) return;
+    float scale = clampf(e->image_onion_scale_start * ratio, 0.05f, 20.0f);
+    float applied = scale / e->image_onion_scale_start;
+    Vec2 center = v2_add(
+        e->image_onion_pivot,
+        v2_scale(v2_sub(e->image_onion_scale_center,
+                        e->image_onion_pivot),
+                 applied));
     Rect base = image_onion_rect(e);
-    float w = base.max.x - base.min.x;
-    float h = base.max.y - base.min.y;
-    if (w <= 0.0001f || h <= 0.0001f) return;
-    int sx = IMAGE_CORNER_SX[corner];
-    int sy = IMAGE_CORNER_SY[corner];
-    Vec2 v = v2_sub(pointer, e->image_onion_scale_anchor);
-    float scale = (v.x * (float)sx * w + v.y * (float)sy * h) /
-                  (w * w + h * h);
-    scale = clampf(scale, 0.05f, 20.0f);
     Vec2 base_center = v2((base.min.x + base.max.x) * 0.5f,
                           (base.min.y + base.max.y) * 0.5f);
-    Vec2 center = v2_add(
-        e->image_onion_scale_anchor,
-        v2((float)sx * w * scale * 0.5f, (float)sy * h * scale * 0.5f));
     e->image_onion_scale = scale;
     e->image_onion_offset = v2_sub(center, base_center);
 }
@@ -633,6 +651,9 @@ static void release_image_onion(Editor* e) {
     e->image_onion_edit = false;
     e->image_onion_dragging = false;
     e->image_onion_scaling = false;
+    e->image_onion_pivot_dragging = false;
+    e->image_onion_pivot = v2(0.0f, 0.0f);
+    e->image_onion_pivot_custom = false;
     e->image_onion_offset = v2(0.0f, 0.0f);
     e->image_onion_scale = 1.0f;
     e->image_onion_fit = (Rect){ v2(0.0f, 0.0f), v2(0.0f, 0.0f) };
@@ -649,6 +670,10 @@ static void reset_onion_editor(Editor* e) {
     e->image_onion_on = false;
     e->image_onion_edit = false;
     e->image_onion_dragging = false;
+    e->image_onion_scaling = false;
+    e->image_onion_pivot_dragging = false;
+    e->image_onion_pivot = v2(0.0f, 0.0f);
+    e->image_onion_pivot_custom = false;
     e->image_onion_offset = v2(0.0f, 0.0f);
     e->image_onion_scale = 1.0f;
     e->image_onion_fit = (Rect){ v2(0.0f, 0.0f), v2(0.0f, 0.0f) };
@@ -737,6 +762,8 @@ static void store_onion_state(Editor* e) {
     o->image_offset = e->image_onion_offset;
     o->image_scale = e->image_onion_scale;
     o->image_fit = e->image_onion_fit;
+    o->image_pivot = e->image_onion_pivot;
+    o->image_pivot_set = e->image_onion_pivot_custom;
     o->floor_index = e->onion_floor;
     o->floor_alpha = e->onion_alpha;
 }
@@ -760,7 +787,16 @@ static void restore_onion_state(Editor* e) {
     }
     e->onion_alpha = clampf(o->floor_alpha, 0.05f, 1.0f);
     e->image_onion_dragging = false;
+    e->image_onion_scaling = false;
+    e->image_onion_pivot_dragging = false;
     e->image_onion_edit = false;
+    if (o->image_pivot_set) {
+        e->image_onion_pivot = o->image_pivot;
+        e->image_onion_pivot_custom = true;
+    } else {
+        e->image_onion_pivot = image_onion_center(e);
+        e->image_onion_pivot_custom = false;
+    }
     if (!o->image_present || !o->image_path[0]) return;
     snprintf(e->image_onion_path, sizeof e->image_onion_path, "%s",
              o->image_path);
@@ -793,6 +829,11 @@ bool editor_load_onion_image(Editor* e, const char* path) {
     e->image_onion_scale = 1.0f;
     e->image_onion_dragging = false;
     e->image_onion_scaling = false;
+    e->image_onion_pivot_dragging = false;
+    e->image_onion_pivot =
+        v2((e->image_onion_fit.min.x + e->image_onion_fit.max.x) * 0.5f,
+           (e->image_onion_fit.min.y + e->image_onion_fit.max.y) * 0.5f);
+    e->image_onion_pivot_custom = false;
     snprintf(e->image_onion_path, sizeof e->image_onion_path, "%s", path);
     e->image_onion_on = true;
     e->image_path_buf[0] = '\0';
@@ -2657,6 +2698,16 @@ static void draw_image_onion(const Editor* e) {
                 (ImVec2){ handles[i].x + h, handles[i].y + h },
                 col32(ACCENT_COL), 0.0f, 0);
         }
+        ImVec2 pivot = world_to_screen(e, e->image_onion_pivot);
+        ImU32 pivot_col = col32(0xff79c6);
+        ImDrawList_AddCircleEx(dl, pivot, 5.0f, pivot_col, 0, 1.5f, 0);
+        ImDrawList_AddLineEx(dl, (ImVec2){ pivot.x - 9, pivot.y },
+                             (ImVec2){ pivot.x + 9, pivot.y }, pivot_col,
+                             1.5f, 0);
+        ImDrawList_AddLineEx(dl, (ImVec2){ pivot.x, pivot.y - 9 },
+                             (ImVec2){ pivot.x, pivot.y + 9 }, pivot_col,
+                             1.5f, 0);
+        ImDrawList_AddCircleFilled(dl, pivot, 1.5f, pivot_col, 0);
     }
 }
 
@@ -4648,10 +4699,11 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
 
     /* A transform drag must end even if the button is released over a panel
        or outside the canvas. */
-    if ((e->image_onion_scaling || e->image_onion_dragging) &&
-        !io->MouseDown[0]) {
+    if ((e->image_onion_scaling || e->image_onion_dragging ||
+         e->image_onion_pivot_dragging) && !io->MouseDown[0]) {
         e->image_onion_scaling = false;
         e->image_onion_dragging = false;
+        e->image_onion_pivot_dragging = false;
     }
 
     /* In image-transform mode the canvas drives the image transform instead
@@ -4659,9 +4711,19 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     if (hovered && !e->play_mode && e->image_onion_edit &&
         e->image_onion_on && e->image_onion_texture) {
         if (io->MouseWheel != 0.0f) {
-            scale_image_onion_about(e, world,
+            scale_image_onion_about(e, e->image_onion_pivot,
                                     powf(1.18f, io->MouseWheel));
             e->camera_pan_active = false;
+            return;
+        }
+        if (!e->pan_active && io->KeyCtrl && io->MouseDown[0]) {
+            if (!e->image_onion_pivot_dragging) {
+                e->image_onion_pivot_dragging = true;
+                set_status(e, false,
+                           "Drag to reposition the image scaling pivot");
+            }
+            e->image_onion_pivot = world;
+            e->image_onion_pivot_custom = true;
             return;
         }
         if (!e->pan_active && io->MouseDown[0]) {
@@ -5129,13 +5191,20 @@ static void draw_left_panel(Editor* e) {
             if (igButtonEx("Reset", (ImVec2){ 56.0f, 0.0f })) {
                 e->image_onion_offset = v2(0.0f, 0.0f);
                 e->image_onion_scale = 1.0f;
+                Rect base = image_onion_rect(e);
+                e->image_onion_pivot =
+                    v2((base.min.x + base.max.x) * 0.5f,
+                       (base.min.y + base.max.y) * 0.5f);
+                e->image_onion_pivot_custom = false;
                 e->image_onion_dragging = false;
                 e->image_onion_scaling = false;
+                e->image_onion_pivot_dragging = false;
                 set_status(e, false, "Image transform reset");
             }
             if (!e->image_onion_edit) {
                 e->image_onion_dragging = false;
                 e->image_onion_scaling = false;
+                e->image_onion_pivot_dragging = false;
             }
             float offset[2] = { e->image_onion_offset.x,
                                 e->image_onion_offset.y };
@@ -5144,9 +5213,13 @@ static void draw_left_panel(Editor* e) {
                                "%.1f", 0)) {
                 e->image_onion_offset = v2(offset[0], offset[1]);
             }
+            float scale_edit = e->image_onion_scale;
             igSetNextItemWidth(84.0f);
-            igSliderFloatEx("Scale", &e->image_onion_scale, 0.05f, 20.0f,
-                            "%.2f", 0);
+            if (igSliderFloatEx("Scale", &scale_edit, 0.05f, 20.0f,
+                                "%.2f", 0)) {
+                scale_image_onion_about(e, e->image_onion_pivot,
+                                        scale_edit / e->image_onion_scale);
+            }
             if (e->image_onion_edit) {
                 small_note("Drag the canvas to move; drag a corner to scale; the wheel scales around the cursor.");
             }
@@ -5577,6 +5650,8 @@ static void draw_help_modal(Editor* e) {
     igText("Load an image in the left panel or drop one on the window.");
     igBullet();
     igText("Check a box beside a floor tab to overlay that floor.");
+    igBullet();
+    igText("Ctrl-drag moves the image scaling pivot in Transform mode.");
     igText("File");
     igBullet();
     igText("Ctrl+S save, Ctrl+Shift+S save as.");

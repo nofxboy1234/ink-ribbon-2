@@ -1811,6 +1811,8 @@ static void test_onion_skins(void) {
     level.onion.image_scale = 1.75f;
     level.onion.image_offset = v2(12.5f, -7.25f);
     level.onion.image_fit = (Rect){ { 1, 2 }, { 301, 202 } };
+    level.onion.image_pivot = v2(-17.5f, 42.25f);
+    level.onion.image_pivot_set = true;
     level.onion.floor_index = 2;
     level.onion.floor_alpha = 0.61f;
 
@@ -1828,6 +1830,8 @@ static void test_onion_skins(void) {
               nearv(loaded.onion.image_offset, v2(12.5f, -7.25f)) &&
               nearv(loaded.onion.image_fit.min, v2(1, 2)) &&
               nearv(loaded.onion.image_fit.max, v2(301, 202)) &&
+              loaded.onion.image_pivot_set &&
+              nearv(loaded.onion.image_pivot, v2(-17.5f, 42.25f)) &&
               loaded.onion.floor_index == 2 &&
               nearf(loaded.onion.floor_alpha, 0.61f),
           "onion skins survive save and load, including a path with spaces");
