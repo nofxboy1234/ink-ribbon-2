@@ -258,6 +258,9 @@ struct Editor {
     bool image_onion_edit;
     bool image_onion_dragging;
     Vec2 image_onion_drag_last;
+    bool image_onion_scaling;
+    int image_onion_scale_corner;
+    Vec2 image_onion_scale_anchor;
     char image_onion_path[512];
     int image_onion_w;
     int image_onion_h;
@@ -370,6 +373,7 @@ static bool save_all_floors(Editor* e);
 static bool enter_floor(Editor* e, int index);
 static Vec2 draw_snap_point(const Editor* e, Vec2 p);
 static Vec2 draw_snap_line_point(const Editor* e, Vec2 anchor, Vec2 cursor);
+static float screen_dist(ImVec2 a, ImVec2 b);
 
 static ImU32 col32(unsigned rgb) {
     return IM_COL32((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, 255);
@@ -505,6 +509,80 @@ static Rect image_onion_rect(const Editor* e) {
     return e->image_onion_fit;
 }
 
+/* The transformed image rectangle after offset and uniform scale. */
+static Rect image_onion_visible_rect(const Editor* e) {
+    Rect base = image_onion_rect(e);
+    float scale = e->image_onion_scale;
+    Vec2 base_center = v2((base.min.x + base.max.x) * 0.5f,
+                          (base.min.y + base.max.y) * 0.5f);
+    Vec2 center = v2_add(base_center, e->image_onion_offset);
+    float hw = (base.max.x - base.min.x) * 0.5f * scale;
+    float hh = (base.max.y - base.min.y) * 0.5f * scale;
+    return (Rect){ v2(center.x - hw, center.y - hh),
+                   v2(center.x + hw, center.y + hh) };
+}
+
+/* Corner order: top-left, top-right, bottom-right, bottom-left. */
+static const int IMAGE_CORNER_SX[4] = { -1, 1, 1, -1 };
+static const int IMAGE_CORNER_SY[4] = { -1, -1, 1, 1 };
+
+static int image_onion_corner_at(const Editor* e, ImVec2 mouse, float tol) {
+    Rect r = image_onion_visible_rect(e);
+    ImVec2 corners[4] = {
+        world_to_screen(e, r.min),
+        world_to_screen(e, v2(r.max.x, r.min.y)),
+        world_to_screen(e, r.max),
+        world_to_screen(e, v2(r.min.x, r.max.y)),
+    };
+    int best = -1;
+    float best_dist = tol;
+    for (int i = 0; i < 4; i++) {
+        float d = screen_dist(mouse, corners[i]);
+        if (d <= best_dist) {
+            best = i;
+            best_dist = d;
+        }
+    }
+    return best;
+}
+
+static void begin_image_onion_scale(Editor* e, int corner) {
+    Rect r = image_onion_visible_rect(e);
+    Vec2 center = v2((r.min.x + r.max.x) * 0.5f,
+                     (r.min.y + r.max.y) * 0.5f);
+    float hw = (r.max.x - r.min.x) * 0.5f;
+    float hh = (r.max.y - r.min.y) * 0.5f;
+    e->image_onion_scale_corner = corner;
+    e->image_onion_scale_anchor =
+        v2(center.x - IMAGE_CORNER_SX[corner] * hw,
+           center.y - IMAGE_CORNER_SY[corner] * hh);
+    e->image_onion_scaling = true;
+    e->image_onion_dragging = false;
+    set_status(e, false, "Drag the corner to scale the image");
+}
+
+static void update_image_onion_scale(Editor* e, Vec2 pointer) {
+    int corner = e->image_onion_scale_corner;
+    if (corner < 0 || corner >= 4) return;
+    Rect base = image_onion_rect(e);
+    float w = base.max.x - base.min.x;
+    float h = base.max.y - base.min.y;
+    if (w <= 0.0001f || h <= 0.0001f) return;
+    int sx = IMAGE_CORNER_SX[corner];
+    int sy = IMAGE_CORNER_SY[corner];
+    Vec2 v = v2_sub(pointer, e->image_onion_scale_anchor);
+    float scale = (v.x * (float)sx * w + v.y * (float)sy * h) /
+                  (w * w + h * h);
+    scale = clampf(scale, 0.05f, 20.0f);
+    Vec2 base_center = v2((base.min.x + base.max.x) * 0.5f,
+                          (base.min.y + base.max.y) * 0.5f);
+    Vec2 center = v2_add(
+        e->image_onion_scale_anchor,
+        v2((float)sx * w * scale * 0.5f, (float)sy * h * scale * 0.5f));
+    e->image_onion_scale = scale;
+    e->image_onion_offset = v2_sub(center, base_center);
+}
+
 static void scale_image_onion_about(Editor* e, Vec2 pivot, float factor) {
     float old_scale = e->image_onion_scale;
     float next_scale = clampf(old_scale * factor, 0.05f, 20.0f);
@@ -554,6 +632,7 @@ static void release_image_onion(Editor* e) {
     e->image_onion_on = false;
     e->image_onion_edit = false;
     e->image_onion_dragging = false;
+    e->image_onion_scaling = false;
     e->image_onion_offset = v2(0.0f, 0.0f);
     e->image_onion_scale = 1.0f;
     e->image_onion_fit = (Rect){ v2(0.0f, 0.0f), v2(0.0f, 0.0f) };
@@ -713,6 +792,7 @@ bool editor_load_onion_image(Editor* e, const char* path) {
     e->image_onion_offset = v2(0.0f, 0.0f);
     e->image_onion_scale = 1.0f;
     e->image_onion_dragging = false;
+    e->image_onion_scaling = false;
     snprintf(e->image_onion_path, sizeof e->image_onion_path, "%s", path);
     e->image_onion_on = true;
     e->image_path_buf[0] = '\0';
@@ -2553,14 +2633,7 @@ static void draw_image_onion(const Editor* e) {
     }
     float alpha = clampf(e->image_onion_alpha, 0.0f, 1.0f);
     if (alpha <= 0.0f) return;
-    Rect base = image_onion_rect(e);
-    float half_w = (base.max.x - base.min.x) * 0.5f * e->image_onion_scale;
-    float half_h = (base.max.y - base.min.y) * 0.5f * e->image_onion_scale;
-    Vec2 center = v2_add(v2((base.min.x + base.max.x) * 0.5f,
-                            (base.min.y + base.max.y) * 0.5f),
-                         e->image_onion_offset);
-    Rect r = { v2(center.x - half_w, center.y - half_h),
-               v2(center.x + half_w, center.y + half_h) };
+    Rect r = image_onion_visible_rect(e);
     ImDrawList* dl = igGetWindowDrawList();
     ImVec2 p1 = world_to_screen(e, r.min);
     ImVec2 p2 = world_to_screen(e, v2(r.max.x, r.min.y));
@@ -4573,6 +4646,14 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
         e->cursor_valid = false;
     }
 
+    /* A transform drag must end even if the button is released over a panel
+       or outside the canvas. */
+    if ((e->image_onion_scaling || e->image_onion_dragging) &&
+        !io->MouseDown[0]) {
+        e->image_onion_scaling = false;
+        e->image_onion_dragging = false;
+    }
+
     /* In image-transform mode the canvas drives the image transform instead
        of the camera or a tool. */
     if (hovered && !e->play_mode && e->image_onion_edit &&
@@ -4584,9 +4665,19 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
             return;
         }
         if (!e->pan_active && io->MouseDown[0]) {
-            if (!e->image_onion_dragging) {
+            if (!e->image_onion_dragging && !e->image_onion_scaling) {
+                int corner = image_onion_corner_at(e, io->MousePos, 10.0f);
+                if (corner >= 0) {
+                    begin_image_onion_scale(e, corner);
+                    update_image_onion_scale(e, world);
+                    return;
+                }
                 e->image_onion_dragging = true;
                 e->image_onion_drag_last = world;
+            }
+            if (e->image_onion_scaling) {
+                update_image_onion_scale(e, world);
+                return;
             }
             e->image_onion_offset = v2_add(
                 e->image_onion_offset,
@@ -4594,8 +4685,10 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
             e->image_onion_drag_last = world;
             return;
         }
-        if (e->image_onion_dragging && !io->MouseDown[0]) {
+        if ((e->image_onion_dragging || e->image_onion_scaling) &&
+            !io->MouseDown[0]) {
             e->image_onion_dragging = false;
+            e->image_onion_scaling = false;
             return;
         }
     }
@@ -5037,7 +5130,12 @@ static void draw_left_panel(Editor* e) {
                 e->image_onion_offset = v2(0.0f, 0.0f);
                 e->image_onion_scale = 1.0f;
                 e->image_onion_dragging = false;
+                e->image_onion_scaling = false;
                 set_status(e, false, "Image transform reset");
+            }
+            if (!e->image_onion_edit) {
+                e->image_onion_dragging = false;
+                e->image_onion_scaling = false;
             }
             float offset[2] = { e->image_onion_offset.x,
                                 e->image_onion_offset.y };
@@ -5050,7 +5148,7 @@ static void draw_left_panel(Editor* e) {
             igSliderFloatEx("Scale", &e->image_onion_scale, 0.05f, 20.0f,
                             "%.2f", 0);
             if (e->image_onion_edit) {
-                small_note("Drag the canvas to move the image; the wheel scales it.");
+                small_note("Drag the canvas to move; drag a corner to scale; the wheel scales around the cursor.");
             }
             char image_note[640];
             snprintf(image_note, sizeof image_note, "%s (%d x %d)",

@@ -101,8 +101,9 @@ floor skin. The fitted rectangle is captured at load time in
 `Editor.image_onion_fit`, so later drawing that grows the level bounds does not
 move the skin. `image_onion_offset` and `image_onion_scale` apply a world-space
 translation and a uniform scale about the fitted centre; the Reset control
-zeroes them. Transform mode maps a canvas left-drag to the offset and the wheel
-to cursor-anchored scaling. The image has its own opacity, show toggle, and
+zeroes them. Transform mode maps a canvas left-drag to the offset, a corner
+handle drag to uniform scaling with the opposite corner fixed, and the wheel to
+cursor-anchored scaling. The image has its own opacity, show toggle, and
 path, so one image and one floor skin can be visible together. Both skins are
 edit-mode only.
 

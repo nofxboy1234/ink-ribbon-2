@@ -106,8 +106,8 @@ the native **Browse...** picker when available, or by dropping a file on the
 window. The **Move** and **Scale** controls shift and resize the image, and
 **Reset** restores the fitted position and scale. The fit is captured when the
 image loads, so drawing or editing the level never shifts it. With **Transform**
-checked, dragging the canvas moves the image and the mouse wheel scales it
-around the cursor. The image skin and the floor skin are independent, so both
+checked, dragging the canvas moves the image, dragging a corner handle scales
+it from the opposite corner, and the mouse wheel scales it around the cursor. The image skin and the floor skin are independent, so both
 can be visible at once. Both onion layers are hidden in play mode. The image path,
 transform, opacity, visibility, checked floor, and both opacities are saved in
 the active floor's `.lvl` file, so opening that floor or switching back to it
