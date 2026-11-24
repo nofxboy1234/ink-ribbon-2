@@ -17,6 +17,19 @@ static bool segment_crosses(Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
     return t > 0.0001f && t < 0.9999f && u > 0.0001f && u < 0.9999f;
 }
 
+/* Exact minimum distance between two non-intersecting segments is the
+   smallest endpoint-to-opposite-segment distance. */
+static float segment_distance(Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
+    float best = point_segment_dist(a, c, d);
+    float v = point_segment_dist(b, c, d);
+    if (v < best) best = v;
+    v = point_segment_dist(c, a, b);
+    if (v < best) best = v;
+    v = point_segment_dist(d, a, b);
+    if (v < best) best = v;
+    return best;
+}
+
 static int wall_solid_spans(const Level* level, const Wall* wall, float radius,
                             float* t0, float* t1, int max) {
     float len = wall_length(wall);
@@ -162,20 +175,26 @@ static bool point_clear_of_cached(const Level* level, const NavWallSpans* spans,
     return true;
 }
 
-static bool edge_clear_of_cached(const Level* level, const NavWallSpans* spans,
-                                 Vec2 a, Vec2 b, float radius) {
+static bool edge_clear_of_cached(const Level* level,
+                                 const NavWallSpans* spans, Vec2 a, Vec2 b,
+                                 float radius) {
     for (int i = 0; i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
         for (int k = 0; k < spans[i].count; k++) {
             Vec2 c = segment_point(w->a, w->b, spans[i].t0[k]);
             Vec2 d = segment_point(w->a, w->b, spans[i].t1[k]);
             if (segment_crosses(a, b, c, d)) return false;
+            if (segment_distance(a, b, c, d) < radius - 0.001f) return false;
         }
     }
     Vec2 rails[LEVEL_MAX_STAIRS * 2][2];
     int rail_count = stair_rails(level, rails, LEVEL_MAX_STAIRS * 2);
     for (int i = 0; i < rail_count; i++) {
         if (segment_crosses(a, b, rails[i][0], rails[i][1])) return false;
+        if (segment_distance(a, b, rails[i][0], rails[i][1]) <
+            radius - 0.001f) {
+            return false;
+        }
     }
     return true;
 }
@@ -482,19 +501,6 @@ static int pop_heap(int* heap, float* cost, int* count) {
     return top;
 }
 
-/* Exact minimum distance between two non-intersecting segments is the
-   smallest endpoint-to-opposite-segment distance. */
-static float segment_distance(Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
-    float best = point_segment_dist(a, c, d);
-    float v = point_segment_dist(b, c, d);
-    if (v < best) best = v;
-    v = point_segment_dist(c, a, b);
-    if (v < best) best = v;
-    v = point_segment_dist(d, a, b);
-    if (v < best) best = v;
-    return best;
-}
-
 /* Keep a path segment the full player radius away from every solid wall and
    stair rail. Door openings use their real width (no radius padding), so a
    path can still pass through a doorway, but it may not graze a jamb or a
@@ -587,10 +593,10 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
         out[0] = filtered[0];
         return 1;
     }
-    /* Route through the centre of each doorway the filtered polyline crosses,
-       instead of letting the grid cells pick a side of the opening. */
+    /* Route through the centre of each doorway the filtered polyline crosses.
+       Add a short approach and exit point on the door normal so the path
+       crosses the opening straight and the curve can stay smooth there. */
     Vec2 routed[NAV_MAX_PATH];
-    bool door_flag[NAV_MAX_PATH] = { false };
     int rn = 0;
     routed[rn++] = filtered[0];
     for (int i = 0; i < fn - 1; i++) {
@@ -627,86 +633,104 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
             hit_doors[at] = d;
             hit_count++;
         }
-        for (int h = 0; h < hit_count; h++) {
-            Vec2 c = nav->doors[hit_doors[h]].center;
-            if (!v2_equal(c, routed[rn - 1], 0.02f)) {
-                door_flag[rn] = true;
-                routed[rn++] = c;
+        for (int h = 0; h < hit_count && rn + 3 < NAV_MAX_PATH; h++) {
+            const NavDoor* nd = &nav->doors[hit_doors[h]];
+            Vec2 normal = nd->vertical ? v2(1.0f, 0.0f) : v2(0.0f, 1.0f);
+            float approach = fmaxf(6.0f, nav->radius + 2.0f);
+            float side_a = fabsf(v2_dot(v2_sub(a, nd->center), normal));
+            float side_b = fabsf(v2_dot(v2_sub(b, nd->center), normal));
+            float d_before = fminf(approach, fmaxf(0.5f, side_a * 0.45f));
+            float d_after = fminf(approach, fmaxf(0.5f, side_b * 0.45f));
+            Vec2 before = v2_sub(nd->center, v2_scale(normal, d_before));
+            Vec2 after = v2_add(nd->center, v2_scale(normal, d_after));
+            if (v2_dot(v2_sub(b, a), normal) < 0.0f) {
+                Vec2 swap = before;
+                before = after;
+                after = swap;
+            }
+            Vec2 insert[3] = { before, nd->center, after };
+            for (int k = 0; k < 3; k++) {
+                if (v2_dist(insert[k], routed[rn - 1]) > 0.02f) {
+                    routed[rn++] = insert[k];
+                }
             }
         }
-        if (!v2_equal(b, routed[rn - 1], 0.02f)) routed[rn++] = b;
+        if (v2_dist(b, routed[rn - 1]) > 0.02f) routed[rn++] = b;
     }
-    bool filtered_door[NAV_MAX_PATH] = { false };
     if (rn >= 2) {
         fn = rn;
-        for (int i = 0; i < rn; i++) {
-            filtered[i] = routed[i];
-            filtered_door[i] = door_flag[i];
-        }
+        for (int i = 0; i < rn; i++) filtered[i] = routed[i];
     }
 
-    const float radii[] = { 10.0f, 7.0f, 4.5f, 2.5f, 1.2f };
+    /* Round each corner independently. A quadratic arc never leaves the
+       corner's own triangle, so it cannot loop or overshoot like a spline.
+       Start with the widest pleasant radius and shrink just that corner until
+       its arc stays clear of walls and open cells. */
     Vec2 smooth[NAV_MAX_PATH];
     int sn = 0;
-    for (int ri = 0; ri < (int)(sizeof radii / sizeof radii[0]); ri++) {
-        sn = 0;
-        smooth[sn++] = filtered[0];
-        for (int i = 1; i < fn - 1; i++) {
-            if (filtered_door[i]) {
-                if (!v2_equal(filtered[i], smooth[sn - 1], 0.02f)) {
-                    smooth[sn++] = filtered[i];
-                }
-                continue;
-            }
-            Vec2 prev = filtered[i - 1];
-            Vec2 cur = filtered[i];
-            Vec2 next = filtered[i + 1];
-            float l0 = v2_dist(prev, cur);
-            float l1 = v2_dist(cur, next);
-            if (l0 < 0.001f || l1 < 0.001f) continue;
-            Vec2 d0 = v2_scale(v2_sub(cur, prev), 1.0f / l0);
-            Vec2 d1 = v2_scale(v2_sub(next, cur), 1.0f / l1);
-            float dot = d0.x * d1.x + d0.y * d1.y;
-            if (dot < -1.0f) dot = -1.0f;
-            if (dot > 1.0f) dot = 1.0f;
-            float angle = acosf(dot);
-            float radius = radii[ri] * (0.25f + 0.75f * (1.0f - angle / 3.14159265f));
-            if (radius > l0 * 0.45f) radius = l0 * 0.45f;
-            if (radius > l1 * 0.45f) radius = l1 * 0.45f;
-            if (dot > 0.999f || radius < 0.2f) {
-                if (!v2_equal(cur, smooth[sn - 1], 0.02f)) smooth[sn++] = cur;
-                continue;
-            }
+    smooth[sn++] = filtered[0];
+    for (int i = 1; i < fn - 1 && sn < NAV_MAX_PATH; i++) {
+        Vec2 prev = filtered[i - 1];
+        Vec2 cur = filtered[i];
+        Vec2 next = filtered[i + 1];
+        float l0 = v2_dist(prev, cur);
+        float l1 = v2_dist(cur, next);
+        if (l0 < 0.001f || l1 < 0.001f) continue;
+        Vec2 d0 = v2_scale(v2_sub(cur, prev), 1.0f / l0);
+        Vec2 d1 = v2_scale(v2_sub(next, cur), 1.0f / l1);
+        float dot = v2_dot(d0, d1);
+        if (dot < -1.0f) dot = -1.0f;
+        if (dot > 1.0f) dot = 1.0f;
+        float angle = acosf(dot);
+        float wanted = 10.0f * (0.25f + 0.75f *
+                                (1.0f - angle / 3.14159265f));
+        float limit = fminf(l0, l1) * 0.45f;
+        if (wanted > limit) wanted = limit;
+        if (dot > 0.999f || wanted < 0.2f) {
+            if (v2_dist(cur, smooth[sn - 1]) > 0.02f) smooth[sn++] = cur;
+            continue;
+        }
+        const float scale_down[5] = { 1.0f, 0.6f, 0.35f, 0.2f, 0.08f };
+        bool placed = false;
+        for (int si = 0; si < 5 && !placed; si++) {
+            float radius = wanted * scale_down[si];
+            if (radius < 0.2f) continue;
             Vec2 a = v2_sub(cur, v2_scale(d0, radius));
             Vec2 b = v2_add(cur, v2_scale(d1, radius));
-            if (!v2_equal(a, smooth[sn - 1], 0.02f)) smooth[sn++] = a;
+            Vec2 arc[40];
+            int an = 0;
+            arc[an++] = a;
             int steps = (int)ceilf(radius / 0.5f);
-            if (steps < 4) steps = 4;
-            if (steps > 32) steps = 32;
+            if (steps < 8) steps = 8;
+            if (steps > 48) steps = 48;
             for (int k = 1; k <= steps; k++) {
                 float t = (float)k / (float)steps;
                 float u = 1.0f - t;
                 Vec2 q = v2_add(
-                    v2_add(v2_scale(a, u * u),
-                           v2_scale(cur, 2.0f * u * t)),
+                    v2_add(v2_scale(a, u * u), v2_scale(cur, 2.0f * u * t)),
                     v2_scale(b, t * t));
-                if (!v2_equal(q, smooth[sn - 1], 0.02f)) smooth[sn++] = q;
+                if (v2_dist(q, arc[an - 1]) > 0.02f) arc[an++] = q;
             }
-            if (sn >= NAV_MAX_PATH) break;
-        }
-        Vec2 lastp = filtered[fn - 1];
-        if (!v2_equal(lastp, smooth[sn - 1], 0.02f)) smooth[sn++] = lastp;
-        else smooth[sn - 1] = lastp;
-        if (sn < 2) continue;
-        bool clear = true;
-        for (int i = 1; i < sn; i++) {
-            if (!nav_line_clear(nav, smooth[i - 1], smooth[i])) {
-                clear = false;
-                break;
+            bool clear = an >= 2;
+            for (int k = 1; clear && k < an; k++) {
+                if (!nav_line_clear(nav, arc[k - 1], arc[k])) clear = false;
             }
+            if (!clear) continue;
+            for (int k = 0; k < an; k++) {
+                if (v2_dist(arc[k], smooth[sn - 1]) > 0.02f) {
+                    smooth[sn++] = arc[k];
+                    if (sn >= NAV_MAX_PATH) break;
+                }
+            }
+            placed = true;
         }
-        if (clear) break;
-        sn = 0;
+        if (!placed && v2_dist(cur, smooth[sn - 1]) > 0.02f) {
+            smooth[sn++] = cur;
+        }
+    }
+    if (sn < NAV_MAX_PATH &&
+        v2_dist(filtered[fn - 1], smooth[sn - 1]) > 0.02f) {
+        smooth[sn++] = filtered[fn - 1];
     }
     if (sn < 2) {
         int take = fn < max ? fn : max;
