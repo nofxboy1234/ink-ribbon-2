@@ -4801,7 +4801,7 @@ static void draw_menu(Editor* e) {
             if (igMenuItemEx("Redo", "Ctrl+Shift+Z", false, redo_ok)) do_redo(e);
             igSeparator();
             bool has_marks = e->span_count > 0;
-            if (igMenuItemEx("Delete", "Del", false,
+            if (igMenuItemEx("Delete##menu", "Del", false,
                              has_marks || sel_count(&e->selection) > 0)) {
                 delete_selection(e);
             }
@@ -4814,7 +4814,7 @@ static void draw_menu(Editor* e) {
         }
         if (igBeginMenu("View")) {
             if (igMenuItemEx("Fit level", "F", false, true)) e->fit_pending = true;
-            if (igMenuItemEx("Show grid", "G", e->show_grid, true)) e->show_grid = !e->show_grid;
+            if (igMenuItemEx("Show grid##menu", "G", e->show_grid, true)) e->show_grid = !e->show_grid;
             igEndMenu();
         }
         if (igBeginMenu("Help")) {
@@ -4880,7 +4880,7 @@ static void draw_left_panel(Editor* e) {
     }
     igCheckbox("Snap", &e->snap);
     igSameLineEx(0.0f, 12.0f);
-    igCheckbox("Show grid", &e->show_grid);
+    igCheckbox("Show grid##panel", &e->show_grid);
     igCheckbox("Snap objects", &e->snap_objects);
 
     switch (e->tool) {
@@ -4909,12 +4909,12 @@ static void draw_left_panel(Editor* e) {
                 e->stair_dir = STAIRS_V;
             }
             igSetNextItemWidth(84.0f);
-            igSliderInt("Steps", &e->stair_steps, STAIR_MIN_STEPS,
+            igSliderInt("Steps##tool", &e->stair_steps, STAIR_MIN_STEPS,
                         STAIR_MAX_STEPS);
-            igCheckbox("Flip", &e->stair_flip);
+            igCheckbox("Flip##tool", &e->stair_flip);
             int fade = (int)e->stair_fade;
             igSetNextItemWidth(104.0f);
-            if (igCombo("Falloff", &fade, "Linear\0Ease in\0Ease out\0Smooth\0")) {
+            if (igCombo("Falloff##tool", &fade, "Linear\0Ease in\0Ease out\0Smooth\0")) {
                 e->stair_fade = (StairFade)fade;
             }
             igSetNextItemWidth(84.0f);
@@ -4951,8 +4951,8 @@ static void draw_left_panel(Editor* e) {
         if (e->image_onion_texture) {
             igCheckbox("Show image", &e->image_onion_on);
             igSetNextItemWidth(84.0f);
-            igSliderFloatEx("Opacity", &e->image_onion_alpha, 0.05f, 1.0f, "%.2f",
-                            0);
+            igSliderFloatEx("Opacity##image_onion", &e->image_onion_alpha,
+                            0.05f, 1.0f, "%.2f", 0);
             igCheckbox("Transform", &e->image_onion_edit);
             igSameLineEx(0.0f, 6.0f);
             if (igButtonEx("Reset", (ImVec2){ 56.0f, 0.0f })) {
@@ -5010,7 +5010,8 @@ static void draw_left_panel(Editor* e) {
             igTextDisabled("No floor checked");
         }
         igSetNextItemWidth(84.0f);
-        igSliderFloatEx("Opacity", &e->onion_alpha, 0.05f, 1.0f, "%.2f", 0);
+        igSliderFloatEx("Opacity##floor_onion", &e->onion_alpha, 0.05f, 1.0f,
+                        "%.2f", 0);
         small_note("Check a box left of a floor tab to overlay that floor.");
     }
     igDummy((ImVec2){ 0.0f, 8.0f });
@@ -5052,7 +5053,7 @@ static void object_delete_button(Editor* e) {
     igPushStyleColorImVec4(ImGuiCol_Button, v4c(0x4a2028, 1.0f));
     igPushStyleColorImVec4(ImGuiCol_ButtonHovered, v4c(0x5c2832, 1.0f));
     igPushStyleColorImVec4(ImGuiCol_ButtonActive, v4c(0x6d303b, 1.0f));
-    if (igButtonEx("Delete", (ImVec2){ -FLT_MIN, 28.0f })) delete_selection(e);
+    if (igButtonEx("Delete##object", (ImVec2){ -FLT_MIN, 28.0f })) delete_selection(e);
     igPopStyleColorEx(3);
 }
 
@@ -5160,18 +5161,18 @@ static void inspector_stairs(Editor* e, int idx) {
     }
     int steps = s->steps;
     igSetNextItemWidth(128.0f);
-    if (igSliderInt("Steps", &steps, STAIR_MIN_STEPS, STAIR_MAX_STEPS)) {
+    if (igSliderInt("Steps##inspector", &steps, STAIR_MIN_STEPS, STAIR_MAX_STEPS)) {
         level_set_stairs(&e->level, idx, s->dir, steps);
     }
     if (igIsItemDeactivatedAfterEdit()) commit(e, "Stairs step count changed");
     bool flip = s->bottom;
-    if (igCheckbox("Flip", &flip)) {
+    if (igCheckbox("Flip##inspector", &flip)) {
         s->bottom = flip;
         commit(e, "Stairs flip changed");
     }
     int fade = (int)s->fade;
     igSetNextItemWidth(128.0f);
-    if (igCombo("Falloff", &fade, "Linear\0Ease in\0Ease out\0Smooth\0")) {
+    if (igCombo("Falloff##inspector", &fade, "Linear\0Ease in\0Ease out\0Smooth\0")) {
         level_set_stairs_fade(&e->level, idx, (StairFade)fade, s->min_alpha,
                               s->max_alpha);
         commit(e, "Stairs falloff changed");
@@ -5449,7 +5450,7 @@ static void draw_modals(Editor* e) {
             ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
             if (e->path_focus) input_flags |= ImGuiInputTextFlags_AutoSelectAll;
             igSetNextItemWidth(360.0f);
-            bool enter = igInputText("Path", e->image_path_buf,
+            bool enter = igInputText("Path##image", e->image_path_buf,
                                      sizeof e->image_path_buf, input_flags);
             e->path_focus = false;
 #if defined(__linux__)
@@ -5473,7 +5474,7 @@ static void draw_modals(Editor* e) {
             bool do_action = enter;
             if (igButtonEx("Load", (ImVec2){ 120.0f, 28.0f })) do_action = true;
             igSameLineEx(0.0f, 6.0f);
-            if (igButtonEx("Cancel", (ImVec2){ 100.0f, 28.0f })) {
+            if (igButtonEx("Cancel##image", (ImVec2){ 100.0f, 28.0f })) {
                 igCloseCurrentPopup();
                 e->modal = MODAL_NONE;
             }
@@ -5489,7 +5490,7 @@ static void draw_modals(Editor* e) {
             ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
             if (e->path_focus) input_flags |= ImGuiInputTextFlags_AutoSelectAll;
             igSetNextItemWidth(360.0f);
-            bool enter = igInputText("Path", e->path_buf, sizeof e->path_buf, input_flags);
+            bool enter = igInputText("Path##level", e->path_buf, sizeof e->path_buf, input_flags);
             e->path_focus = false;
             draw_level_list(e);
             if (e->modal_error[0]) {
@@ -5500,7 +5501,7 @@ static void draw_modals(Editor* e) {
             bool do_action = enter;
             if (igButtonEx(action, (ImVec2){ 120.0f, 28.0f })) do_action = true;
             igSameLineEx(0.0f, 6.0f);
-            if (igButtonEx("Cancel", (ImVec2){ 100.0f, 28.0f })) {
+            if (igButtonEx("Cancel##level", (ImVec2){ 100.0f, 28.0f })) {
                 igCloseCurrentPopup();
                 e->modal = MODAL_NONE;
             }
