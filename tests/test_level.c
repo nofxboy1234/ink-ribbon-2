@@ -1869,14 +1869,27 @@ static void test_path_clearance_and_door_center(void) {
         check(count >= 2, "smooth the doorway path");
         bool through_door = false;
         bool clear = true;
+        float worst_turn = 0.0f;
         for (int i = 0; i < count; i++) {
             if (v2_dist(path[i], v2(100, 50)) < 0.05f) through_door = true;
             if (i > 0 && !nav_line_clear(nav, path[i - 1], path[i])) {
                 clear = false;
             }
+            if (i > 0 && i + 1 < count) {
+                Vec2 u = v2_sub(path[i], path[i - 1]);
+                Vec2 v = v2_sub(path[i + 1], path[i]);
+                float lu = v2_len(u);
+                float lv = v2_len(v);
+                if (lu > 0.0001f && lv > 0.0001f) {
+                    float dot = clampf(v2_dot(u, v) / (lu * lv), -1.0f, 1.0f);
+                    float turn = acosf(dot) * 57.29578f;
+                    if (turn > worst_turn) worst_turn = turn;
+                }
+            }
         }
         check(through_door, "the path passes through the door centre");
         check(clear, "every smoothed segment clears the walls");
+        check(worst_turn < 30.0f, "the door path has no sharp kink");
         free(nav);
     }
 }

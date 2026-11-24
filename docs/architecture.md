@@ -229,9 +229,11 @@ active and either snap toggle is on.
 - `nav.c` is core code: an 8-unit grid, door-aware wall clearance, 8-way links
   with no corner cutting, A*, door-centre portals, and route smoothing (line-of-sight
   filtering plus per-corner adaptive quadratic Bezier arcs sampled into dense
-  waypoints). Grid links and every final path segment keep the player radius
-  clear of the real wall spans; each door crossing gets short perpendicular
-  approach and exit points through the door centre. The player record lives in
+  waypoints). Grid links keep the player radius clear of the real wall spans.
+  Door crossings are centred by warping a window of the filtered route toward
+  the door axis and inserting the exact centre point, with a perpendicular
+  approach/exit fallback when the crossing remains far off centre. The player
+  record lives in
   `Level`, so bounds, save/load, and undo snapshots carry it. The editor owns the
   movement state, turning/pivot rule, play-mode camera, and the Krita-sourced
   sprite texture.

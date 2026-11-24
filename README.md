@@ -216,7 +216,7 @@ passable; stair treads are not walls, while stair-side rails and walls still
 block. Stair ends stay open so a run can be climbed, and a rectangle/line
 segment that would cut through a rail or solid wall is rejected. Stairs are
 drawn and walked over like any other open floor; they do not switch levels. A*
-uses 8-way movement and forbids corner cutting; every grid link must keep the player radius clear of the real wall spans. The raw cell chain is line-of-sight filtered, then every corner is rounded with its own quadratic arc chosen as wide as clearance allows. Door crossings get a short perpendicular approach and exit around the door centre, so the path passes through the centre without a jagged kink. Every final segment is validated, so the path cannot graze a wall or cut a corner. The player turns toward each next waypoint, with no turning-circle arc and no turning ring.
+uses 8-way movement and forbids corner cutting; every grid link must keep the player radius clear of the real wall spans. The raw cell chain is line-of-sight filtered, then every corner is rounded with its own quadratic arc chosen as wide as clearance allows. Door crossings are centred by bending a window of the route toward the door axis before the crossing point is inserted, so the path passes through the centre without a local S-bend; a perpendicular approach/exit is used only when the crossing is still far off centre. Every final segment is validated, so the path cannot graze a wall or cut a corner. The player turns toward each next waypoint, with no turning-circle arc and no turning ring.
 
 The camera follows the player while walking but only changes its centre: zoom is
 never altered by play mode, recentring, or path starts. When the player starts

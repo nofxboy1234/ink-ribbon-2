@@ -607,6 +607,48 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
         out[0] = filtered[0];
         return 1;
     }
+    /* A door centre is usually a few grid units off the natural crossing.
+       Shifting only the crossing point makes a small S-bend. Warp a window of
+       filtered points toward the door axis first, so the lane change is spread
+       over many segments and the crossing itself stays centred. */
+    for (int d = 0; d < nav->door_count; d++) {
+        const NavDoor* nd = &nav->doors[d];
+        for (int i = 0; i < fn - 1; i++) {
+            Vec2 a = filtered[i];
+            Vec2 b = filtered[i + 1];
+            float t;
+            float across;
+            if (nd->vertical) {
+                if (fabsf(b.x - a.x) < 0.0001f) continue;
+                t = (nd->center.x - a.x) / (b.x - a.x);
+                across = a.y + (b.y - a.y) * t;
+            } else {
+                if (fabsf(b.y - a.y) < 0.0001f) continue;
+                t = (nd->center.y - a.y) / (b.y - a.y);
+                across = a.x + (b.x - a.x) * t;
+            }
+            if (t <= 0.001f || t >= 0.999f) continue;
+            if (fabsf(across - (nd->vertical ? nd->center.y : nd->center.x)) >
+                nd->half) {
+                continue;
+            }
+            float delta = (nd->vertical ? nd->center.y : nd->center.x) -
+                          across;
+            if (fabsf(delta) < 0.01f) break;
+            const float radius = 40.0f;
+            for (int j = 0; j < fn; j++) {
+                if (j == 0 || j == fn - 1) continue;
+                float dist = v2_dist(filtered[j], nd->center);
+                if (dist >= radius) continue;
+                float w = 1.0f - dist / radius;
+                w = w * w * (3.0f - 2.0f * w);
+                if (nd->vertical) filtered[j].y += delta * w;
+                else filtered[j].x += delta * w;
+            }
+            break;
+        }
+    }
+
     /* Route through the centre of each doorway the filtered polyline crosses.
        Add a short approach and exit point on the door normal so the path
        crosses the opening straight and the curve can stay smooth there. */
@@ -655,25 +697,88 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
             door_done[door_id] = true;
             const NavDoor* nd = &nav->doors[door_id];
             Vec2 normal = nd->vertical ? v2(1.0f, 0.0f) : v2(0.0f, 1.0f);
-            float approach = fmaxf(10.0f, nav->radius + 4.0f);
-            float seg_len = v2_dist(a, b);
             float t_hit = hits[h];
-            float d_before = fminf(
-                approach, fmaxf(1.0f, seg_len * t_hit * 0.45f));
-            float d_after = fminf(
-                approach, fmaxf(1.0f, seg_len * (1.0f - t_hit) * 0.45f));
-            Vec2 before = v2_sub(nd->center, v2_scale(normal, d_before));
-            Vec2 after = v2_add(nd->center, v2_scale(normal, d_after));
-            if (v2_dot(v2_sub(b, a), normal) < 0.0f) {
-                Vec2 swap = before;
-                before = after;
-                after = swap;
+            float across = nd->vertical
+                               ? a.y + (b.y - a.y) * t_hit
+                               : a.x + (b.x - a.x) * t_hit;
+            float residual = fabsf(across - (nd->vertical ? nd->center.y
+                                                          : nd->center.x));
+            /* The warp already brought the natural crossing close to the
+               centre. Insert only the centre point there; adding the full
+               approach/exit plateau would create the little S-bend. */
+            if (residual < 1.0f) {
+                if (v2_dist(nd->center, routed[rn - 1]) > 0.02f) {
+                    routed_door[rn] = true;
+                    routed[rn++] = nd->center;
+                }
+                continue;
             }
-            Vec2 insert[3] = { before, nd->center, after };
-            for (int k = 0; k < 3; k++) {
-                if (v2_dist(insert[k], routed[rn - 1]) > 0.02f) {
-                    routed_door[rn] = k == 1;
-                    routed[rn++] = insert[k];
+            Vec2 p0 = a;
+            Vec2 p3 = b;
+            float span = v2_dist(p0, p3);
+            float tangent = fmaxf(2.0f, span * 0.5f);
+            Vec2 sum = v2_scale(
+                v2_sub(v2_scale(nd->center, 8.0f), v2_add(p0, p3)),
+                1.0f / 3.0f);
+            Vec2 diff = v2_add(
+                v2_scale(normal, (4.0f / 3.0f) * tangent),
+                v2_sub(p0, p3));
+            Vec2 p1 = v2_scale(v2_sub(sum, diff), 0.5f);
+            Vec2 p2 = v2_scale(v2_add(sum, diff), 0.5f);
+            int steps = (int)ceilf(span / 0.5f);
+            if (steps < 8) steps = 8;
+            if (steps > 64) steps = 64;
+            if (steps & 1) steps++;
+
+            /* The cubic passes through the door centre with a tangent along
+               the door normal. Use it when every piece clears the walls; that
+               removes the S-bend a straight centre insertion can leave. */
+            Vec2 curve[96];
+            int cn = 0;
+            curve[cn++] = p0;
+            for (int k = 1; k <= steps; k++) {
+                float t = (float)k / (float)steps;
+                float u = 1.0f - t;
+                Vec2 q = v2_add(
+                    v2_add(v2_scale(p0, u * u * u),
+                           v2_scale(p1, 3.0f * u * u * t)),
+                    v2_add(v2_scale(p2, 3.0f * u * t * t),
+                           v2_scale(p3, t * t * t)));
+                if (v2_dist(q, curve[cn - 1]) > 0.02f) curve[cn++] = q;
+            }
+            bool curve_clear = cn >= 2;
+            for (int k = 1; curve_clear && k < cn; k++) {
+                if (!line_clear_of_walls(nav->level, curve[k - 1], curve[k],
+                                         nav->radius)) {
+                    curve_clear = false;
+                }
+            }
+            if (curve_clear) {
+                for (int k = 1; k < cn && rn < NAV_MAX_PATH; k++) {
+                    routed_door[rn] = k == steps / 2;
+                    routed[rn++] = curve[k];
+                }
+            } else {
+                float approach = fmaxf(10.0f, nav->radius + 4.0f);
+                float d_before = fminf(
+                    approach, fmaxf(1.0f, span * t_hit * 0.45f));
+                float d_after = fminf(
+                    approach, fmaxf(1.0f, span * (1.0f - t_hit) * 0.45f));
+                Vec2 before = v2_sub(nd->center,
+                                     v2_scale(normal, d_before));
+                Vec2 after = v2_add(nd->center,
+                                    v2_scale(normal, d_after));
+                if (v2_dot(v2_sub(b, a), normal) < 0.0f) {
+                    Vec2 swap = before;
+                    before = after;
+                    after = swap;
+                }
+                Vec2 insert[3] = { before, nd->center, after };
+                for (int k = 0; k < 3; k++) {
+                    if (v2_dist(insert[k], routed[rn - 1]) > 0.02f) {
+                        routed_door[rn] = k == 1;
+                        routed[rn++] = insert[k];
+                    }
                 }
             }
         }

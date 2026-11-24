@@ -2649,10 +2649,18 @@ static void draw_player_path(const Editor* e) {
     ImDrawList* dl = igGetWindowDrawList();
     ImDrawList_AddPolyline(dl, pts, count, col32a(0x58d68d, 65), 5.0f, 0);
     /* A thin anti-aliased core can break into dotted pixels on near-vertical
-       segments. Draw the bright core without AA over the soft glow. */
+       segments. Draw the bright core without AA over the soft glow. Segment
+       lines plus a small round cap at every vertex avoid the miter spikes
+       that a thick polyline makes on tight bends and door transitions. */
     ImDrawFlags flags = dl->Flags;
     dl->Flags &= ~ImDrawListFlags_AntiAliasedLines;
-    ImDrawList_AddPolyline(dl, pts, count, col32a(0x7df0aa, 220), 2.0f, 0);
+    ImU32 core = col32a(0x7df0aa, 220);
+    for (int i = 1; i < count; i++) {
+        ImDrawList_AddLineEx(dl, pts[i - 1], pts[i], core, 2.0f, 0);
+    }
+    for (int i = 0; i < count; i++) {
+        ImDrawList_AddCircleFilled(dl, pts[i], 1.0f, core, 0);
+    }
     dl->Flags = flags;
 }
 
