@@ -176,14 +176,23 @@ static bool point_clear_of_cached(const Level* level, const NavWallSpans* spans,
 }
 
 static bool edge_clear_of_cached(const Level* level,
-                                 const NavWallSpans* spans, Vec2 a, Vec2 b,
-                                 float radius) {
+                                 const NavWallSpans* spans,
+                                 const NavWallSpans* solid_spans, Vec2 a,
+                                 Vec2 b, float radius) {
     for (int i = 0; i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
+        /* Crossing uses the real door opening: the raw link may not slip
+           through the solid wall just above or below a doorway. Distance uses
+           the radius-padded spans, so a doorway link is not rejected merely
+           for being close to a jamb; the final smoothed route is centred. */
+        for (int k = 0; k < solid_spans[i].count; k++) {
+            Vec2 c = segment_point(w->a, w->b, solid_spans[i].t0[k]);
+            Vec2 d = segment_point(w->a, w->b, solid_spans[i].t1[k]);
+            if (segment_crosses(a, b, c, d)) return false;
+        }
         for (int k = 0; k < spans[i].count; k++) {
             Vec2 c = segment_point(w->a, w->b, spans[i].t0[k]);
             Vec2 d = segment_point(w->a, w->b, spans[i].t1[k]);
-            if (segment_crosses(a, b, c, d)) return false;
             if (segment_distance(a, b, c, d) < radius - 0.001f) return false;
         }
     }
@@ -244,14 +253,19 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
     /* Precompute each wall's solid spans once.  Recomputing them per cell
        made a dense multi-floor plan with dozens of doors take seconds. */
     static NavWallSpans spans[LEVEL_MAX_WALLS];
+    static NavWallSpans solid_spans[LEVEL_MAX_WALLS];
     for (int i = 0; i < level->wall_count; i++) {
         if (level->walls[i].detail) {
             spans[i].count = 0;
+            solid_spans[i].count = 0;
             continue;
         }
         spans[i].count = wall_solid_spans(level, &level->walls[i], radius,
                                           spans[i].t0, spans[i].t1,
                                           NAV_SPANS_PER_WALL);
+        solid_spans[i].count = wall_solid_spans(
+            level, &level->walls[i], 0.0f, solid_spans[i].t0,
+            solid_spans[i].t1, NAV_SPANS_PER_WALL);
     }
 
     Vec2 center[NAV_MAX_CELLS];
@@ -302,7 +316,7 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
                 }
                 int j = ny * nav->cols + nx;
                 if (nav->open[j] || !clear_cell[j]) continue;
-                if (!edge_clear_of_cached(level, spans, center[i], center[j],
+                if (!edge_clear_of_cached(level, spans, solid_spans, center[i], center[j],
                                           radius)) {
                     continue;
                 }
@@ -350,7 +364,7 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
                 }
                 int j = ny * nav->cols + nx;
                 if (outside[j] || !clear_cell[j]) continue;
-                if (!edge_clear_of_cached(level, spans, center[i], center[j],
+                if (!edge_clear_of_cached(level, spans, solid_spans, center[i], center[j],
                                           radius)) {
                     continue;
                 }
@@ -368,19 +382,19 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             if (!nav->open[i]) continue;
             unsigned char links = 0;
             if (x + 1 < nav->cols && nav->open[i + 1] &&
-                edge_clear_of_cached(level, spans, center[i], center[i + 1], radius)) {
+                edge_clear_of_cached(level, spans, solid_spans, center[i], center[i + 1], radius)) {
                 links |= 1u << 0;
             }
             if (x > 0 && nav->open[i - 1] &&
-                edge_clear_of_cached(level, spans, center[i], center[i - 1], radius)) {
+                edge_clear_of_cached(level, spans, solid_spans, center[i], center[i - 1], radius)) {
                 links |= 1u << 1;
             }
             if (y + 1 < nav->rows && nav->open[i + nav->cols] &&
-                edge_clear_of_cached(level, spans, center[i], center[i + nav->cols], radius)) {
+                edge_clear_of_cached(level, spans, solid_spans, center[i], center[i + nav->cols], radius)) {
                 links |= 1u << 2;
             }
             if (y > 0 && nav->open[i - nav->cols] &&
-                edge_clear_of_cached(level, spans, center[i], center[i - nav->cols], radius)) {
+                edge_clear_of_cached(level, spans, solid_spans, center[i], center[i - nav->cols], radius)) {
                 links |= 1u << 3;
             }
             bool east = (links & (1u << 0)) != 0;
@@ -390,25 +404,25 @@ bool nav_build(NavGrid* nav, const Level* level, float cell, float radius) {
             /* 4=NE, 5=NW, 6=SE, 7=SW, matching the A* direction table. */
             if (x + 1 < nav->cols && y > 0 && east && north &&
                 nav->open[i - nav->cols + 1] &&
-                edge_clear_of_cached(level, spans, center[i],
+                edge_clear_of_cached(level, spans, solid_spans, center[i],
                                     center[i - nav->cols + 1], radius)) {
                 links |= 1u << 4;
             }
             if (x > 0 && y > 0 && west && north &&
                 nav->open[i - nav->cols - 1] &&
-                edge_clear_of_cached(level, spans, center[i],
+                edge_clear_of_cached(level, spans, solid_spans, center[i],
                                     center[i - nav->cols - 1], radius)) {
                 links |= 1u << 5;
             }
             if (x + 1 < nav->cols && y + 1 < nav->rows && east && south &&
                 nav->open[i + nav->cols + 1] &&
-                edge_clear_of_cached(level, spans, center[i],
+                edge_clear_of_cached(level, spans, solid_spans, center[i],
                                     center[i + nav->cols + 1], radius)) {
                 links |= 1u << 6;
             }
             if (x > 0 && y + 1 < nav->rows && west && south &&
                 nav->open[i + nav->cols - 1] &&
-                edge_clear_of_cached(level, spans, center[i],
+                edge_clear_of_cached(level, spans, solid_spans, center[i],
                                     center[i + nav->cols - 1], radius)) {
                 links |= 1u << 7;
             }
@@ -597,6 +611,8 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
        Add a short approach and exit point on the door normal so the path
        crosses the opening straight and the curve can stay smooth there. */
     Vec2 routed[NAV_MAX_PATH];
+    bool routed_door[NAV_MAX_PATH] = { false };
+    bool door_done[LEVEL_MAX_DOORS] = { false };
     int rn = 0;
     routed[rn++] = filtered[0];
     for (int i = 0; i < fn - 1; i++) {
@@ -634,13 +650,18 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
             hit_count++;
         }
         for (int h = 0; h < hit_count && rn + 3 < NAV_MAX_PATH; h++) {
-            const NavDoor* nd = &nav->doors[hit_doors[h]];
+            int door_id = hit_doors[h];
+            if (door_done[door_id]) continue;
+            door_done[door_id] = true;
+            const NavDoor* nd = &nav->doors[door_id];
             Vec2 normal = nd->vertical ? v2(1.0f, 0.0f) : v2(0.0f, 1.0f);
-            float approach = fmaxf(6.0f, nav->radius + 2.0f);
-            float side_a = fabsf(v2_dot(v2_sub(a, nd->center), normal));
-            float side_b = fabsf(v2_dot(v2_sub(b, nd->center), normal));
-            float d_before = fminf(approach, fmaxf(0.5f, side_a * 0.45f));
-            float d_after = fminf(approach, fmaxf(0.5f, side_b * 0.45f));
+            float approach = fmaxf(10.0f, nav->radius + 4.0f);
+            float seg_len = v2_dist(a, b);
+            float t_hit = hits[h];
+            float d_before = fminf(
+                approach, fmaxf(1.0f, seg_len * t_hit * 0.45f));
+            float d_after = fminf(
+                approach, fmaxf(1.0f, seg_len * (1.0f - t_hit) * 0.45f));
             Vec2 before = v2_sub(nd->center, v2_scale(normal, d_before));
             Vec2 after = v2_add(nd->center, v2_scale(normal, d_after));
             if (v2_dot(v2_sub(b, a), normal) < 0.0f) {
@@ -651,15 +672,20 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
             Vec2 insert[3] = { before, nd->center, after };
             for (int k = 0; k < 3; k++) {
                 if (v2_dist(insert[k], routed[rn - 1]) > 0.02f) {
+                    routed_door[rn] = k == 1;
                     routed[rn++] = insert[k];
                 }
             }
         }
         if (v2_dist(b, routed[rn - 1]) > 0.02f) routed[rn++] = b;
     }
+    bool filtered_door[NAV_MAX_PATH] = { false };
     if (rn >= 2) {
         fn = rn;
-        for (int i = 0; i < rn; i++) filtered[i] = routed[i];
+        for (int i = 0; i < rn; i++) {
+            filtered[i] = routed[i];
+            filtered_door[i] = routed_door[i];
+        }
     }
 
     /* Round each corner independently. A quadratic arc never leaves the
@@ -678,6 +704,10 @@ int nav_smooth_path(const NavGrid* nav, const int* cells, int count, Vec2* out,
         if (l0 < 0.001f || l1 < 0.001f) continue;
         Vec2 d0 = v2_scale(v2_sub(cur, prev), 1.0f / l0);
         Vec2 d1 = v2_scale(v2_sub(next, cur), 1.0f / l1);
+        if (filtered_door[i]) {
+            if (v2_dist(cur, smooth[sn - 1]) > 0.02f) smooth[sn++] = cur;
+            continue;
+        }
         float dot = v2_dot(d0, d1);
         if (dot < -1.0f) dot = -1.0f;
         if (dot > 1.0f) dot = 1.0f;
