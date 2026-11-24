@@ -22,7 +22,7 @@ Panels use `ImGuiWindowFlags_NoTitleBar | NoResize | NoMove | NoCollapse | NoScr
 
 One look. Near-black canvas `#040404`. Grid lines at the selected Grid size all share one dim colour, default `#333b45` at opacity 0.18; all lines match, with no brighter every-4 or every-16 lines. The grid gets coarser only when the fine lines would be closer than 4 screen pixels. The Grid display controls set the opacity from 0 to 1 and the colour.
 
-Walls are the image-pivot pink `#ff79c6`, 2 screen pixels wide, at alpha 70 everywhere. There is no bright wall state, no fill, and no room colour. Doors are always white `#f2f2f2` 3 px bars. Labels are `#e6e6e6`. Stair treads are `#c8ccd2` with a fade that starts at one end of the run and no footprint fill. Selection uses accent `#5aa0c8` with a 2 px outline or handles. Nothing in the editor paints a filled polygon.
+Walls are neutral `#8b9097`, 2 screen pixels wide, at alpha 70 normally. While the N nav-cell overlay is on, every wall switches to the image-pivot pink `#ff79c6` at alpha 140 and is drawn above the cyan cells; with N off it returns to neutral. There is no bright wall state, no fill, and no room colour. Doors are always white `#f2f2f2` 3 px bars. Labels are `#e6e6e6`. Stair treads are `#c8ccd2` with a fade that starts at one end of the run and no footprint fill. Selection uses accent `#5aa0c8` with a 2 px outline or handles. Nothing in the editor paints a filled polygon.
 
 Dark ImGui theme: window background `#101114`, panel `#16181c`, frame `#1d2025`, borders `#2a2e34`, text `#d9dadd`, accent `#4e7f9e`. Rounded corners 3 px. Sentence-case headings.
 

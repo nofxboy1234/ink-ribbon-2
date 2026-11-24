@@ -69,7 +69,8 @@ static const char* FLOOR_LABELS[FLOOR_MAX] = { "1F", "2F", "3F" };
 /* One look means a near-black canvas and white lines. A wall and a stair
    tread draw at the same faint alpha, and nothing is ever filled. */
 #define CANVAS_BG 0x040404
-#define WALL_COL 0xff79c6
+#define WALL_COL 0x8b9097
+#define WALL_NAV_COL 0xff79c6
 #define WALL_ALPHA 70
 #define PIVOT_COL 0xff79c6
 #define DOOR_WHITE_COL 0xf2f2f2
@@ -2558,8 +2559,11 @@ static void draw_walls_level(const Editor* e, const Level* level,
                              float alpha_scale) {
     ImDrawList* dl = igGetWindowDrawList();
     float wall_px = 2.0f;
-    unsigned alpha = (unsigned)(WALL_ALPHA * alpha_scale + 0.5f);
-    ImU32 wall_col = col32a(WALL_COL, alpha);
+    bool nav_on = level == &e->level && !e->play_mode && e->show_nav_cells;
+    unsigned rgb = nav_on ? WALL_NAV_COL : WALL_COL;
+    unsigned alpha = (unsigned)(
+        WALL_ALPHA * alpha_scale * (nav_on ? 2.0f : 1.0f) + 0.5f);
+    ImU32 wall_col = col32a(rgb, alpha);
     for (int i = 0; i < level->wall_count; i++) {
         const Wall* w = &level->walls[i];
         DoorSpan spans[LEVEL_MAX_DOORS];

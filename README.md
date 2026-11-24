@@ -199,7 +199,7 @@ Undo stores whole level snapshots. Each completed change writes one snapshot. A 
 
 ## One look
 
-The canvas is near-black. Every wall, stair tread, and selection helper is a line. Walls draw in the image-pivot pink `#ff79c6` at a fixed faint alpha. Doors are always white 3 px bars. Stairs are neutral 3 px treads whose opacity follows the per-stair falloff and end opacities, with no footprint fill. Labels are light grey. The editor has no fill palette, no room colour, and no shape fill mode. Loading a level that still carries fill, room, or door colour columns succeeds: the fill and colour values are ignored and the room polygons are skipped. Saving writes the fill and door colour columns as 0 for older readers and writes no room records.
+The canvas is near-black. Every wall, stair tread, and selection helper is a line. Walls normally draw in neutral `#8b9097` at a fixed faint alpha. While the N nav-cell overlay is on, they switch to the image-pivot pink `#ff79c6` at double opacity and draw above the cyan cells. Doors are always white 3 px bars. Stairs are neutral 3 px treads whose opacity follows the per-stair falloff and end opacities, with no footprint fill. Labels are light grey. The editor has no fill palette, no room colour, and no shape fill mode. Loading a level that still carries fill, room, or door colour columns succeeds: the fill and colour values are ignored and the room polygons are skipped. Saving writes the fill and door colour columns as 0 for older readers and writes no room records.
 
 ## Player and navigation
 
