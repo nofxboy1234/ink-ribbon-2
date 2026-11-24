@@ -69,8 +69,9 @@ static const char* FLOOR_LABELS[FLOOR_MAX] = { "1F", "2F", "3F" };
 /* One look means a near-black canvas and white lines. A wall and a stair
    tread draw at the same faint alpha, and nothing is ever filled. */
 #define CANVAS_BG 0x040404
-#define WALL_COL 0x8b9097
+#define WALL_COL 0xff79c6
 #define WALL_ALPHA 70
+#define PIVOT_COL 0xff79c6
 #define DOOR_WHITE_COL 0xf2f2f2
 #define LABEL_COL 0xe6e6e6
 #define STAIR_COL 0xc8ccd2
@@ -299,6 +300,8 @@ struct Editor {
     bool pan_active;
 
     float grid_size;
+    float grid_alpha;
+    float grid_color[3];
     bool snap;
     bool snap_objects;
     bool show_grid;
@@ -556,6 +559,12 @@ static Vec2 image_onion_center(const Editor* e) {
     return v2((r.min.x + r.max.x) * 0.5f, (r.min.y + r.max.y) * 0.5f);
 }
 
+/* The pivot is attached to the image centre until the user Ctrl-drags it. */
+static Vec2 image_onion_pivot_point(const Editor* e) {
+    return e->image_onion_pivot_custom ? e->image_onion_pivot
+                                       : image_onion_center(e);
+}
+
 static void begin_image_onion_scale(Editor* e, int corner) {
     Rect r = image_onion_visible_rect(e);
     Vec2 center = v2((r.min.x + r.max.x) * 0.5f,
@@ -565,7 +574,7 @@ static void begin_image_onion_scale(Editor* e, int corner) {
     Vec2 corner_pos =
         v2(center.x + IMAGE_CORNER_SX[corner] * hw,
            center.y + IMAGE_CORNER_SY[corner] * hh);
-    Vec2 from_pivot = v2_sub(corner_pos, e->image_onion_pivot);
+    Vec2 from_pivot = v2_sub(corner_pos, image_onion_pivot_point(e));
     if (v2_len(from_pivot) < 0.001f) {
         set_status(e, true, "Move the pivot away from the corner to scale");
         return;
@@ -584,16 +593,15 @@ static void update_image_onion_scale(Editor* e, Vec2 pointer) {
     Vec2 arm = e->image_onion_scale_anchor;
     float len2 = v2_dot(arm, arm);
     if (len2 < 0.000001f) return;
-    Vec2 from_pivot = v2_sub(pointer, e->image_onion_pivot);
+    Vec2 pivot = image_onion_pivot_point(e);
+    Vec2 from_pivot = v2_sub(pointer, pivot);
     float ratio = v2_dot(from_pivot, arm) / len2;
     if (!isfinite(ratio) || ratio <= 0.001f) return;
     float scale = clampf(e->image_onion_scale_start * ratio, 0.05f, 20.0f);
     float applied = scale / e->image_onion_scale_start;
     Vec2 center = v2_add(
-        e->image_onion_pivot,
-        v2_scale(v2_sub(e->image_onion_scale_center,
-                        e->image_onion_pivot),
-                 applied));
+        pivot, v2_scale(v2_sub(e->image_onion_scale_center, pivot),
+                        applied));
     Rect base = image_onion_rect(e);
     Vec2 base_center = v2((base.min.x + base.max.x) * 0.5f,
                           (base.min.y + base.max.y) * 0.5f);
@@ -2396,21 +2404,27 @@ static void draw_grid(Editor* e) {
     int j0 = (int)floorf(miny / step);
     int j1 = (int)ceilf(maxy / step);
     if (i1 - i0 > 2000 || j1 - j0 > 2000) return;
+    unsigned alpha = (unsigned)(clampf(e->grid_alpha, 0.0f, 1.0f) * 255.0f +
+                                0.5f);
+    if (alpha == 0) return;
+    unsigned rgb =
+        ((unsigned)(clampf(e->grid_color[0], 0.0f, 1.0f) * 255.0f + 0.5f)
+         << 16) |
+        ((unsigned)(clampf(e->grid_color[1], 0.0f, 1.0f) * 255.0f + 0.5f)
+         << 8) |
+        (unsigned)(clampf(e->grid_color[2], 0.0f, 1.0f) * 255.0f + 0.5f);
+    ImU32 col = col32a(rgb, alpha);
     for (int i = i0; i <= i1; i++) {
         float x = i * step;
         ImVec2 a = world_to_screen(e, v2(x, miny));
-        ImU32 col = col32a(0x333b45, 46);
-        if (i % 4 == 0) col = col32a(0x3a4350, 120);
-        if (i % 16 == 0) col = col32a(0x4a5563, 190);
-        ImDrawList_AddLineVEx(dl, a.x, e->canvas.min.y, e->canvas.max.y, col, 1.0f, 0);
+        ImDrawList_AddLineVEx(dl, a.x, e->canvas.min.y, e->canvas.max.y, col,
+                              1.0f, 0);
     }
     for (int j = j0; j <= j1; j++) {
         float y = j * step;
         ImVec2 a = world_to_screen(e, v2(minx, y));
-        ImU32 col = col32a(0x333b45, 46);
-        if (j % 4 == 0) col = col32a(0x3a4350, 120);
-        if (j % 16 == 0) col = col32a(0x4a5563, 190);
-        ImDrawList_AddLineHEx(dl, e->canvas.min.x, e->canvas.max.x, a.y, col, 1.0f, 0);
+        ImDrawList_AddLineHEx(dl, e->canvas.min.x, e->canvas.max.x, a.y, col,
+                              1.0f, 0);
     }
 }
 
@@ -2698,8 +2712,8 @@ static void draw_image_onion(const Editor* e) {
                 (ImVec2){ handles[i].x + h, handles[i].y + h },
                 col32(ACCENT_COL), 0.0f, 0);
         }
-        ImVec2 pivot = world_to_screen(e, e->image_onion_pivot);
-        ImU32 pivot_col = col32(0xff79c6);
+        ImVec2 pivot = world_to_screen(e, image_onion_pivot_point(e));
+        ImU32 pivot_col = col32(PIVOT_COL);
         ImDrawList_AddCircleEx(dl, pivot, 5.0f, pivot_col, 0, 1.5f, 0);
         ImDrawList_AddLineEx(dl, (ImVec2){ pivot.x - 9, pivot.y },
                              (ImVec2){ pivot.x + 9, pivot.y }, pivot_col,
@@ -4711,7 +4725,7 @@ static void handle_canvas_input(Editor* e, bool hovered, bool have_pointer) {
     if (hovered && !e->play_mode && e->image_onion_edit &&
         e->image_onion_on && e->image_onion_texture) {
         if (io->MouseWheel != 0.0f) {
-            scale_image_onion_about(e, e->image_onion_pivot,
+            scale_image_onion_about(e, image_onion_pivot_point(e),
                                     powf(1.18f, io->MouseWheel));
             e->camera_pan_active = false;
             return;
@@ -5178,6 +5192,13 @@ static void draw_left_panel(Editor* e) {
         default:
             break;
     }
+    igDummy((ImVec2){ 0.0f, 8.0f });
+    heading("Grid display");
+    igSetNextItemWidth(84.0f);
+    igSliderFloatEx("Opacity##grid", &e->grid_alpha, 0.0f, 1.0f, "%.2f", 0);
+    e->grid_alpha = clampf(e->grid_alpha, 0.0f, 1.0f);
+    igColorEdit3("Grid colour", e->grid_color, ImGuiColorEditFlags_NoInputs);
+
     if (!e->play_mode) {
         igDummy((ImVec2){ 0.0f, 8.0f });
         heading("Image onion");
@@ -5217,7 +5238,7 @@ static void draw_left_panel(Editor* e) {
             igSetNextItemWidth(84.0f);
             if (igSliderFloatEx("Scale", &scale_edit, 0.05f, 20.0f,
                                 "%.2f", 0)) {
-                scale_image_onion_about(e, e->image_onion_pivot,
+                scale_image_onion_about(e, image_onion_pivot_point(e),
                                         scale_edit / e->image_onion_scale);
             }
             if (e->image_onion_edit) {
@@ -6161,6 +6182,10 @@ Editor* editor_create(const char* startup_path) {
     e->selection.primary.kind = SEL_NONE;
     e->selection.primary.index = -1;
     e->grid_size = 8.0f;
+    e->grid_alpha = 46.0f / 255.0f;
+    e->grid_color[0] = (float)((0x333b45 >> 16) & 0xff) / 255.0f;
+    e->grid_color[1] = (float)((0x333b45 >> 8) & 0xff) / 255.0f;
+    e->grid_color[2] = (float)(0x333b45 & 0xff) / 255.0f;
     e->snap = true;
     e->snap_objects = true;
     e->show_grid = true;

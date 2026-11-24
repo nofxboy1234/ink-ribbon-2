@@ -102,8 +102,10 @@ floor skin. The fitted rectangle is captured at load time in
 move the skin. `image_onion_offset` and `image_onion_scale` apply a world-space
 translation and a uniform scale about the fitted centre; the Reset control
 zeroes them. Transform mode maps a canvas left-drag to the offset, Ctrl-left-drag
-to moving the scaling pivot, a corner-handle drag to uniform scaling around
-that pivot, and the wheel to scaling around the same pivot. The image has its own opacity, show toggle, and
+to detaching and moving the scaling pivot, a corner-handle drag to uniform
+scaling around that pivot, and the wheel to scaling around the same pivot. The
+default pivot is derived from the image centre, so it follows translation until
+the user detaches it. The image has its own opacity, show toggle, and
 path, so one image and one floor skin can be visible together. Both skins are
 edit-mode only.
 
