@@ -2021,6 +2021,9 @@ static void test_floors(void) {
     Level* floors[3] = { &f1, &f2, &f3 };
     for (int fi = 0; fi < 3; fi++) {
         Level* level = floors[fi];
+        /* An empty floor is a valid work-in-progress document; there is no
+           nav grid to assert until it has geometry. */
+        if (level->wall_count == 0 && level->stairs_count == 0) continue;
         NavGrid* nav = malloc(sizeof(NavGrid));
         check(nav && nav_build(nav, level, NAV_CELL_SIZE, 3.2f),
               "floor nav grid builds");

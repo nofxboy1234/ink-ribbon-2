@@ -71,8 +71,9 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Snap to the grid and to nearby object points while placing, drawing, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns grid snapping off.
 - Snap to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on. Drawing tools use the same chain on their first point and preview, so Line, Rectangle, Door, Stairs, and Label place where the preview shows.
 - While a drawing tool or Select is active and either Snap or Snap objects is on, a small Dracula-purple (`#bd93f9`) dot marks the snapped point the tool will use. With both toggles off there is no dot and the cursor stays free.
-- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, each play-mode click queues a waypoint at that cell. Green markers and the planned route show the sequence. The route comes from A* over the 8-unit grid, then line-of-sight filtering and validated corner smoothing; every segment keeps the player radius clear of walls, and doorway crossings are routed through each door's centre. **double-click** executes it through the waypoints in order, removing each marker as it is reached and ending on the last waypoint. Esc clears the queue.
+- In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, each play-mode click queues a waypoint at that cell. Every waypoint draws as a numbered square in its own random Dracula palette colour, and the route leg ending at that waypoint takes the same colour. The route comes from A* over the 8-unit grid, then line-of-sight filtering and validated corner smoothing; every segment keeps the player radius clear of walls, and doorway crossings are routed through each door's centre. **double-click** executes it through the waypoints in order, removing each marker as it is reached and ending on the last waypoint. Esc clears the queue.
 - While walking, the camera follows the player at the current zoom. C recentres on the player without changing zoom. Middle-drag pans immediately, with no catch-up animation, and mouse-wheel zoom stays immediate.
+- Press N in edit mode to overlay the open nav cells in 50% Dracula cyan with cyan borders.
 - Pan, zoom, fit the level, undo and redo, save, and load.
 - Duplicate with Ctrl+D and lock a selection with L.
 
@@ -147,6 +148,7 @@ or write `0`. Older files with five fields still load.
 | Q | Toggle keeping the active drawing tool after an action |
 | Left click | Use the active tool |
 | Click a 3F / 2F / 1F tab | Switch floors in edit or play mode |
+| N | Show or hide the navigable nav cells in edit mode |
 | Shift plus left click | Add an object to the selection |
 | Ctrl plus left click | Toggle an object in the selection |
 | Drag a wall edge | Reshape the shape by sliding that edge and stretching its neighbours |

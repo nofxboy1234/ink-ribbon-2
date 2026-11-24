@@ -333,6 +333,9 @@ struct Editor {
     Vec2 player_path[NAV_MAX_PATH];
     int player_path_count;
     Vec2 player_waypoints[PLAYER_MAX_WAYPOINTS];
+    unsigned player_waypoint_colors[PLAYER_MAX_WAYPOINTS];
+    unsigned waypoint_rng;
+    bool show_nav_cells;
     int player_waypoint_count;
     int player_path_index;
     bool player_moving;
@@ -394,6 +397,7 @@ static void set_status(Editor* e, bool error, const char* fmt, ...) {
 }
 
 static void commit(Editor* e, const char* message) {
+    e->nav_ready = false;
     history_commit(&e->floor_history[e->floor_index], &e->level);
     if (message && message[0]) set_status(e, false, "%s", message);
 }
@@ -1485,6 +1489,24 @@ static void clear_waypoints(Editor* e) {
     e->preview_count = 0;
 }
 
+static unsigned next_waypoint_color(Editor* e) {
+    static const unsigned palette[] = {
+        0xbd93f9, 0x8be9fd, 0x50fa7b, 0xffb86c,
+        0xff79c6, 0xf1fa8c, 0xff5555, 0x6272a4,
+    };
+    const int count = (int)(sizeof palette / sizeof palette[0]);
+    unsigned color = 0;
+    for (int tries = 0; tries < 6; tries++) {
+        e->waypoint_rng = e->waypoint_rng * 1664525u + 1013904223u;
+        color = palette[(e->waypoint_rng >> 16) % count];
+        if (e->player_waypoint_count == 0 ||
+            color != e->player_waypoint_colors[e->player_waypoint_count - 1]) {
+            break;
+        }
+    }
+    return color;
+}
+
 static bool add_waypoint(Editor* e, int cell) {
     if (!nav_cell_is_open(&e->nav, cell)) return false;
     Vec2 p = nav_cell_center(&e->nav, cell);
@@ -1505,6 +1527,8 @@ static bool add_waypoint(Editor* e, int cell) {
         set_status(e, true, "No path to that waypoint");
         return false;
     }
+    e->player_waypoint_colors[e->player_waypoint_count] =
+        next_waypoint_color(e);
     e->player_waypoints[e->player_waypoint_count++] = p;
     e->preview_count = 0;
     set_status(e, false, "%d waypoint%s queued; double-click to walk",
@@ -1640,6 +1664,8 @@ static void update_waypoint_progress(Editor* e, Level* level) {
            v2_dist(level->player_pos, e->player_waypoints[0]) < 1.2f) {
         for (int i = 1; i < e->player_waypoint_count; i++) {
             e->player_waypoints[i - 1] = e->player_waypoints[i];
+            e->player_waypoint_colors[i - 1] =
+                e->player_waypoint_colors[i];
         }
         e->player_waypoint_count--;
         e->preview_count = 0;
@@ -2016,6 +2042,7 @@ static void do_undo(Editor* e) {
     LevelCounts before = level_counts(&e->level);
     cancel_gesture(e);
     history_undo(&e->floor_history[e->floor_index], &e->level);
+    e->nav_ready = false;
     sel_after_history(e, before);
     span_clear(e);
     e->label_buf_ready = false;
@@ -2028,6 +2055,7 @@ static void do_redo(Editor* e) {
     LevelCounts before = level_counts(&e->level);
     cancel_gesture(e);
     history_redo(&e->floor_history[e->floor_index], &e->level);
+    e->nav_ready = false;
     sel_after_history(e, before);
     span_clear(e);
     e->label_buf_ready = false;
@@ -2578,6 +2606,33 @@ static void draw_onion_skin(const Editor* e) {
     draw_labels_level(e, level, alpha);
 }
 
+/* Edit-mode nav-cell overlay, toggled with N. Open cells get a 50% cyan
+   fill and cyan borders; solid cells stay empty. */
+static void draw_nav_cells(Editor* e) {
+    if (!e->show_nav_cells || e->play_mode) return;
+    if (!e->nav_ready) {
+        e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                 PLAYER_RADIUS);
+    }
+    if (!e->nav_ready) return;
+    ImDrawList* dl = igGetWindowDrawList();
+    float half = e->nav.cell * 0.5f;
+    ImU32 fill = col32a(0x8be9fd, 128);
+    ImU32 border = col32a(0x8be9fd, 220);
+    for (int i = 0; i < e->nav.cols * e->nav.rows; i++) {
+        if (!nav_cell_is_open(&e->nav, i)) continue;
+        Vec2 c = nav_cell_center(&e->nav, i);
+        ImVec2 a = world_to_screen(e, v2(c.x - half, c.y - half));
+        ImVec2 b = world_to_screen(e, v2(c.x + half, c.y + half));
+        if (b.x < e->canvas.min.x || a.x > e->canvas.max.x ||
+            b.y < e->canvas.min.y || a.y > e->canvas.max.y) {
+            continue;
+        }
+        ImDrawList_AddRectFilledEx(dl, a, b, fill, 0.0f, 0);
+        ImDrawList_AddRectEx(dl, a, b, border, 0.0f, 1.0f, 0);
+    }
+}
+
 static void draw_nav_hover(const Editor* e) {
     if ((!e->play_mode && !e->player_place_pending) || !e->nav_ready ||
         !e->cursor_valid) {
@@ -2600,14 +2655,25 @@ static void draw_nav_hover(const Editor* e) {
 static void draw_waypoints(const Editor* e) {
     if (!e->play_mode || e->player_waypoint_count <= 0) return;
     ImDrawList* dl = igGetWindowDrawList();
+    ImFont* font = igGetFont();
     for (int i = 0; i < e->player_waypoint_count; i++) {
         ImVec2 p = world_to_screen(e, e->player_waypoints[i]);
-        ImU32 col = col32a(0x7df0aa, 220);
-        ImDrawList_AddRectFilledEx(dl, (ImVec2){ p.x - 3, p.y - 3 },
-                                   (ImVec2){ p.x + 3, p.y + 3 }, col, 0.0f, 0);
-        ImDrawList_AddRectEx(dl, (ImVec2){ p.x - 5, p.y - 5 },
-                             (ImVec2){ p.x + 5, p.y + 5 }, col32a(0x58d68d, 160),
-                             0.0f, 1.0f, 0);
+        unsigned rgb = e->player_waypoint_colors[i];
+        const float half = 7.0f;
+        ImDrawList_AddRectFilledEx(
+            dl, (ImVec2){ p.x - half, p.y - half },
+            (ImVec2){ p.x + half, p.y + half }, col32a(rgb, 235), 0.0f, 0);
+        ImDrawList_AddRectEx(
+            dl, (ImVec2){ p.x - half - 1.0f, p.y - half - 1.0f },
+            (ImVec2){ p.x + half + 1.0f, p.y + half + 1.0f },
+            col32a(0xf8f8f2, 210), 0.0f, 1.2f, 0);
+        char label[8];
+        snprintf(label, sizeof label, "%d", i + 1);
+        ImVec2 sz = ImFont_CalcTextSizeA(font, 10.0f, FLT_MAX, 0.0f, label);
+        ImVec2 tp = { p.x - sz.x * 0.5f, p.y - sz.y * 0.5f };
+        ImDrawList_AddTextImFontPtrEx(dl, font, 10.0f, tp,
+                                      col32(0x282a36), label, NULL, 0.0f,
+                                      NULL);
     }
 }
 
@@ -2646,20 +2712,31 @@ static void draw_player_path(const Editor* e) {
         }
     }
     if (count < 2) return;
+
+    /* Tag each point with the waypoint whose leg it belongs to. A leg ends at
+       its waypoint, so the segment feeding that square takes its colour. */
+    int target[NAV_MAX_PATH + 2];
+    int wp = 0;
+    for (int i = 0; i < count; i++) {
+        target[i] = wp < e->player_waypoint_count ? wp : -1;
+        if (wp < e->player_waypoint_count) {
+            ImVec2 marker =
+                world_to_screen(e, e->player_waypoints[wp]);
+            if (screen_dist(pts[i], marker) <= 6.0f) wp++;
+        }
+    }
+
     ImDrawList* dl = igGetWindowDrawList();
-    ImDrawList_AddPolyline(dl, pts, count, col32a(0x58d68d, 65), 5.0f, 0);
-    /* A thin anti-aliased core can break into dotted pixels on near-vertical
-       segments. Draw the bright core without AA over the soft glow. Segment
-       lines plus a small round cap at every vertex avoid the miter spikes
-       that a thick polyline makes on tight bends and door transitions. */
     ImDrawFlags flags = dl->Flags;
     dl->Flags &= ~ImDrawListFlags_AntiAliasedLines;
-    ImU32 core = col32a(0x7df0aa, 220);
     for (int i = 1; i < count; i++) {
-        ImDrawList_AddLineEx(dl, pts[i - 1], pts[i], core, 2.0f, 0);
-    }
-    for (int i = 0; i < count; i++) {
-        ImDrawList_AddCircleFilled(dl, pts[i], 1.0f, core, 0);
+        unsigned rgb = target[i] >= 0
+                           ? e->player_waypoint_colors[target[i]]
+                           : 0x7df0aa;
+        ImDrawList_AddLineEx(dl, pts[i - 1], pts[i], col32a(rgb, 65), 5.0f, 0);
+        ImDrawList_AddLineEx(dl, pts[i - 1], pts[i], col32a(rgb, 220), 2.0f, 0);
+        ImDrawList_AddCircleFilled(dl, pts[i - 1], 1.0f, col32a(rgb, 220), 0);
+        ImDrawList_AddCircleFilled(dl, pts[i], 1.0f, col32a(rgb, 220), 0);
     }
     dl->Flags = flags;
 }
@@ -4737,6 +4814,7 @@ static void draw_canvas(Editor* e, ImVec2 mouse, bool have_pointer) {
     draw_grid(e);
     draw_image_onion(e);
     draw_onion_skin(e);
+    draw_nav_cells(e);
     draw_nav_hover(e);
     draw_shape_preview(e);
     draw_stairs(e);
@@ -5360,6 +5438,8 @@ static void draw_help_modal(Editor* e) {
     igText("Ctrl+0 resets the zoom to 100 percent.");
     igBullet();
     igText("F fits the level, G toggles the grid.");
+    igBullet();
+    igText("N overlays the navigable cells in edit mode.");
     igText("Editing");
     igBullet();
     igText("Rectangle drags union overlapping rectangles. Touching rectangles keep a shared wall.");
@@ -5389,6 +5469,11 @@ static void draw_help_modal(Editor* e) {
     igText("Enter closes a wall chain.");
     igBullet();
     igText("Backspace removes the last chain wall.");
+    igText("Waypoints");
+    igBullet();
+    igText("Each queued waypoint is a numbered square in its own Dracula colour.");
+    igBullet();
+    igText("The route leg into it uses the same colour.");
     igText("Onion skins");
     igBullet();
     igText("Load an image in the left panel or drop one on the window.");
@@ -5726,6 +5811,15 @@ static void handle_shortcuts(Editor* e) {
         set_status(e, false, e->snap ? "Snap on" : "Snap off");
     }
     if (igIsKeyPressedEx(ImGuiKey_G, false)) e->show_grid = !e->show_grid;
+    if (igIsKeyPressedEx(ImGuiKey_N, false)) {
+        e->show_nav_cells = !e->show_nav_cells;
+        if (e->show_nav_cells && !e->nav_ready) {
+            e->nav_ready = nav_build(&e->nav, &e->level, NAV_CELL_SIZE,
+                                     PLAYER_RADIUS);
+        }
+        set_status(e, false, e->show_nav_cells ? "Nav cells shown"
+                                               : "Nav cells hidden");
+    }
     if (igIsKeyPressedEx(ImGuiKey_L, false)) toggle_selection_lock(e);
     if (igIsKeyPressedEx(ImGuiKey_M, false) && e->tool == TOOL_SELECT) {
         e->marquee_armed = !e->marquee_armed;
@@ -5884,6 +5978,8 @@ Editor* editor_create(const char* startup_path) {
     e->image_onion_offset = v2(0.0f, 0.0f);
     e->image_onion_scale = 1.0f;
     e->image_onion_edit = false;
+    e->waypoint_rng = 0x13579bdfu;
+    e->show_nav_cells = false;
     history_reset(&e->floor_history[e->floor_index], &e->level);
 
     e->camera.center = v2(0.0f, 0.0f);

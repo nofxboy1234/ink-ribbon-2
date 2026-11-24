@@ -232,8 +232,10 @@ active and either snap toggle is on.
   waypoints). Grid links keep the player radius clear of the real wall spans.
   Door crossings are centred by warping a window of the filtered route toward
   the door axis and inserting the exact centre point, with a perpendicular
-  approach/exit fallback when the crossing remains far off centre. The player
-  record lives in
+  approach/exit fallback when the crossing remains far off centre. Queued
+  waypoints carry a random Dracula palette colour; each numbered square and the
+  route leg feeding it share that colour. `N` in edit mode draws open nav cells
+  as 50% cyan fills with cyan borders. The player record lives in
   `Level`, so bounds, save/load, and undo snapshots carry it. The editor owns the
   movement state, turning/pivot rule, play-mode camera, and the Krita-sourced
   sprite texture.
