@@ -69,6 +69,9 @@ static void init(void) {
     simgui_setup(&(simgui_desc_t){
         .logger.func = slog_func,
         .no_default_font = true,
+        /* Ctrl+V belongs to the editor's object clipboard, not the system
+           clipboard. Keep sokol from swallowing it as a text paste. */
+        .disable_paste_override = true,
         /* The edit-mode nav-cell overlay can add one filled/bordered rect per
            open cell; 1F is large enough to exceed the 64k default. */
         .max_vertices = 524288,

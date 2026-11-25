@@ -75,7 +75,7 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - While walking, the camera follows the player at the current zoom. C recentres on the player without changing zoom. Middle-drag pans immediately, with no catch-up animation, and mouse-wheel zoom stays immediate.
 - Press N in edit mode to overlay the open nav cells in 50% Dracula cyan with cyan borders.
 - Pan, zoom, fit the level, undo and redo, save, and load.
-- Duplicate with Ctrl+D and lock a selection with L.
+- Duplicate with Ctrl+D, copy with Ctrl+C, paste with Ctrl+V, and lock a selection with L. Copy and paste work across floors, so a room can move from 3F to 2F at the same world coordinates.
 
 ## Floors
 
@@ -173,6 +173,8 @@ or write `0`. Older files with five fields still load.
 | S | Toggle snapping |
 | L | Lock or unlock the current selection |
 | Ctrl+D | Duplicate the selection one grid cell diagonally |
+| Ctrl+C | Copy the selection |
+| Ctrl+V | Paste the clipboard at the same world coordinates, or one grid cell down-right into the source floor |
 | Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+S, Ctrl+Shift+S | Save, save as |
 | Ctrl+O | Open |
@@ -191,7 +193,7 @@ Selection is UI state and is never saved into a level. It is a bounded set per o
 
 Snap applies to line points, rectangle corners, labels, stair boxes and edges, door centres, door resize spans, reshapes, and object drags. A group drag snaps from the primary object, so the relative spacing of the group stays intact. Snap is on by default. The grid sizes are 4, 8, 16, and 32 world units.
 
-Ctrl+D duplicates every selected object with its full settings and copies doors hosted by duplicated walls. A door selected without its wall gets a copy of the host wall under it. Locks live on the objects for the session: they are not saved with the level, but they survive selecting other objects. Locked objects remain selectable so they can be unlocked; any edit or delete involving a locked object is refused.
+Ctrl+D duplicates every selected object with its full settings and copies doors hosted by duplicated walls. A door selected without its wall gets a copy of the host wall under it. Ctrl+C stores the selected shapes, doors, labels, and stairs in an Editor-owned clipboard that outlives floor switches. Ctrl+V adds them to the active floor at the same world coordinates. A paste back into the source floor offsets one grid cell down-right. Pasted objects are unlocked and become the selection in one undo step. Locks live on the objects for the session: they are not saved with the level, but they survive selecting other objects. Locked objects remain selectable so they can be unlocked; any edit or delete involving a locked object is refused.
 
 Snap objects is a second, independent toggle. While it is on, a dragged edge or corner also snaps to nearby wall lines and wall endpoints within 8 screen pixels. A rigid object drag checks every moving edge and wall endpoint on each axis, so a selection can land by its right or bottom side as well as its top or left. Object snapping wins on an axis and grid snapping fills the other. It is on by default.
 
@@ -295,7 +297,7 @@ Only `main.c` and `editor.c` include sokol or ImGui headers. The `test_level` ta
 - The union rebuilds a shape from its current outline, not from the rectangles that formed it.
 - A union drops a door whose wall becomes interior. The status strip reports how many doors were dropped.
 - Fixed capacities are 512 shapes, 512 walls, 256 doors, 128 labels, and 64 stair runs. A capacity failure is reported in the status strip.
-- One floor set is open at a time. New and Open collapse back to a single level and do not ask before discarding unsaved changes. There is no copy and paste and no native file dialog.
+- One floor set is open at a time. New and Open collapse back to a single level and do not ask before discarding unsaved changes. The clipboard is in memory only and is not saved with a level. There is no native file dialog.
 - Group drag moves walls, labels, and stairs. Doors follow their host walls, so a selected door whose wall is not selected stays put. A single selected door slides along its wall instead.
 - Locks are session-only. They are not written to the level file and are cleared by opening or creating a level.
 - The editor was tested on Linux and X11 only.

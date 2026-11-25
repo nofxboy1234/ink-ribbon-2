@@ -244,6 +244,12 @@ struct Editor {
     bool floor_loaded[FLOOR_MAX];
     int floor_count;
     int floor_index;
+    /* Detached copies of selected objects. The clipboard owns no floor
+       document, player, or onion state, so switching floors leaves it intact
+       and paste can land on any floor. */
+    Level clipboard;
+    bool clipboard_has_content;
+    int clipboard_floor;
     /* The floor drawn as an onion skin under the active level. One at most;
        -1 hides it. onion_alpha scales every onion line's opacity. */
     int onion_floor;
@@ -380,6 +386,8 @@ static const char* TOOL_HINTS[TOOL_COUNT] = {
 };
 static bool save_all_floors(Editor* e);
 static bool enter_floor(Editor* e, int index);
+static void copy_selection(Editor* e);
+static void paste_clipboard(Editor* e);
 static Vec2 draw_snap_point(const Editor* e, Vec2 p);
 static Vec2 draw_snap_line_point(const Editor* e, Vec2 anchor, Vec2 cursor);
 static float screen_dist(ImVec2 a, ImVec2 b);
@@ -5061,6 +5069,15 @@ static void draw_menu(Editor* e) {
                 sel_clear(e);
                 span_clear(e);
             }
+            igSeparator();
+            if (igMenuItemEx("Copy", "Ctrl+C", false,
+                             sel_count(&e->selection) > 0)) {
+                copy_selection(e);
+            }
+            if (igMenuItemEx("Paste", "Ctrl+V", false,
+                             e->clipboard_has_content)) {
+                paste_clipboard(e);
+            }
             igEndMenu();
         }
         if (igBeginMenu("View")) {
@@ -5550,6 +5567,7 @@ static void draw_inspector(Editor* e) {
         igTextDisabled("Drag a group to move walls, doors, labels, or stairs");
         igTextDisabled("Drag a door to slide; drag an end to resize");
         igTextDisabled("Delete removes every selected object");
+        igTextDisabled("Ctrl+C copy, Ctrl+V paste across floors");
         igTextDisabled("L locks or unlocks the selection");
         igTextDisabled("Esc deselects then cancels a draft");
         igTextDisabled("Ctrl+Z undo, Ctrl+Shift+Z redo");
@@ -5645,6 +5663,8 @@ static void draw_help_modal(Editor* e) {
     igText("Stairs drags a footprint; Flip reverses the tread fade.");
     igBullet();
     igText("Delete removes every selected object.");
+    igBullet();
+    igText("Ctrl+C copies the selection. Ctrl+V pastes it, including on another floor.");
     igBullet();
     igText("Shift-click adds to the selection; Ctrl-click toggles an object.");
     igBullet();
@@ -5917,6 +5937,214 @@ static void duplicate_selection(Editor* e) {
     }
 }
 
+/* Ctrl+C copies the selected objects into the Editor-owned clipboard. The
+   clipboard is a detached Level holding shapes, walls, doors, labels, and
+   stairs only. Copy does not commit history and does not touch the level. */
+static void copy_selection(Editor* e) {
+    sel_prune(e);
+    if (sel_count(&e->selection) == 0) {
+        set_status(e, true, "Nothing selected to copy");
+        return;
+    }
+    Selection* sel = &e->selection;
+    level_init(&e->clipboard);
+    e->clipboard_has_content = false;
+
+    int wall_map[LEVEL_MAX_WALLS];
+    for (int i = 0; i < LEVEL_MAX_WALLS; i++) wall_map[i] = -1;
+
+    /* A shape with any selected wall comes whole, exactly like Ctrl+D. */
+    for (int i = 0; i < e->level.shape_count; i++) {
+        const Shape* shape = &e->level.shapes[i];
+        int indices[LEVEL_MAX_WALLS];
+        int count = level_shape_wall_indices(&e->level, shape->id, indices,
+                                             LEVEL_MAX_WALLS);
+        if (count <= 0) continue;
+        bool hit = false;
+        for (int k = 0; k < count; k++) {
+            if (sel->walls[indices[k]]) { hit = true; break; }
+        }
+        if (!hit) continue;
+        ShapeId copy = level_add_shape(&e->clipboard);
+        if (copy == 0) break;
+        for (int k = 0; k < count; k++) {
+            int old_index = indices[k];
+            const Wall* w = &e->level.walls[old_index];
+            int new_index = level_add_wall_to_shape(&e->clipboard, copy,
+                                                    w->a, w->b);
+            if (new_index < 0) continue;
+            e->clipboard.walls[new_index].detail = w->detail;
+            e->clipboard.walls[new_index].locked = false;
+            wall_map[old_index] = new_index;
+        }
+        if (shape->closed) level_close_shape(&e->clipboard, copy);
+    }
+
+    /* A selected door whose wall is not in the clipboard still needs a host.
+       Add that one wall as an open shape, matching duplicate_selection. */
+    for (int d = 0; d < e->level.door_count; d++) {
+        if (!sel->doors[d]) continue;
+        int old_wall = level_find_wall_index(&e->level, e->level.doors[d].wall);
+        if (old_wall < 0 || wall_map[old_wall] >= 0) continue;
+        const Wall* src = &e->level.walls[old_wall];
+        ShapeId copy = level_add_shape(&e->clipboard);
+        if (copy == 0) break;
+        int new_wall = level_add_wall_to_shape(&e->clipboard, copy, src->a,
+                                               src->b);
+        if (new_wall < 0) {
+            level_delete_shape(&e->clipboard, copy);
+            continue;
+        }
+        e->clipboard.walls[new_wall].detail = src->detail;
+        e->clipboard.walls[new_wall].locked = false;
+        wall_map[old_wall] = new_wall;
+    }
+
+    /* Every door hosted by a copied wall comes along, selected or not. */
+    for (int d = 0; d < e->level.door_count; d++) {
+        const Door* src = &e->level.doors[d];
+        int old_wall = level_find_wall_index(&e->level, src->wall);
+        if (old_wall < 0 || wall_map[old_wall] < 0) continue;
+        WallId wall = e->clipboard.walls[wall_map[old_wall]].id;
+        int idx = level_add_door(&e->clipboard, wall, src->t, src->width);
+        if (idx < 0) break;
+        e->clipboard.doors[idx].hidden = src->hidden;
+        e->clipboard.doors[idx].locked = false;
+    }
+
+    for (int i = 0; i < e->level.label_count; i++) {
+        if (!sel->labels[i]) continue;
+        const Label* src = &e->level.labels[i];
+        int idx = level_add_label(&e->clipboard, src->pos, src->text,
+                                  src->size);
+        if (idx < 0) break;
+        e->clipboard.labels[idx] = *src;
+        e->clipboard.labels[idx].locked = false;
+    }
+
+    for (int i = 0; i < e->level.stairs_count; i++) {
+        if (!sel->stairs[i]) continue;
+        const Stairs* src = &e->level.stairs[i];
+        int idx = level_add_stairs(&e->clipboard, level_stairs_rect(src),
+                                   src->dir, src->steps);
+        if (idx < 0) break;
+        e->clipboard.stairs[idx] = *src;
+        e->clipboard.stairs[idx].locked = false;
+    }
+
+    int copied = e->clipboard.shape_count + e->clipboard.door_count +
+                 e->clipboard.label_count + e->clipboard.stairs_count;
+    if (copied == 0) {
+        set_status(e, true, "Nothing selected to copy");
+        return;
+    }
+    e->clipboard_has_content = true;
+    e->clipboard_floor = e->floor_index;
+    if (copied == 1) set_status(e, false, "Copied 1 object");
+    else set_status(e, false, "Copied %d objects", copied);
+}
+
+/* Ctrl+V pastes the clipboard into the active floor. A same-floor paste
+   offsets one grid cell down-right like Ctrl+D; a cross-floor paste keeps the
+   world coordinates, since every floor shares one world space. */
+static void paste_clipboard(Editor* e) {
+    if (!e->clipboard_has_content) {
+        set_status(e, true, "Clipboard is empty");
+        return;
+    }
+    if (e->level.wall_count + e->clipboard.wall_count > LEVEL_MAX_WALLS ||
+        e->level.shape_count + e->clipboard.shape_count > LEVEL_MAX_SHAPES ||
+        e->level.door_count + e->clipboard.door_count > LEVEL_MAX_DOORS ||
+        e->level.label_count + e->clipboard.label_count > LEVEL_MAX_LABELS ||
+        e->level.stairs_count + e->clipboard.stairs_count > LEVEL_MAX_STAIRS) {
+        set_status(e, true, "Not enough room to paste");
+        return;
+    }
+    Vec2 off = e->clipboard_floor == e->floor_index
+                   ? v2(e->grid_size, e->grid_size)
+                   : v2(0.0f, 0.0f);
+    sel_clear(e);
+
+    int wall_map[LEVEL_MAX_WALLS];
+    for (int i = 0; i < LEVEL_MAX_WALLS; i++) wall_map[i] = -1;
+    int pasted = 0;
+
+    for (int i = 0; i < e->clipboard.shape_count; i++) {
+        const Shape* shape = &e->clipboard.shapes[i];
+        ShapeId copy = level_add_shape(&e->level);
+        if (copy == 0) break;
+        int indices[LEVEL_MAX_WALLS];
+        int count = level_shape_wall_indices(&e->clipboard, shape->id,
+                                             indices, LEVEL_MAX_WALLS);
+        for (int k = 0; k < count; k++) {
+            int old_index = indices[k];
+            const Wall* w = &e->clipboard.walls[old_index];
+            int new_index = level_add_wall_to_shape(
+                &e->level, copy, v2_add(w->a, off), v2_add(w->b, off));
+            if (new_index < 0) continue;
+            e->level.walls[new_index].detail = w->detail;
+            e->level.walls[new_index].locked = false;
+            wall_map[old_index] = new_index;
+        }
+        if (shape->closed) level_close_shape(&e->level, copy);
+        int copy_idx[LEVEL_MAX_WALLS];
+        int copy_count = level_shape_wall_indices(&e->level, copy, copy_idx,
+                                                  LEVEL_MAX_WALLS);
+        for (int k = 0; k < copy_count; k++) sel_add(e, SEL_WALL, copy_idx[k]);
+        pasted++;
+    }
+
+    for (int d = 0; d < e->clipboard.door_count; d++) {
+        const Door* src = &e->clipboard.doors[d];
+        int old_wall = level_find_wall_index(&e->clipboard, src->wall);
+        if (old_wall < 0 || wall_map[old_wall] < 0) continue;
+        int idx = level_add_door(&e->level,
+                                 e->level.walls[wall_map[old_wall]].id, src->t,
+                                 src->width);
+        if (idx < 0) break;
+        e->level.doors[idx].hidden = src->hidden;
+        e->level.doors[idx].locked = false;
+        sel_add(e, SEL_DOOR, idx);
+        pasted++;
+    }
+
+    for (int i = 0; i < e->clipboard.label_count; i++) {
+        const Label* src = &e->clipboard.labels[i];
+        int idx = level_add_label(&e->level, v2_add(src->pos, off), src->text,
+                                  src->size);
+        if (idx < 0) break;
+        e->level.labels[idx] = *src;
+        e->level.labels[idx].pos = v2_add(src->pos, off);
+        e->level.labels[idx].locked = false;
+        sel_add(e, SEL_LABEL, idx);
+        pasted++;
+    }
+
+    for (int i = 0; i < e->clipboard.stairs_count; i++) {
+        const Stairs* src = &e->clipboard.stairs[i];
+        Rect r = level_stairs_rect(src);
+        Rect copy = { v2_add(r.min, off), v2_add(r.max, off) };
+        int idx = level_add_stairs(&e->level, copy, src->dir, src->steps);
+        if (idx < 0) break;
+        e->level.stairs[idx] = *src;
+        e->level.stairs[idx].pos = v2_add(src->pos, off);
+        e->level.stairs[idx].locked = false;
+        sel_add(e, SEL_STAIRS, idx);
+        pasted++;
+    }
+
+    if (pasted == 0) {
+        set_status(e, true, "Nothing to paste");
+        return;
+    }
+    if (pasted == 1) commit(e, "Pasted 1 object");
+    else {
+        char msg[64];
+        snprintf(msg, sizeof msg, "Pasted %d objects", pasted);
+        commit(e, msg);
+    }
+}
+
 static void handle_shortcuts(Editor* e) {
     ImGuiIO* io = igGetIO();
     if (e->modal != MODAL_NONE) return;
@@ -5956,7 +6184,7 @@ static void handle_shortcuts(Editor* e) {
         set_status(e, false, "Player placement cancelled");
         return;
     }
-    if (igIsKeyPressedEx(ImGuiKey_C, false)) {
+    if (!io->KeyCtrl && igIsKeyPressedEx(ImGuiKey_C, false)) {
         recenter_player_camera(e);
         return;
     }
@@ -5986,6 +6214,14 @@ static void handle_shortcuts(Editor* e) {
         }
         if (igIsKeyPressedEx(ImGuiKey_D, false)) {
             duplicate_selection(e);
+            return;
+        }
+        if (igIsKeyPressedEx(ImGuiKey_C, false)) {
+            copy_selection(e);
+            return;
+        }
+        if (igIsKeyPressedEx(ImGuiKey_V, false)) {
+            paste_clipboard(e);
             return;
         }
         if (igIsKeyPressedEx(ImGuiKey_O, false)) {
@@ -6165,6 +6401,9 @@ Editor* editor_create(const char* startup_path) {
         }
     }
     level_init(&e->level);
+    level_init(&e->clipboard);
+    e->clipboard_has_content = false;
+    e->clipboard_floor = 0;
     e->floor_count = 1;
     e->floor_index = 0;
     e->floor_loaded[0] = true;
