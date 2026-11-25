@@ -6377,6 +6377,10 @@ static void handle_shortcuts(Editor* e) {
         }
         if (e->tool == TOOL_LINE && !gesture_is_drag(e)) {
             cancel_transient(e);
+            if (q_lock_held(e)) {
+                set_status(e, false, "Line tool locked");
+                return;
+            }
             e->tool = TOOL_SELECT;
             set_status(e, false, "Select tool");
             return;
@@ -6516,11 +6520,11 @@ Editor* editor_create(const char* startup_path) {
     e->marquee_mode = MARQUEE_PARTIAL;
     e->door_width = 10.0f;
     e->label_size = 10.0f;
-    e->stair_dir = STAIRS_H;
+    e->stair_dir = STAIRS_V;
     e->stair_steps = 10;
     e->stair_flip = false;
-    e->stair_fade = STAIR_FADE_LINEAR;
-    e->stair_min_alpha = STAIR_ALPHA_MIN;
+    e->stair_fade = STAIR_FADE_SMOOTH;
+    e->stair_min_alpha = 0.0f;
     e->stair_max_alpha = STAIR_ALPHA_MAX;
     e->fit_pending = true;
     e->modal = MODAL_NONE;

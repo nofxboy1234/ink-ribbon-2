@@ -162,8 +162,8 @@ files still load.
 
 The shipped UI has six tools: Select, Line, Rectangle, Door, Stairs, and Label,
 on keys 1 to 6, with Select as the default. A completed drawing action returns
-the tool to Select unless Q is held. The Q lock row in the left panel shows the
-held state. One action is a closed chain, a completed rectangle or stair drag, a
+the tool to Select unless the Q lock is on. The Q lock row in the left panel
+shows the locked state. `Esc` keeps a locked drawing tool active. One action is a closed chain, a completed rectangle or stair drag, a
 placed door, or a placed label. An open chain is not an action.
 
 The Rectangle tool follows the Snap setting on press, preview, and release.

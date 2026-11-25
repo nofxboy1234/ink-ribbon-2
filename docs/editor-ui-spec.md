@@ -67,7 +67,7 @@ Exactly six tools, in this order and on these keys:
 
 Select is the default. The tool is the only owner of which gesture a press starts, so there is no second mode flag.
 
-After one drawing action the editor switches to Select unless Q is held when the action completes. A drawing action is one completed rectangle drag, one closed line chain, one placed door, one placed stair, or one placed label. An open line chain does not switch. The switch keeps the action's status message. A small `Q lock: tool stays` row in the left panel lights while Q is held. The row is always present so the panel does not jump. Typing Q into a label field is not a lock.
+After one drawing action the editor switches to Select unless the Q lock is on when the action completes. A drawing action is one completed rectangle drag, one closed line chain, one placed door, one placed stair, or one placed label. An open line chain does not switch. The switch keeps the action's status message. A small `Q lock: tool stays` row in the left panel lights while the lock is on. The row is always present so the panel does not jump. Typing Q into a label field is not a lock.
 
 Switching tools ends any open chain without committing it. A drag that was live restores the last committed snapshot.
 
@@ -79,7 +79,7 @@ Click sets points. Each click appends an orthogonal segment that continues from 
 - Each later click uses `snap_ortho(chain_last, cursor_world, grid)` so a segment is horizontal when `|dx| > |dy|`, vertical otherwise, and the free coordinate snaps to the grid.
 - The first click creates a shape with `level_add_shape`. Every later click calls `level_add_wall_to_shape`. If the new wall completes one connected loop back to the start, the shape is closed and the chain ends automatically.
 - Clicking within 12 screen pixels of the first point closes the chain: add the final wall back to the first point, call `level_close_shape`, end the chain, and hand the tool back to Select. A close needs at least four walls; report that when it fails.
-- `Enter` also closes the chain when it has at least three points. `Esc` ends it open, keeping only the walls already added.
+- `Enter` also closes the chain when it has at least three points. `Esc` ends it open, keeping only the walls already added. With the Q lock on, `Esc` also keeps the Line tool active instead of handing back to Select.
 - `Backspace` removes the last wall added in the current chain and moves the chain tip back. That is a live document mutation; commit history after it.
 - A plain drag does nothing. There is no Shift marquee.
 - Show a preview segment from the last point to the constrained cursor, the first-point marker with a `close` highlight when near, and small vertex dots.
@@ -102,7 +102,7 @@ The rectangle preview and the stair preview draw an accent outline. The empty lo
 
 The Door tool uses the wall under the pointer. The search radius is 22 screen pixels converted to world units. The projected point gives the centre parameter. With Snap on, the parameter snaps along the wall only, so the ghost stays on the wall line.
 
-A ghost bar draws at the panel door width, centred on the snapped point and clamped so it stays on the wall. It shows the door a click will place. Click places a white door with `level_add_door`, selects it, and commits `Door added`. The tool then returns to Select unless Q is held. Clicking away from every wall reports `Hover a wall to place a door` and does not complete an action.
+A ghost bar draws at the panel door width, centred on the snapped point and clamped so it stays on the wall. It shows the door a click will place. Click places a white door with `level_add_door`, selects it, and commits `Door added`. The tool then returns to Select unless the Q lock is on. Clicking away from every wall reports `Hover a wall to place a door` and does not complete an action.
 
 There is no marquee door workflow and no door colour menu. The inspector slides the door along its wall and changes its width. Dragging either end with Select resizes it.
 
@@ -110,7 +110,7 @@ There is no marquee door workflow and no door colour menu. The inspector slides 
 
 Drag a rectangle. Both corners use the same drawing snap chain as the Rectangle tool, including Snap objects. The release needs at least one grid cell on each axis, or `STAIR_MIN_SIZE` when Snap is off. The panel's falloff and faint/bright opacity sliders are copied to the new stair.
 
-The stair takes the panel's direction and step count and the panel's Flip flag. Flip sets which end of the run the tread fade starts from. The stair is selected, the action commits `Stairs added`, and the tool returns to Select unless Q is held.
+The stair takes the panel's direction and step count and the panel's Flip flag. Flip sets which end of the run the tread fade starts from. The stair is selected, the action commits `Stairs added`, and the tool returns to Select unless the Q lock is on.
 
 Treads draw as 3 px neutral lines. The falloff shapes the way opacity travels from the faint end to the bright end, and the two opacity sliders set those end values. Flip chooses which end of the run is the faint one. There is no footprint fill. Dragging a stair edge with Select resizes the footprint. The inspector changes direction, steps, Flip, falloff, and both opacities for the selected stair, and each change commits.
 
@@ -118,7 +118,7 @@ There is no marquee stairs workflow.
 
 ## Label
 
-Click places a label at the snapped point with the left panel's label size, selects it, and focuses the inspector text field so typing immediately renames it. `Enter` commits the text. The inspector also edits size and position. The tool returns to Select unless Q is held, and the label stays selected.
+Click places a label at the snapped point with the left panel's label size, selects it, and focuses the inspector text field so typing immediately renames it. `Enter` commits the text. The inspector also edits size and position. The tool returns to Select unless the Q lock is on, and the label stays selected.
 
 ## Select
 
@@ -180,7 +180,7 @@ Below the six tool buttons and the Q lock row:
 - Line: a hint.
 - Rectangle: a hint that overlapping rectangles union, while a rectangle fully inside another stays separate.
 - Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 10. New doors are 3 px thick.
-- Stairs: direction buttons, a steps slider, a Flip checkbox, a falloff combo (Linear, Ease in, Ease out, Smooth), faint and bright opacity sliders, and a hint.
+- Stairs: direction buttons, a steps slider, a Flip checkbox, a falloff combo (Linear, Ease in, Ease out, Smooth), faint and bright opacity sliders, and a hint. New runs default to Vertical, 10 steps, Smooth falloff, 0.00 min opacity, 0.68 max opacity, and Flip off.
 - Label: a size slider from 8 to 48.
 
 There is no Fill palette.
@@ -202,7 +202,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `M` arm the next marquee, `P` play mode, `C` recentre the player, `N` toggle the nav-cell overlay in edit mode, `Ctrl+A` select all, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee (Partial marks sections, Full selects whole walls and objects), drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `S` toggle grid snapping, `Shift+S` toggle object snapping, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Q` toggles the lock that keeps the drawing tool (and keeps the Line tool through `Esc`), `L` lock/unlock the selection, `M` arm the next marquee, `P` play mode, `C` recentre the player, `N` toggle the nav-cell overlay in edit mode, `Ctrl+A` select all, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee (Partial marks sections, Full selects whole walls and objects), drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `S` toggle grid snapping, `Shift+S` toggle object snapping, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 

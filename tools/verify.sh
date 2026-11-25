@@ -325,6 +325,7 @@ echo "PASS Q lock lights, holds the Door tool, and the next unheld action switch
 
 echo "== stairs drag with a persisted flip =="
 key 5
+click 22 379
 click 22 456
 drag 300 620 500 700
 save_as "$out-stairs-1.lvl"
@@ -339,8 +340,11 @@ s = stairs[0]
 if s[3] != "0" or s[4] != "10" or s[7] != "1":
     print("the stair ignored the panel direction, steps, or flip", s)
     raise SystemExit(1)
+if s[8] != "3" or abs(float(s[9])) > 1e-9 or abs(float(s[10]) - 0.68) > 1e-6:
+    print("the stair did not start with the Smooth, 0.00, 0.68 defaults", s)
+    raise SystemExit(1)
 PYEOF
-echo "PASS a stair drag uses the panel direction, steps, and flip"
+echo "PASS a stair drag uses the panel direction, steps, flip, and the Smooth/0.00/0.68 defaults"
 # Auto-select: a drag after the stair action must marquee, not add a stair.
 drag 620 620 700 700
 save_as "$out-stairs-2.lvl"
