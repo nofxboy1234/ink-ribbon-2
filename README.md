@@ -64,11 +64,12 @@ The built executables live in `.fibs/dist/<config>/`; `./fibs config --get` prin
 - Drag a rectangle with the Stairs tool. The run takes the panel's direction, step count, falloff, and faint/bright opacities. Flip reverses which end the tread fade starts from, and all of it is saved with the level. Drag any stair edge with Select to resize the footprint.
 - Draw walls click by click with the Line tool. Every segment is horizontal or vertical and continues from the last click. Click the first point or press Enter to close the loop; a chain whose last segment returns to the first point also closes automatically. Esc keeps the chain open.
 - Add text labels with the Label tool. The new label is selected with its inspector text field focused, so typing renames it. The panel sets the size for the next label and the inspector resizes and moves any label.
-- Press M (or tick "Marquee next drag" in the Select panel), then drag anywhere to start a marquee, including from inside a closed shape. A drag on empty canvas still starts one without arming. The marquee marks the crossed wall sections for cutting.
+- Press M (or tick "Marquee next drag" in the Select panel), then drag anywhere to start a marquee, including from inside a closed shape. A drag on empty canvas still starts one without arming. The Select panel's **Mode** combo picks **Partial**, which marks the crossed wall sections for cutting, or **Full**, which selects every wall and object the box touches as a whole. A wall on the box edge counts as touched, so a box over the whole map takes every line.
+- Press Ctrl+A (or Edit > Select All) to select every wall, door, label, and stair on the active floor as whole objects.
 - Select, edit, duplicate, and delete the placed objects. Deleting a shape removes its walls and the doors hosted by them. Ctrl+D duplicates the selection one grid cell diagonally and keeps every setting, including door width/position and each stair's direction, steps, flip, falloff, and opacities; doors on duplicated walls come along.
 - Lock the selected objects with L or the inspector checkbox. Locking a wall also locks the doors it hosts. Locked objects stay put while you select and edit other objects. Selecting a locked object and pressing L (or unticking the checkbox) unlocks it. A selection that contains any locked object cannot be moved, reshaped, deleted, duplicated, or edited.
-- Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
-- Snap to the grid and to nearby object points while placing, drawing, dragging, and reshaping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns grid snapping off. The Grid display section sets the grid opacity and colour; every grid line uses the same dim colour.
+- Click to select, shift-click to add, Ctrl-click to remove. Drag a box to select whole labels, stairs, and doors and to mark the crossed part of every wall it passes over; switch the Select panel's **Mode** to Full to select whole walls instead. Delete cuts all the marked sections in one step and still removes the selected objects. Dragging a wall edge reshapes its shape, dragging a wall corner resizes the lines that meet there, and dragging labels or stairs moves them together.
+- Snap to the grid and to nearby object points while placing, drawing, dragging, and reshaping. Press S for grid snapping and Shift+S for object snapping. The drawn grid follows the selected Grid size, so every line is a position objects can land on. The grid sizes are 4, 8, 16, and 32 world units, and the Snap checkbox turns grid snapping off. The Grid display section sets the grid opacity and colour; every grid line uses the same dim colour.
 - Snap to nearby wall lines and endpoints with the Snap objects checkbox. Object and grid snapping are independent, and an object target wins on the axis it lands on. Drawing tools use the same chain on their first point and preview, so Line, Rectangle, Door, Stairs, and Label place where the preview shows.
 - While a drawing tool or Select is active and either Snap or Snap objects is on, a small Dracula-purple (`#bd93f9`) dot marks the snapped point the tool will use. With both toggles off there is no dot and the cursor stays free.
 - In edit mode, press **Place player** in the Player section, then click a walkable nav cell. You can also press P for play mode and click the map. At most one player exists. Once placed, each play-mode click queues a waypoint at that cell. Every waypoint draws as a numbered square in its own random Dracula palette colour, and the route leg ending at that waypoint takes the same colour. The route comes from A* over the 8-unit grid, then line-of-sight filtering and validated corner smoothing; every segment keeps the player radius clear of walls, and doorway crossings are routed through each door's centre. **double-click** executes it through the waypoints in order, removing each marker as it is reached and ending on the last waypoint. Esc clears the queue.
@@ -155,7 +156,7 @@ or write `0`. Older files with five fields still load.
 | Drag a wall edge | Reshape the shape by sliding that edge and stretching its neighbours |
 | Drag a wall corner | Resize the walls that meet at that corner |
 | Drag a stair edge | Resize the stair footprint on the grid |
-| Drag on empty canvas | Marquee select and mark crossed wall sections; Shift adds to the selection |
+| Drag on empty canvas | Marquee select; Partial marks crossed wall sections, Full selects whole walls and objects. Shift adds to the selection |
 | M | Arm the next marquee so it can start inside a closed shape |
 | P | Toggle play mode; click to queue waypoints, double-click to walk |
 | C | Recentre the camera on the player at the current zoom |
@@ -170,7 +171,9 @@ or write `0`. Older files with five fields still load.
 | Delete | Cut every marked wall section and delete the selected objects |
 | F | Fit the level |
 | G | Toggle the grid |
-| S | Toggle snapping |
+| S | Toggle grid snapping |
+| Shift+S | Toggle object snapping |
+| Ctrl+A | Select every object on the active floor |
 | L | Lock or unlock the current selection |
 | Ctrl+D | Duplicate the selection one grid cell diagonally |
 | Ctrl+C | Copy the selection |

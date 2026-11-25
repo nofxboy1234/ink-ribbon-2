@@ -177,10 +177,14 @@ Selection is UI state in `editor.c`, not part of `Level`. It is four bounded
 per-kind sets plus a primary reference. Walls are selected as edges, and
 hitting a wall selects that edge; clicking inside a closed shape selects all of
 its edges. Shift-click adds, Ctrl-click toggles, a box replaces or adds, and
-Delete removes every selected object in one snapshot. A box skips whole walls
-and instead marks the crossed part of each wall as a canonical `Span` list, so
-Delete cuts every marked section through `level_cut_wall_span` in that same
-snapshot. A drag has two modes. When
+Delete removes every selected object in one snapshot. Partial marquee mode skips
+whole walls and instead marks the crossed part of each wall as a canonical
+`Span` list, so Delete cuts every marked section through
+`level_cut_wall_span` in that same snapshot. Full mode selects every wall the
+box touches as a whole object. Both modes count a wall lying exactly on a box
+edge as inside, so a box drawn from the level bounds does not drop the outer
+walls. `Ctrl+A` selects every object on the floor without any box at all. A drag
+has two modes. When
 the selection is edges that are not exactly a whole shape, `GESTURE_RESHAPE`
 slides each selected edge along its own normal through `level_slide_edges`, so
 corners between two selected edges take both axes and unselected neighbours
@@ -195,7 +199,8 @@ stair, door, and group drags. New geometry uses `draw_snap_point`, which runs
 object targets first and the grid second; a continuing line uses
 `draw_snap_line_point` so only its free axis snaps and the run stays orthogonal.
 Group drags snap from the primary object's anchor so relative spacing is
-preserved. The Snap checkbox and grid size remain user controls. A small
+preserved. The Snap checkbox, Snap objects checkbox, and grid size remain user
+controls; `S` toggles grid snap and `Shift+S` toggles object snap. A small
 Dracula-purple dot draws at the live snap point whenever a drawing tool is
 active and either snap toggle is on.
 

@@ -161,6 +161,13 @@ typedef enum {
     STAIR_EDGE_BOTTOM,
 } StairEdge;
 
+/* A marquee either marks the crossed part of each wall for cutting, or
+   selects every wall it touches as a whole object. */
+typedef enum {
+    MARQUEE_PARTIAL = 0,
+    MARQUEE_FULL,
+} MarqueeMode;
+
 /* What a press landed on. A shape interior and a single edge both resolve to
    a wall set so selection and gestures have one path. */
 typedef struct {
@@ -313,6 +320,7 @@ struct Editor {
     bool snap_objects;
     bool show_grid;
     bool marquee_armed;
+    MarqueeMode marquee_mode;
     /* Creation settings for the next object, shown only by the tool that
        uses them. */
     float door_width;
@@ -1258,6 +1266,20 @@ static void sel_only(Editor* e, SelKind kind, int index) {
     if (!bits || index < 0 || index >= sel_cap(kind)) return;
     bits[index] = true;
     e->selection.primary = (SelRef){ kind, index };
+}
+
+/* Ctrl+A and Edit > Select All take every object on the active floor as a
+   whole. Locked objects stay selectable so they can be unlocked again. */
+static void select_all(Editor* e) {
+    sel_clear(e);
+    span_clear(e);
+    for (int i = 0; i < e->level.wall_count; i++) sel_add(e, SEL_WALL, i);
+    for (int i = 0; i < e->level.door_count; i++) sel_add(e, SEL_DOOR, i);
+    for (int i = 0; i < e->level.label_count; i++) sel_add(e, SEL_LABEL, i);
+    for (int i = 0; i < e->level.stairs_count; i++) sel_add(e, SEL_STAIRS, i);
+    int n = sel_count(&e->selection);
+    if (n == 0) set_status(e, false, "Nothing to select");
+    else set_status(e, false, "%d object%s selected", n, n == 1 ? "" : "s");
 }
 
 static bool target_selected(const Editor* e, const Target* target) {
@@ -3493,9 +3515,9 @@ static void begin_stairs_resize(Editor* e, int idx, int edge, Vec2 world) {
     set_status(e, false, "Drag the stair edge to resize");
 }
 
-/* The part of a wall the box crosses, in wall parameters. The box must pass
-   over the wall line, not only touch it, so a snapped box edge that lands on a
-   wall does not mark the whole line. */
+/* The part of a wall the box crosses, in wall parameters. A wall lying
+   exactly on a box edge counts as inside, so a drag from the level bounds
+   still picks up the outer walls instead of leaving them behind. */
 static bool wall_section_in_rect(const Wall* wall, Rect box, float* out_t0,
                                  float* out_t1) {
     float len = wall_length(wall);
@@ -3503,7 +3525,7 @@ static bool wall_section_in_rect(const Wall* wall, Rect box, float* out_t0,
     float lo, hi;
     if (wall_is_vertical(wall)) {
         float x = wall->a.x;
-        if (!(box.min.x < x - 1e-3f && x + 1e-3f < box.max.x)) return false;
+        if (!(box.min.x <= x + 1e-3f && x - 1e-3f <= box.max.x)) return false;
         lo = fmaxf(fminf(wall->a.y, wall->b.y), box.min.y);
         hi = fminf(fmaxf(wall->a.y, wall->b.y), box.max.y);
         if (hi - lo < 1e-3f) return false;
@@ -3511,7 +3533,7 @@ static bool wall_section_in_rect(const Wall* wall, Rect box, float* out_t0,
         *out_t1 = point_segment_t(v2(x, hi), wall->a, wall->b);
     } else {
         float y = wall->a.y;
-        if (!(box.min.y < y - 1e-3f && y + 1e-3f < box.max.y)) return false;
+        if (!(box.min.y <= y + 1e-3f && y - 1e-3f <= box.max.y)) return false;
         lo = fmaxf(fminf(wall->a.x, wall->b.x), box.min.x);
         hi = fminf(fmaxf(wall->a.x, wall->b.x), box.max.x);
         if (hi - lo < 1e-3f) return false;
@@ -3530,6 +3552,18 @@ static bool wall_section_in_rect(const Wall* wall, Rect box, float* out_t0,
     return (*out_t1 - *out_t0) * len >= 1e-3f;
 }
 
+/* Whole-wall marquee test. Both axes are inclusive so touching the box edge
+   counts as a hit; a wall can never cross the box without its bounding box
+   doing so because every stored wall is axis aligned. */
+static bool wall_intersects_rect(const Wall* wall, Rect box) {
+    float min_x = fminf(wall->a.x, wall->b.x);
+    float max_x = fmaxf(wall->a.x, wall->b.x);
+    float min_y = fminf(wall->a.y, wall->b.y);
+    float max_y = fmaxf(wall->a.y, wall->b.y);
+    return max_x >= box.min.x - 1e-3f && min_x <= box.max.x + 1e-3f &&
+           max_y >= box.min.y - 1e-3f && min_y <= box.max.y + 1e-3f;
+}
+
 /* Marks every wall the box crosses. The box corners are already snapped when
    Snap is on, and nothing else is snapped, so each section is exactly the part
    of the wall inside the box. */
@@ -3543,10 +3577,22 @@ static void collect_sections(Editor* e, Rect box, bool additive) {
     }
 }
 
-/* A marquee selects whole non-wall objects inside the box and marks the
-   crossed part of each wall for cutting. */
+/* Partial mode selects whole non-wall objects inside the box and marks the
+   crossed part of each wall for cutting. Full mode selects every wall the box
+   touches as a whole object, so a box over the map takes every line too. */
 static void marquee_select(Editor* e, Rect rect, bool additive) {
-    if (!additive) sel_clear(e);
+    if (!additive) {
+        sel_clear(e);
+        span_clear(e);
+    }
+    bool full = e->marquee_mode == MARQUEE_FULL;
+    if (full) {
+        for (int i = 0; i < e->level.wall_count; i++) {
+            if (wall_intersects_rect(&e->level.walls[i], rect)) {
+                sel_add(e, SEL_WALL, i);
+            }
+        }
+    }
     for (int i = 0; i < e->level.door_count; i++) {
         const Door* door = &e->level.doors[i];
         if (!level_wall_by_id_const(&e->level, door->wall)) continue;
@@ -3567,13 +3613,13 @@ static void marquee_select(Editor* e, Rect rect, bool additive) {
     if (!sel_has(&e->selection, e->selection.primary.kind, e->selection.primary.index)) {
         sel_promote(e);
     }
-    collect_sections(e, rect, additive);
+    if (!full) collect_sections(e, rect, additive);
     int objects = sel_count(&e->selection);
-    if (e->span_count > 0 && objects > 0) {
+    if (!full && e->span_count > 0 && objects > 0) {
         set_status(e, false, "%d section%s and %d object%s selected",
                    e->span_count, e->span_count == 1 ? "" : "s", objects,
                    objects == 1 ? "" : "s");
-    } else if (e->span_count > 0) {
+    } else if (!full && e->span_count > 0) {
         set_status(e, false, "%d section%s marked, press Delete", e->span_count,
                    e->span_count == 1 ? "" : "s");
     } else {
@@ -5069,6 +5115,14 @@ static void draw_menu(Editor* e) {
                 sel_clear(e);
                 span_clear(e);
             }
+            if (igMenuItemEx("Select All", "Ctrl+A", false,
+                             !e->play_mode &&
+                                 (e->level.wall_count > 0 ||
+                                  e->level.door_count > 0 ||
+                                  e->level.label_count > 0 ||
+                                  e->level.stairs_count > 0))) {
+                select_all(e);
+            }
             igSeparator();
             if (igMenuItemEx("Copy", "Ctrl+C", false,
                              sel_count(&e->selection) > 0)) {
@@ -5206,7 +5260,20 @@ static void draw_left_panel(Editor* e) {
         case TOOL_SELECT: {
             igDummy((ImVec2){ 0.0f, 3.0f });
             igCheckbox("Marquee next drag", &e->marquee_armed);
-            small_note("Press M, then drag, to start a marquee from inside a shape. A drag on empty canvas also starts one. Picks wall sections; press Delete to cut them.");
+            int marquee_mode = (int)e->marquee_mode;
+            igSetNextItemWidth(104.0f);
+            if (igCombo("Mode##marquee", &marquee_mode, "Partial\0Full\0")) {
+                e->marquee_mode = (MarqueeMode)marquee_mode;
+                span_clear(e);
+                set_status(e, false, e->marquee_mode == MARQUEE_FULL
+                                         ? "Marquee selects whole objects"
+                                         : "Marquee marks wall sections");
+            }
+            if (e->marquee_mode == MARQUEE_FULL) {
+                small_note("Press M, then drag, to start a marquee from inside a shape. Full selects every wall and object the box touches as a whole.");
+            } else {
+                small_note("Press M, then drag, to start a marquee from inside a shape. A drag on empty canvas also starts one. Picks wall sections; press Delete to cut them.");
+            }
             break;
         }
         case TOOL_COUNT:
@@ -5651,7 +5718,11 @@ static void draw_help_modal(Editor* e) {
     igText("Wheel zooms around the cursor.");
     igText("Ctrl+0 resets the zoom to 100 percent.");
     igBullet();
-    igText("F fits the level, G toggles the grid.");
+    igText("F fits the level, G toggles the grid, S toggles snapping.");
+    igBullet();
+    igText("Shift+S toggles object snapping.");
+    igBullet();
+    igText("Ctrl+A selects every object on the floor.");
     igBullet();
     igText("N overlays the navigable cells in edit mode.");
     igText("Editing");
@@ -5668,7 +5739,7 @@ static void draw_help_modal(Editor* e) {
     igBullet();
     igText("Shift-click adds to the selection; Ctrl-click toggles an object.");
     igBullet();
-    igText("Drag a box to select objects and mark wall sections.");
+    igText("Drag a box to select objects. Partial marks wall sections; Full selects whole walls and objects.");
     igBullet();
     igText("Drag selected edges to reshape them.");
     igBullet();
@@ -6228,6 +6299,10 @@ static void handle_shortcuts(Editor* e) {
             open_path_modal(e, MODAL_OPEN);
             return;
         }
+        if (igIsKeyPressedEx(ImGuiKey_A, false)) {
+            if (!gesture_is_drag(e)) select_all(e);
+            return;
+        }
     }
 
     for (int i = 0; i < TOOL_COUNT; i++) {
@@ -6240,7 +6315,12 @@ static void handle_shortcuts(Editor* e) {
         e->fit_pending = true;
         set_status(e, false, "Fit level");
     }
-    if (igIsKeyPressedEx(ImGuiKey_S, false)) {
+    if (io->KeyShift && igIsKeyPressedEx(ImGuiKey_S, false)) {
+        e->snap_objects = !e->snap_objects;
+        set_status(e, false, e->snap_objects ? "Object snap on" : "Object snap off");
+        return;
+    }
+    if (!io->KeyShift && igIsKeyPressedEx(ImGuiKey_S, false)) {
         e->snap = !e->snap;
         set_status(e, false, e->snap ? "Snap on" : "Snap off");
     }
@@ -6433,6 +6513,7 @@ Editor* editor_create(const char* startup_path) {
     e->snap_objects = true;
     e->show_grid = true;
     e->marquee_armed = false;
+    e->marquee_mode = MARQUEE_PARTIAL;
     e->door_width = 10.0f;
     e->label_size = 10.0f;
     e->stair_dir = STAIRS_H;

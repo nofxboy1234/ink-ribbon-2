@@ -129,13 +129,14 @@ A wall hit selects that edge. Clicking inside a closed shape selects all of its 
 Selection is a bounded set per object kind plus a primary reference. Walls are selected as individual edges. The set is never serialized.
 
 - A selection can be locked with `L` or the inspector's Lock selection checkbox. Locking a wall also locks the doors hosted by that wall. Locks live on the selected objects for the session, so other objects can still be selected and edited. Locked objects remain selectable so they can be unlocked. A selection containing any locked object refuses canvas drags, `Delete`, `Ctrl+D`, and inspector edits; the lock checkbox stays enabled. Locks are not saved with the level.
-- Locked walls are skipped by marquee section marking and section cutting.
+- Locked walls are skipped by partial marquee section marking and section cutting. A full marquee still selects them as whole objects, because locked objects remain selectable so they can be unlocked.
 - Plain click on an unselected object replaces the selection. Plain click on a selected object inside a multi-selection keeps the group and makes that object primary.
 - Shift-click adds the hit object and never removes one. Ctrl-click toggles it in or out.
 - A plain press within 7 screen pixels of a wall endpoint starts a corner drag. The level moves the shared vertex and every vertex that must follow, so attached walls stay orthogonal and the outline stays connected. Snap puts the corner on the grid; Snap objects instead aligns it to nearby wall lines and endpoints within 8 screen pixels. Select draws hollow squares at wall endpoints as handles.
+- Press `Ctrl+A` or choose Edit > Select All to select every wall, door, label, and stair on the active floor as whole objects.
 - Press `M` or tick **Marquee next drag** to arm one marquee. The next Select drag starts a marquee even when the press lands inside a closed shape, allowing a box over a nested inner room without moving the outer shape. The arm clears when the marquee starts. A drag on empty canvas still starts a marquee without arming.
 - Plain press on empty canvas clears the selection and the marked sections, then starts a marquee. Shift-press on empty canvas starts an additive marquee. Travel under 4 screen pixels is a click.
-- On marquee release, select whole non-wall objects inside the rectangle. Doors use segment intersection, labels and stairs use rect overlap. Walls are never selected whole by a box; the crossed part of every wall is marked as a section instead, clipped in wall parameters to the snapped box.
+- On marquee release, select whole non-wall objects inside the rectangle. Doors use segment intersection, labels and stairs use rect overlap. In **Partial** mode (the default) walls are never selected whole; the crossed part of every wall is marked as a section, clipped in wall parameters to the snapped box. A wall lying exactly on a box edge counts as inside, so a box drawn across the whole map picks up the outer walls too. In **Full** mode every wall the box touches is selected as a whole object and no sections are marked. The Select panel's **Mode** combo chooses Partial or Full.
 - Dragging a selected edge slides that edge, and every other selected edge, along its own normal. A corner shared by two selected edges takes both axes.
 - Dragging when the selection mixes kinds, or when the selected edges are exactly all the edges of one shape, moves everything rigidly: walls via `level_move_walls`, labels and stairs by their own move calls, and doors follow their host wall. Object snapping checks every moving wall endpoint and label or stair box edge on each axis, so the nearest side wins; grid snapping still measures the primary anchor.
 - A release without movement collapses a multi-selection to the pressed object.
@@ -175,7 +176,7 @@ At most one player record exists. The Player section at the bottom of the left p
 Below the six tool buttons and the Q lock row:
 
 - Grid size: combo 4, 8, 16, 32; default 8. A Snap toggle, default on. A Show grid toggle, default on. A Snap objects toggle, default on. The Grid display section has an opacity slider (0 to 1, default 0.18) and a colour picker (default `#333b45`).
-- Select: a **Marquee next drag** checkbox (same as pressing M) and a hint that a wall corner drags to resize.
+- Select: a **Marquee next drag** checkbox (same as pressing M), a **Mode** combo with Partial (default) and Full, and a hint that a wall corner drags to resize.
 - Line: a hint.
 - Rectangle: a hint that overlapping rectangles union, while a rectangle fully inside another stays separate.
 - Door: a hint and a door width slider from `DOOR_MIN_WIDTH` to 200, default 10. New doors are 3 px thick.
@@ -201,7 +202,7 @@ Use `igInputText` with a stable `char` buffer in the editor. Do not use native f
 
 ## Keyboard summary
 
-1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `M` arm the next marquee, `P` play mode, `C` recentre the player, `N` toggle the nav-cell overlay in edit mode, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee and mark sections, drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
+1 to 6 tools, `Q` held to keep the drawing tool, `L` lock/unlock the selection, `M` arm the next marquee, `P` play mode, `C` recentre the player, `N` toggle the nav-cell overlay in edit mode, `Ctrl+A` select all, `Ctrl+D` duplicate, `Delete` cut the marked sections and delete selected objects, `Shift` plus click add to selection, `Ctrl` plus click toggle, drag a box on empty canvas to marquee (Partial marks sections, Full selects whole walls and objects), drag a wall corner or edge to resize, `Esc` cancel/deselect, `Enter` close, `Backspace` undo last chain wall, `F` fit, `G` toggle grid, `S` toggle grid snapping, `Shift+S` toggle object snapping, `Ctrl+Z/Y` undo/redo, `Ctrl+S/O` save/open, `H` help.
 
 ## Acceptance checks
 
@@ -217,5 +218,6 @@ The UI owner must verify these on the real X11 window and report the commands an
 8. Drag a stair with Flip set and confirm the saved flag. Toggle Flip in the inspector and confirm the saved flag changes.
 9. Lose focus during a line draft and confirm the editor redraws afterwards.
 10. Drag a box from above the top wall of a rectangle to below it and confirm the accent highlight on the crossed part. Press Delete and save. The level has five walls with a gap where the box crossed. A door inside the gap is gone and a door outside keeps its saved world centre. Drag a rectangle corner and confirm both walls at that corner share the new endpoint and every saved wall is still horizontal or vertical.
+11. On the 2F floor, choose Full mode and drag a box across every object. The inspector reports all 53 walls, 8 doors, 2 labels, and 5 stairs selected. Press Ctrl+A and confirm the same 68 objects. A Partial box drawn from the level bounds still marks all 53 walls and selects the 15 non-wall objects. Press Shift+S and confirm the Snap objects checkbox toggles with the status line.
 
 Screenshots go to `/tmp/ink-ribbon-six-*.png`. Do not commit them.
