@@ -157,6 +157,20 @@ DETAIL = [
 ]
 DETAIL_KEYS = set(DETAIL)
 
+# Door bars from the reference image, in reference pixels: (x, y, w, h).
+# Blue, red, and white bars all mark a door bay; the editor draws every door
+# white, so the trace restores the missing wall span and hosts a visible door
+# there.  Two white marks inside the Typewriter callout are text, not doors.
+DOOR_BARS = [
+    (192, 218, 22, 4), (392, 237, 11, 5), (306, 333, 11, 4),
+    (785, 345, 4, 12), (283, 381, 11, 4), (706, 380, 22, 4),
+    (425, 387, 4, 10), (839, 480, 11, 4), (331, 513, 4, 11),
+    (162, 311, 11, 4), (239, 346, 4, 11), (620, 450, 3, 21),
+    (784, 459, 3, 11), (853, 507, 4, 11), (496, 564, 21, 4),
+    (496, 695, 21, 4), (856, 282, 11, 4), (218, 376, 10, 3),
+    (887, 520, 10, 3),
+]
+
 # Navigation-only openings (not drawn) where the reference has a door bar but
 # the traced wall line is continuous.  (axis, wall coordinate, position, width)
 NAV_DOORS = [
@@ -360,6 +374,88 @@ def build(source_pixels: bool = False) -> list[str]:
             )
             wall_records.append((wid, axis, a, b, c))
             wid += 1
+
+    # Restore the wall span under every reference door bar and host a visible
+    # door there.  Bars that already sit on a wall only add the door.
+    bay_sid = len(groups) + 1
+    bay_walls = []
+    bay_doors = []
+    seen = set()
+    for bx, by, bw, bh in DOOR_BARS:
+        horizontal = bw >= bh
+        length = float(bw if horizontal else bh)
+        cx = bx + bw / 2.0
+        cy = by + bh / 2.0
+        axis = 'H' if horizontal else 'V'
+        if horizontal:
+            near = [w for w in wall_records
+                    if w[1] == 'H' and abs(w[4] - cy) <= 3]
+            line = min((w[4] for w in near),
+                       key=lambda c: abs(c - cy)) if near else cy
+            same = [w for w in wall_records + bay_walls
+                    if w[1] == 'H' and abs(w[4] - line) <= 0.51]
+            host = next((w for w in same if w[2] <= cx <= w[3]), None)
+            if host is None:
+                left = [w[3] for w in same
+                        if w[3] <= cx + 0.5 and cx - w[3] <= 45]
+                right = [w[2] for w in same
+                         if w[2] >= cx - 0.5 and w[2] - cx <= 45]
+                a = max(left) if left else cx - length / 2.0 - 3.0
+                b = min(right) if right else cx + length / 2.0 + 3.0
+                if b - a > 90.0:
+                    a = cx - length / 2.0 - 4.0
+                    b = cx + length / 2.0 + 4.0
+                wid += 1
+                host = (wid, 'H', a, b, line)
+                bay_walls.append(host)
+            pos = cx
+        else:
+            near = [w for w in wall_records
+                    if w[1] == 'V' and abs(w[4] - cx) <= 3]
+            line = min((w[4] for w in near),
+                       key=lambda c: abs(c - cx)) if near else cx
+            same = [w for w in wall_records + bay_walls
+                    if w[1] == 'V' and abs(w[4] - line) <= 0.51]
+            host = next((w for w in same if w[2] <= cy <= w[3]), None)
+            if host is None:
+                low = [w[3] for w in same
+                       if w[3] <= cy + 0.5 and cy - w[3] <= 45]
+                high = [w[2] for w in same
+                        if w[2] >= cy - 0.5 and w[2] - cy <= 45]
+                a = max(low) if low else cy - length / 2.0 - 3.0
+                b = min(high) if high else cy + length / 2.0 + 3.0
+                if b - a > 90.0:
+                    a = cy - length / 2.0 - 4.0
+                    b = cy + length / 2.0 + 4.0
+                wid += 1
+                host = (wid, 'V', a, b, line)
+                bay_walls.append(host)
+            pos = cy
+        host_id, _axis, a, b, _line = host
+        key = (host_id, round(pos, 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        t = (pos - a) / (b - a) if b != a else 0.5
+        width = max(8.0, min(24.0, length))
+        bay_doors.append((host_id, t, width))
+    if bay_walls:
+        lines.append(f"shape {bay_sid} 0 0")
+        for wid_, axis, a, b, c in bay_walls:
+            if axis == 'H':
+                p0 = (a, c); p1 = (b, c)
+            else:
+                p0 = (c, a); p1 = (c, b)
+            if source_pixels:
+                p0 = source(*p0); p1 = source(*p1)
+            else:
+                p0 = world(*p0); p1 = world(*p1)
+            lines.append(
+                f"wall {wid_} {bay_sid} {p0[0]:.3f} {p0[1]:.3f} "
+                f"{p1[0]:.3f} {p1[1]:.3f}"
+            )
+        for host_id, t, width in bay_doors:
+            lines.append(f"door 0 {host_id} {t:.4f} {width:.3f} 0")
     for axis, coord, pos, width in NAV_DOORS:
         for host_id, wax, a, b, c in wall_records:
             if wax != axis or abs(c - coord) > 1e-6:

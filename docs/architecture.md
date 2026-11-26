@@ -114,8 +114,9 @@ The three files use one world coordinate system. `tools/trace_1f.py` traces the
 both apply the measured registration. The 1F trace steps diagonal and
 rounded reference corners with axis-aligned runs. It keeps the two west
 stairwell rectangles shared with the other floors as transparent stair records,
-and stores the reference's door-bar openings as hidden doors so the plan draws
-no white bar where the map has a coloured marker. The measured registrations
+and restores the missing wall span under every coloured reference door bar so a
+visible white door sits in each doorway. Hidden openings cover the few passages
+the reference draws with no bar. The measured registrations
 are `3F = 1F - (83, 121)` and `3F = 2F - (140, 121)`. The west
 stairwell, the main-hall flights, the library stair, and the east stair
 therefore share world rectangles across floors; the core tests assert those

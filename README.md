@@ -15,9 +15,9 @@ traced at native reference resolution by `tools/trace_1f.py`; the 2F plan is
 traced by `tools/trace_2f.py` and then finessed in the editor. Both use the
 same reference-pixel coordinates. The 1F trace steps the reference's rounded and diagonal corners
 with horizontal and vertical runs, keeps the two shared west stairwell
-rectangles as transparent registration stairs, and records the reference's
-door-bar openings as hidden nav doors, so no white bar appears where the
-reference has a coloured marker. All three share
+rectangles as transparent registration stairs, and restores the wall span
+under each coloured reference door bar so a visible white door sits in every
+doorway. A few hidden openings keep nav routes the reference leaves open. All three share
 one world coordinate system, so a stairwell occupies the same rectangle on
 every floor. Play mode adds a single gold player
 arrow, an 8-unit A* nav grid, click-to-walk control, and a following camera. `docs/screenshots/rebuilt-overlay.png`
