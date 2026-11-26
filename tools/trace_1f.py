@@ -38,7 +38,7 @@ H = [
     # Safety Deposit, Dark Room and the corridor below them.
     (276, 327, 193), (275, 327, 334), (327, 426, 335),
     # Main Hall top and inner hall/shoulder walls.
-    (434, 570, 236), (426, 434, 236),
+    (434, 570, 236), (426, 434, 236), (567, 781, 227),
     (577, 642, 280), (295, 427, 382), (334, 427, 460),
     (426, 468, 500), (426, 495, 442), (461, 493, 566),
     (500, 515, 562), (528, 551, 566), (534, 546, 441), (530, 546, 446),
@@ -47,7 +47,7 @@ H = [
     (156, 180, 351), (179, 214, 377), (162, 236, 311),
     (170, 245, 499), (282, 334, 499), (137, 427, 529),
     (240, 251, 334), (228, 240, 323), (275, 297, 322),
-    (352, 407, 343),
+    (236, 250, 298), (352, 389, 240), (352, 407, 343),
     # Main Hall bottom and the entrance corridor / hall.
     (434, 465, 553), (547, 578, 553),
     (370, 462, 627), (550, 644, 627),
@@ -68,6 +68,7 @@ H = [
     (567, 901, 393),
     # East Office, Watchman's Room and Fire Escape.
     (609, 790, 443), (786, 855, 443), (855, 925, 429),
+    (855, 925, 441), (855, 925, 435), (816, 855, 484),
     (620, 786, 529), (786, 855, 521), (855, 925, 529),
     (620, 665, 483),
 ]
@@ -77,7 +78,9 @@ V = [
     # West outer wall.
     (188, 356, 133), (362, 387, 133), (386, 530, 136),
     # Operations Room and its corridor.
-    (211, 251, 157), (188, 251, 250), (188, 245, 276),
+    (211, 251, 157), (251, 348, 157), (188, 251, 250), (251, 335, 250),
+    (298, 311, 236),
+    (188, 245, 276), (245, 335, 276),
     (240, 292, 406), (190, 240, 406),
     # Safety Deposit / Dark Room.
     (193, 335, 327), (382, 409, 276), (409, 474, 269),
@@ -101,9 +104,10 @@ V = [
     (239, 382, 353), (190, 236, 426), (269, 298, 368), (279, 300, 372),
     (279, 298, 380), (279, 300, 384),
     # East wing.
-    (254, 383, 673), (254, 384, 756), (333, 367, 640),
+    (254, 383, 673), (254, 384, 756), (252, 326, 641), (333, 367, 640),
     (326, 367, 640), (301, 343, 787), (358, 383, 787),
-    (339, 394, 848), (265, 322, 849), (381, 426, 816),
+    (339, 394, 848), (265, 322, 849), (381, 426, 816), (450, 484, 816),
+    (283, 325, 902), (340, 392, 902),
     (221, 291, 820), (236, 281, 790), (236, 281, 796),
     (236, 281, 800), (235, 301, 805), (236, 257, 812),
     (236, 257, 816), (221, 291, 820),
@@ -152,6 +156,7 @@ DETAIL = [
     ('H', 848, 883, 351), ('H', 869, 902, 284),
     ('H', 816, 855, 406), ('H', 823, 854, 412), ('H', 832, 854, 420),
     ('H', 620, 665, 483), ('V', 483, 521, 686),
+    ('H', 855, 925, 435),
     ('H', 577, 589, 516), ('H', 577, 589, 540), ('H', 588, 622, 546),
     ('H', 500, 515, 562), ('H', 461, 493, 566), ('H', 528, 551, 566),
 ]
@@ -284,7 +289,7 @@ def _segments():
         runs.sort()
         cur = list(runs[0])
         for a, b in runs[1:]:
-            if a <= cur[1] + 1:
+            if a <= cur[1] + 2.5:
                 cur[1] = max(cur[1], b)
             else:
                 out.append(('H', cur[0], cur[1], y))
@@ -294,13 +299,67 @@ def _segments():
         runs.sort()
         cur = list(runs[0])
         for a, b in runs[1:]:
-            if a <= cur[1] + 1:
+            if a <= cur[1] + 2.5:
                 cur[1] = max(cur[1], b)
             else:
                 out.append(('V', cur[0], cur[1], x))
                 cur = [a, b]
         out.append(('V', cur[0], cur[1], x))
     out = [s for s in out if not _inside_stair(s)]
+    return out
+
+
+def _stitch(segments):
+    """Close one- or two-pixel cracks where orthogonal walls nearly meet."""
+    segs = [[axis, a, b, c] for axis, a, b, c in segments]
+    for _ in range(3):
+        changed = False
+        for h in segs:
+            if h[0] != 'H':
+                continue
+            for end in (1, 2):
+                x = h[end]
+                for v in segs:
+                    if v[0] != 'V':
+                        continue
+                    if abs(x - v[3]) <= 2.0 and (
+                            abs(h[3] - v[1]) <= 2.0 or
+                            abs(h[3] - v[2]) <= 2.0):
+                        h[end] = v[3]
+                        if abs(h[3] - v[1]) <= 2.0:
+                            v[1] = h[3]
+                        if abs(h[3] - v[2]) <= 2.0:
+                            v[2] = h[3]
+                        changed = True
+                    elif abs(x - v[3]) <= 2.0 and v[1] - 2.0 <= h[3] <= v[2] + 2.0:
+                        h[end] = v[3]
+                        changed = True
+        for v in segs:
+            if v[0] != 'V':
+                continue
+            for end in (1, 2):
+                y = v[end]
+                for h in segs:
+                    if h[0] != 'H':
+                        continue
+                    if abs(y - h[3]) <= 2.0 and (
+                            abs(v[3] - h[1]) <= 2.0 or
+                            abs(v[3] - h[2]) <= 2.0):
+                        v[end] = h[3]
+                        if abs(v[3] - h[1]) <= 2.0:
+                            h[1] = v[3]
+                        if abs(v[3] - h[2]) <= 2.0:
+                            h[2] = v[3]
+                        changed = True
+                    elif abs(y - h[3]) <= 2.0 and h[1] - 2.0 <= v[3] <= h[2] + 2.0:
+                        v[end] = h[3]
+                        changed = True
+        if not changed:
+            break
+    out = []
+    for axis, a, b, c in segs:
+        if abs(b - a) > 0.25:
+            out.append((axis, a, b, c))
     return out
 
 
@@ -350,7 +409,7 @@ def _components(segments):
 
 
 def build(source_pixels: bool = False) -> list[str]:
-    segments = _segments()
+    segments = _stitch(_segments())
     groups = _components(segments)
     lines = ["ink-level 3"]
     for sid, group in enumerate(groups, start=1):
