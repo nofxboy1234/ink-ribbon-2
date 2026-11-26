@@ -1,0 +1,13 @@
+{
+  "fmt": {
+    "indentWidth": 4,
+    "lineWidth": 100,
+    "singleQuote": true
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  },
+  "exclude": ["vendor", ".fibs", "build"]
+}

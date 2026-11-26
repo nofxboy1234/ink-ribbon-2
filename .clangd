@@ -1,0 +1,8 @@
+CompileFlags:
+  Add:
+    - -I../vendor/sokol
+    - -I../vendor/sokol/util
+    - -I../vendor/dcimgui/src
+    - -I.
+    - -DSOKOL_GLCORE=1
+    - -std=gnu11
