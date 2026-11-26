@@ -109,9 +109,14 @@ the user detaches it. The image has its own opacity, show toggle, and
 path, so one image and one floor skin can be visible together. Both skins are
 edit-mode only.
 
-The three files use one world coordinate system. `tools/gen_floor_maps.py`
-traces 1F and 2F in their own screenshot pixels and applies the measured
-registration `3F = 1F - (83, 121)` and `3F = 2F - (140, 121)`. The west
+The three files use one world coordinate system. `tools/trace_1f.py` traces the
+1F plan at its own screenshot resolution, and `tools/trace_2f.py` traces 2F;
+both apply the measured registration. The 1F trace steps diagonal and
+rounded reference corners with axis-aligned runs. It keeps the two west
+stairwell rectangles shared with the other floors as transparent stair records,
+and stores the reference's door-bar openings as hidden doors so the plan draws
+no white bar where the map has a coloured marker. The measured registrations
+are `3F = 1F - (83, 121)` and `3F = 2F - (140, 121)`. The west
 stairwell, the main-hall flights, the library stair, and the east stair
 therefore share world rectangles across floors; the core tests assert those
 overlaps.

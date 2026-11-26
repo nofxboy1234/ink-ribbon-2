@@ -10,8 +10,14 @@ from the reference floor plan and matches it one reference pixel per world
 unit. The plan is kept in `levels/re2-library-source.lvl`; `tools/gen_ref_map.py`
 regenerates it from readable coordinates, and `tools/build_map.py` draws it in
 the running editor through the real tools. The 1F and 2F plans live beside it in
-`levels/re2-library-1f.lvl` and `levels/re2-library-2f.lvl`, generated from the
-same reference-pixel coordinates by `tools/gen_floor_maps.py`. All three share
+`levels/re2-library-1f.lvl` and `levels/re2-library-2f.lvl`. The 1F plan is
+traced at native reference resolution by `tools/trace_1f.py`; the 2F plan is
+traced by `tools/trace_2f.py` and then finessed in the editor. Both use the
+same reference-pixel coordinates. The 1F trace steps the reference's rounded and diagonal corners
+with horizontal and vertical runs, keeps the two shared west stairwell
+rectangles as transparent registration stairs, and records the reference's
+door-bar openings as hidden nav doors, so no white bar appears where the
+reference has a coloured marker. All three share
 one world coordinate system, so a stairwell occupies the same rectangle on
 every floor. Play mode adds a single gold player
 arrow, an 8-unit A* nav grid, click-to-walk control, and a following camera. `docs/screenshots/rebuilt-overlay.png`
@@ -288,7 +294,9 @@ The script assumes a 1280x800 window and the default panel widths, and it uses i
 | `tools/xvfb.sh` | private X display, per-run process tags, cleanup |
 | `tools/focus_drop.py` | drop X focus the way switching windows does |
 | `tools/gen_demo_map.py` | regenerate the demo level |
-| `tools/gen_floor_maps.py` | generate the 1F and 2F floor plans from reference pixels |
+| `tools/trace_1f.py` | trace the 1F plan from reference pixels (walls, stairs, labels, onion fit) |
+| `tools/trace_2f.py` | trace the 2F plan from reference pixels |
+| `tools/gen_floor_maps.py` | historical shared-registration generator kept for reference |
 | `tools/gen_player_sprite.py` | repack the Krita PNG into the C sprite header |
 | `tools/level_info.c` | print counts and bounds for a level file |
 
